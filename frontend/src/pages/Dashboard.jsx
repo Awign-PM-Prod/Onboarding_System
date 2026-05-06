@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import Navbar from '../components/Navbar';
 
 export default function Dashboard() {
   const [clients, setClients] = useState([]);
@@ -24,9 +23,7 @@ export default function Dashboard() {
   useEffect(() => { load(); }, []);
 
   return (
-    <div className="min-h-screen">
-      <Navbar />
-      <main className="max-w-6xl mx-auto px-6 py-8">
+    <main className="max-w-6xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">Clients</h1>
@@ -72,55 +69,19 @@ export default function Dashboard() {
         )}
 
         {!loading && !error && clients.length > 0 && (
-          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-slate-600">
-                <tr>
-                  <th className="text-left px-4 py-2 font-medium">Client</th>
-                  <th className="text-left px-4 py-2 font-medium">Contract Code</th>
-                  <th className="text-left px-4 py-2 font-medium">Program Manager</th>
-                  <th className="text-left px-4 py-2 font-medium">Insurance</th>
-                  <th className="text-left px-4 py-2 font-medium">Start</th>
-                  <th className="text-left px-4 py-2 font-medium">End</th>
-                  <th className="text-left px-4 py-2 font-medium">Designations</th>
-                  <th className="px-4 py-2"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {clients.map(c => (
-                  <tr key={c.id}>
-                    <td className="px-4 py-3 font-medium text-slate-900">{c.client_name}</td>
-                    <td className="px-4 py-3 text-slate-700">{c.contract_code}</td>
-                    <td className="px-4 py-3 text-slate-700">{c.program_manager_name ?? '-'}</td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {c.insurance_applicable ? `Yes - ${c.insurance_name}` : 'No'}
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">{c.contract_start_date}</td>
-                    <td className="px-4 py-3 text-slate-700">{c.contract_end_date}</td>
-                    <td className="px-4 py-3 text-slate-700">
-                      <div className="flex flex-wrap gap-1">
-                        {c.designations.map(d => (
-                          <span key={d} className="bg-slate-100 text-slate-700 text-xs rounded px-2 py-0.5">
-                            {d}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <Link
-                        to={`/clients/${c.id}/edit`}
-                        className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
-                      >
-                        Edit
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {clients.map((c) => (
+              <Link
+                key={c.id}
+                to={`/dashboard/client/${c.id}/dashboard`}
+                className="group rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-indigo-300 hover:shadow-md"
+              >
+                <h3 className="font-semibold text-slate-900 group-hover:text-indigo-700">{c.client_name}</h3>
+                <p className="mt-1 text-xs text-slate-500">{c.contract_code}</p>
+              </Link>
+            ))}
           </div>
         )}
       </main>
-    </div>
   );
 }

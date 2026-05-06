@@ -7,7 +7,7 @@ const empty = {
   email: ''
 };
 
-export default function AddEmployeeModal({ clientId, onClose, onCreated }) {
+export default function AddEmployeeModal({ clientId, onClose, onCreated, embedded = false }) {
   const [form, setForm] = useState(empty);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -37,6 +37,7 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated }) {
       };
       await api.createEmployee(payload);
       onCreated();
+      if (embedded) setForm({ ...empty });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -44,20 +45,8 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated }) {
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg w-full max-w-lg shadow-lg">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
-          <h3 className="font-semibold text-slate-900">Add Available Employee</h3>
-          <button
-            onClick={onClose}
-            className="text-slate-500 hover:text-slate-700"
-            aria-label="Close"
-          >
-            x
-          </button>
-        </div>
-        <form onSubmit={onSubmit} className="px-5 py-4 space-y-4">
+  const formBody = (
+        <form onSubmit={onSubmit} className={embedded ? 'space-y-4' : 'px-5 py-4 space-y-4'}>
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2 text-sm">
               {error}
@@ -78,16 +67,39 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated }) {
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose}
-              className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50">
-              Cancel
-            </button>
+            {!embedded && (
+              <button type="button" onClick={onClose}
+                className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50">
+                Cancel
+              </button>
+            )}
             <button type="submit" disabled={submitting}
               className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-60">
               {submitting ? 'Saving...' : 'Add Available Employee'}
             </button>
           </div>
         </form>
+  );
+
+  if (embedded) {
+    return formBody;
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg w-full max-w-lg shadow-lg">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+          <h3 className="font-semibold text-slate-900">Add Available Employee</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-500 hover:text-slate-700"
+            aria-label="Close"
+          >
+            x
+          </button>
+        </div>
+        {formBody}
       </div>
     </div>
   );

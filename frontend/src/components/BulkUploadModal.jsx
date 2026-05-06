@@ -119,7 +119,7 @@ function chunk(arr, size) {
   return out;
 }
 
-export default function BulkUploadModal({ clientId, onClose, onDone }) {
+export default function BulkUploadModal({ clientId, onClose, onDone, embedded = false }) {
   const [sourceLabel, setSourceLabel] = useState('');
   const [pastedCsv, setPastedCsv] = useState('');
   const [rows, setRows] = useState([]);
@@ -239,15 +239,12 @@ export default function BulkUploadModal({ clientId, onClose, onDone }) {
   const willBatch = rows.length > BATCH_THRESHOLD;
   const batchCount = willBatch ? Math.ceil(rows.length / BATCH_SIZE) : 1;
 
-  return (
-    <div className="fixed inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg w-full max-w-2xl shadow-lg max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
-          <h3 className="font-semibold text-slate-900">Bulk Upload Available Employees</h3>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-700" aria-label="Close">x</button>
-        </div>
+  const formClass = embedded
+    ? 'space-y-4 overflow-auto max-h-[min(70vh,36rem)] pr-1'
+    : 'px-5 py-4 space-y-4 overflow-auto';
 
-        <form onSubmit={onUpload} className="px-5 py-4 space-y-4 overflow-auto">
+  const formInner = (
+        <form onSubmit={onUpload} className={formClass}>
           <div className="text-sm text-slate-600 space-y-2">
             <p>
               Upload an Excel (<code>.xlsx</code>) or CSV (<code>.csv</code>) file. Required columns:
@@ -387,10 +384,12 @@ export default function BulkUploadModal({ clientId, onClose, onDone }) {
           )}
 
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-            <button type="button" onClick={onClose} disabled={submitting}
-              className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60">
-              {result ? 'Close' : 'Cancel'}
-            </button>
+            {!embedded && (
+              <button type="button" onClick={onClose} disabled={submitting}
+                className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                {result ? 'Close' : 'Cancel'}
+              </button>
+            )}
             <button type="submit" disabled={submitting || !rows.length || !!parseError}
               className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-60">
               {submitting
@@ -399,6 +398,20 @@ export default function BulkUploadModal({ clientId, onClose, onDone }) {
             </button>
           </div>
         </form>
+  );
+
+  if (embedded) {
+    return formInner;
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg w-full max-w-2xl shadow-lg max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+          <h3 className="font-semibold text-slate-900">Bulk Upload Available Employees</h3>
+          <button type="button" onClick={onClose} className="text-slate-500 hover:text-slate-700" aria-label="Close">x</button>
+        </div>
+        {formInner}
       </div>
     </div>
   );

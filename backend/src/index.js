@@ -8,6 +8,7 @@ import clientsRouter from './routes/clients.js';
 import meRouter from './routes/me.js';
 import pmClientsRouter from './routes/pmClients.js';
 import employeesRouter from './routes/employees.js';
+import publicOnboardingRouter from './routes/publicOnboarding.js';
 
 const app = express();
 
@@ -21,6 +22,7 @@ app.use('/api/program-managers', requireAuth, programManagersRouter);
 app.use('/api/clients', requireAuth, clientsRouter);
 app.use('/api/pm/clients', requireAuth, pmClientsRouter);
 app.use('/api/employees', requireAuth, employeesRouter);
+app.use('/api/public/onboarding', publicOnboardingRouter);
 
 app.use((err, _req, res, _next) => {
   console.error('[api error]', err);
