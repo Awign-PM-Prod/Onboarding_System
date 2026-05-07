@@ -84,12 +84,14 @@ export const api = {
   me: () => request('/api/me'),
   listProgramManagers: () => request('/api/program-managers'),
   listClients: () => request('/api/clients'),
+  getPayrollDashboardStats: () => request('/api/clients/dashboard-stats'),
   createClient: (payload) =>
     request('/api/clients', { method: 'POST', body: JSON.stringify(payload) }),
   updateClient: (id, payload) =>
     request(`/api/clients/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
 
   listPmClients: () => request('/api/pm/clients'),
+  getPmDashboardStats: () => request('/api/pm/clients/dashboard-stats'),
   listEmployees: (clientId) =>
     request(`/api/employees?client_id=${encodeURIComponent(clientId)}`),
   getEmployeeJobAppForm: ({ clientId, employeeId, payrollReview = false }) => {
