@@ -528,6 +528,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   const [passErr, setPassErr] = useState('');
 
   const [panVerified, setPanVerified] = useState(false);
+  const [panVerifying, setPanVerifying] = useState(false);
   const [panVerifyMsg, setPanVerifyMsg] = useState('');
   const [bankVerified, setBankVerified] = useState(false);
   const [bankVerifying, setBankVerifying] = useState(false);
@@ -666,6 +667,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   };
 
   const handleVerifyPan = () => {
+    if (panVerifying) return;
     setPanVerifyMsg('');
     const p = panNumber.trim();
     if (!PAN_NUMBER_REGEX.test(p)) {
@@ -673,8 +675,25 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       setPanVerifyMsg('Enter a valid PAN (e.g. ABCDE1234F).');
       return;
     }
-    setPanVerified(true);
-    setPanVerifyMsg('PAN format looks valid. Final verification will be completed later.');
+    setPanVerifying(true);
+    api
+      .verifyPan({
+        mobile,
+        employeeId,
+        panNumber: p,
+      })
+      .then((result) => {
+        setPanNumber((result.pan_number ?? p).toUpperCase());
+        setPanVerified(true);
+        setPanVerifyMsg('PAN verified successfully.');
+      })
+      .catch((err) => {
+        setPanVerified(false);
+        setPanVerifyMsg(err.message || 'PAN verification failed. Please check details and try again.');
+      })
+      .finally(() => {
+        setPanVerifying(false);
+      });
   };
 
   const handleVerifyBank = () => {
@@ -855,9 +874,10 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           <button
             type="button"
             onClick={handleVerifyPan}
+            disabled={panVerifying}
             className="shrink-0 rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
           >
-            Verify PAN
+            {panVerifying ? 'Verifying…' : 'Verify PAN'}
           </button>
         </div>}
         {shouldShow('kyc_pan_number') && panVerifyMsg && (
@@ -1716,11 +1736,13 @@ export default function OnboardingForm() {
   const employeeId = searchParams.get('employee_id') || '';
   const resumeMode = searchParams.get('resume') === 'true';
   const resumeStep = searchParams.get('step') || '';
+  const employeeSpecificLink = Boolean(employeeId);
 
   const [mobile, setMobile] = useState('');
   const [mobileVerified, setMobileVerified] = useState(false);
   const [mobileSubmitting, setMobileSubmitting] = useState(false);
   const [mobileError, setMobileError] = useState('');
+  const [prefillLoading, setPrefillLoading] = useState(employeeSpecificLink);
 
   const [aadhaar, setAadhaar] = useState('');
   const [aadhaarPhase, setAadhaarPhase] = useState(null);
@@ -1806,6 +1828,41 @@ export default function OnboardingForm() {
   const hasValidMobile = TEN_DIGIT_REGEX.test(mobile);
   const hasValidAadhaar = TWELVE_DIGIT_REGEX.test(aadhaar);
   const hasValidOtp = SIX_DIGIT_REGEX.test(otp);
+
+  useEffect(() => {
+    if (!employeeSpecificLink) {
+      setPrefillLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const loadEmployeeSummary = async () => {
+      setPrefillLoading(true);
+      setMobileError('');
+      try {
+        const result = await api.getOnboardingEmployeeSummary({ employeeId });
+        const fetchedMobile = normalizeMobile(result?.employee?.mobile ?? '');
+        if (!TEN_DIGIT_REGEX.test(fetchedMobile)) {
+          throw new Error('Could not load a valid mobile number for this onboarding link.');
+        }
+        if (cancelled) return;
+        setMobile(fetchedMobile);
+        setMobileVerified(true);
+        setAadhaarPhase('input');
+      } catch (err) {
+        if (cancelled) return;
+        setMobileError(err.message || 'Unable to validate this onboarding link right now.');
+      } finally {
+        if (cancelled) return;
+        setPrefillLoading(false);
+      }
+    };
+    loadEmployeeSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [employeeId, employeeSpecificLink]);
 
   const handleMobileContinue = async () => {
     if (!hasValidMobile || mobileSubmitting) return;
@@ -1986,7 +2043,9 @@ export default function OnboardingForm() {
               <p className="mb-4 text-sm font-semibold text-indigo-600">Onboarding Portal</p>
               <h2 className="mb-2 text-3xl font-semibold text-slate-900">Welcome to Our Job Portal</h2>
               <p className="text-slate-600">
-                {!mobileVerified
+                {prefillLoading
+                  ? 'Validating your secure onboarding link...'
+                  : !mobileVerified
                   ? 'Please enter your mobile number to begin your application'
                   : aadhaarComplete
                     ? 'Your Aadhaar has been verified. Review your details below.'
@@ -2006,19 +2065,22 @@ export default function OnboardingForm() {
                   id="onboarding-mobile"
                   type="text"
                   value={mobile}
-                  onChange={(e) => setMobile(normalizeMobile(e.target.value))}
+                  onChange={(e) => {
+                    if (employeeSpecificLink || mobileVerified || prefillLoading) return;
+                    setMobile(normalizeMobile(e.target.value));
+                  }}
                   inputMode="numeric"
                   maxLength={10}
-                  readOnly={mobileVerified}
+                  readOnly={employeeSpecificLink || mobileVerified || prefillLoading}
                   className={`w-full rounded-xl border px-5 py-4 text-2xl text-slate-900 ${
-                    mobileVerified
+                    employeeSpecificLink || mobileVerified || prefillLoading
                       ? 'cursor-not-allowed select-none border-slate-200 bg-sky-50'
                       : 'border-slate-300 bg-white'
                   }`}
-                  placeholder="Enter 10-digit mobile number"
+                  placeholder={employeeSpecificLink ? 'Registered mobile number' : 'Enter 10-digit mobile number'}
                 />
 
-                {!mobileVerified && (
+                {!mobileVerified && !employeeSpecificLink && !prefillLoading && (
                   <button
                     type="button"
                     onClick={handleMobileContinue}
@@ -2038,13 +2100,13 @@ export default function OnboardingForm() {
                   </div>
                 )}
 
-                {!mobileVerified && mobile.length > 0 && !hasValidMobile && (
+                {!employeeSpecificLink && !mobileVerified && mobile.length > 0 && !hasValidMobile && (
                   <p className="mt-3 text-sm text-rose-600">Please enter a valid 10-digit mobile number.</p>
                 )}
                 {mobileError && <p className="mt-3 text-sm text-rose-600">{mobileError}</p>}
               </div>
 
-              {!mobileVerified && (
+              {!mobileVerified && !employeeSpecificLink && !prefillLoading && (
                 <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                   <span className="font-semibold">Note:</span> Make sure you enter a valid mobile number. This number
                   will be used for all future communications.

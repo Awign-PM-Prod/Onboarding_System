@@ -178,6 +178,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ mobile, employee_id: employeeId || null })
     }),
+  getOnboardingEmployeeSummary: ({ employeeId }) => {
+    const q = new URLSearchParams();
+    q.set('employee_id', employeeId);
+    return request(`/api/public/onboarding/employee-summary?${q.toString()}`);
+  },
   sendAadhaarOtp: ({ mobile, employeeId, aadhaar }) =>
     request('/api/public/onboarding/aadhaar/send-otp', {
       method: 'POST',
@@ -187,6 +192,11 @@ export const api = {
     request('/api/public/onboarding/aadhaar/verify-otp', {
       method: 'POST',
       body: JSON.stringify({ mobile, employee_id: employeeId || null, otp })
+    }),
+  verifyPan: ({ mobile, employeeId, panNumber }) =>
+    request('/api/public/onboarding/pan/verify', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, employee_id: employeeId || null, pan_number: panNumber })
     }),
   verifyBankAccount: ({ mobile, employeeId, accountHolderName, accountNumber, ifsc }) =>
     request('/api/public/onboarding/bank/verify', {

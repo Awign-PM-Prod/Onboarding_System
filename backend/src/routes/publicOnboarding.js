@@ -240,6 +240,8 @@ const AADHAAR_VERIFY_OTP_EDGE_FUNCTION =
   process.env.AADHAAR_VERIFY_OTP_EDGE_FUNCTION || 'aadhaar-verify-otp';
 const BANK_VERIFY_EDGE_FUNCTION =
   process.env.BANK_VERIFY_EDGE_FUNCTION || 'bank-verify';
+const PAN_VERIFY_EDGE_FUNCTION =
+  process.env.PAN_VERIFY_EDGE_FUNCTION || 'pan-verify';
 /** Fixed demo OTP for onboarding status login until SMS integration. */
 const DEMO_STATUS_OTP = '123123';
 const STATUS_SESSION_TTL_MS = 60 * 60 * 1000;
@@ -341,6 +343,40 @@ async function invokeBankVerifyEdge({ idNumber, ifsc }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ id_number: idNumber, ifsc }),
+  });
+
+  const raw = await resp.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
+  if (!resp.ok) {
+    const msg = body?.error || body?.message || `Edge function failed (${resp.status})`;
+    const err = new Error(msg);
+    err.details = body?.upstream ?? body ?? null;
+    throw err;
+  }
+  return body;
+}
+
+async function invokePanVerifyEdge({ idNumber }) {
+  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to invoke edge functions.');
+  }
+
+  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(PAN_VERIFY_EDGE_FUNCTION)}`;
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ id_number: idNumber }),
   });
 
   const raw = await resp.text();
@@ -518,6 +554,40 @@ router.post('/mobile-lookup', async (req, res, next) => {
     await upsertJobAppFormFromEmployee(row);
 
     return res.json({ matched: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/employee-summary', async (req, res, next) => {
+  try {
+    const employeeId = String(req.query?.employee_id ?? '').trim();
+    if (!employeeId) {
+      return res.status(400).json({ error: 'employee_id is required' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('employees')
+      .select(EMPLOYEE_JOB_FORM_FIELDS)
+      .eq('id', employeeId)
+      .eq('onboarding_initiated', true)
+      .limit(1);
+    if (error) throw error;
+
+    const row = (data ?? [])[0];
+    if (!row) {
+      return res.status(404).json({ error: 'No matching onboarding record for this link.' });
+    }
+
+    await upsertJobAppFormFromEmployee(row);
+
+    return res.json({
+      employee: {
+        id: row.id,
+        name: row.name,
+        mobile: row.mobile,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -754,6 +824,75 @@ router.post('/bank/verify', async (req, res, next) => {
       account_number: accountNumber,
       ifsc,
       ifsc_details: providerData?.ifsc_details ?? null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/pan/verify', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const panNumber = String(req.body?.pan_number ?? '')
+      .replace(/\s/g, '')
+      .toUpperCase();
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+    if (!PAN_NUMBER_REGEX.test(panNumber)) {
+      return res.status(400).json({ error: 'Enter a valid PAN (e.g. ABCDE1234F).' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    const edgeResult = await invokePanVerifyEdge({ idNumber: panNumber });
+    const providerData = edgeResult?.data ?? {};
+    const providerPan = String(providerData?.pan_number ?? '').replace(/\s/g, '').toUpperCase();
+    const providerFullName = String(providerData?.full_name ?? '').trim();
+
+    if (!providerFullName) {
+      return res.status(400).json({ error: 'PAN verification did not return full name.' });
+    }
+
+    const employeeName = String(row?.name ?? '').trim();
+    const holderMatchesEmployee = namesLikelyMatch(employeeName, providerFullName);
+    if (!holderMatchesEmployee) {
+      return res.status(400).json({
+        error: 'PAN name does not match employee name.',
+        details: {
+          employee_name: employeeName,
+          pan_name: providerFullName,
+        },
+      });
+    }
+
+    const finalPan = providerPan || panNumber;
+    const now = new Date().toISOString();
+    const { error: upsertErr } = await supabaseAdmin.from('job_app_form').upsert(
+      {
+        employee_id: row.id,
+        client_id: row.client_id,
+        name: row.name,
+        mobile: row.mobile,
+        email: row.email ?? null,
+        designation: row.designation ?? null,
+        kyc_pan_number: finalPan,
+        updated_at: now,
+      },
+      { onConflict: 'employee_id' }
+    );
+    if (upsertErr) throw upsertErr;
+
+    return res.json({
+      verified: true,
+      pan_number: finalPan,
+      full_name: providerFullName,
+      category: providerData?.category ?? null,
     });
   } catch (err) {
     next(err);

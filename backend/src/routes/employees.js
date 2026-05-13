@@ -10,6 +10,58 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }
 });
+const SEND_ONBOARDING_EMAIL_EDGE_FUNCTION =
+  process.env.SEND_ONBOARDING_EMAIL_EDGE_FUNCTION || 'send-onboarding-email';
+const FRONTEND_URL = String(process.env.FRONTEND_URL || 'http://localhost:5173').trim() || 'http://localhost:5173';
+const ONBOARDING_EMAIL_SUBJECT = 'Complete your onboarding with Awign';
+
+function buildOnboardingFormLink(employeeId) {
+  const trimmedId = String(employeeId ?? '').trim();
+  if (!trimmedId) return `${FRONTEND_URL.replace(/\/+$/, '')}/onboardingform`;
+  try {
+    const url = new URL('/onboardingform', FRONTEND_URL);
+    url.searchParams.set('employee_id', trimmedId);
+    return url.toString();
+  } catch {
+    const base = FRONTEND_URL.replace(/\/+$/, '');
+    return `${base}/onboardingform?employee_id=${encodeURIComponent(trimmedId)}`;
+  }
+}
+
+async function invokeSendOnboardingEmailEdge({ recipients }) {
+  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to invoke edge functions.');
+  }
+  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(SEND_ONBOARDING_EMAIL_EDGE_FUNCTION)}`;
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      subject: ONBOARDING_EMAIL_SUBJECT,
+      recipients
+    })
+  });
+  const raw = await resp.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
+  if (!resp.ok) {
+    const msg = body?.error || body?.message || `Edge function failed (${resp.status})`;
+    const err = new Error(msg);
+    err.details = body?.upstream ?? body ?? null;
+    throw err;
+  }
+  return body ?? {};
+}
 
 async function fetchOwnedClient(req, clientId) {
   const { data, error } = await supabaseAdmin
@@ -611,10 +663,72 @@ router.post('/initiate-onboarding', async (req, res, next) => {
       .from('employees')
       .update({ onboarding_initiated: true, onboarding_status: 'FORM_SENT' })
       .in('id', validIds)
-      .select('id');
+      .select('id, name, email');
     if (error) throw error;
+    const updatedRows = updated ?? [];
 
-    res.json({ updated: updated.length, employee_ids: updated.map(r => r.id) });
+    const skippedRecipients = [];
+    const emailRecipients = [];
+    for (const row of updatedRows) {
+      const email = String(row.email ?? '').trim();
+      if (!email) {
+        skippedRecipients.push({
+          employee_id: row.id,
+          reason: 'no_email'
+        });
+        continue;
+      }
+      emailRecipients.push({
+        employee_id: row.id,
+        name: String(row.name ?? '').trim(),
+        email,
+        link: buildOnboardingFormLink(row.id)
+      });
+    }
+
+    let sentRecipients = [];
+    let failedRecipients = [];
+    if (emailRecipients.length > 0) {
+      try {
+        const emailResult = await invokeSendOnboardingEmailEdge({ recipients: emailRecipients });
+        const sent = Array.isArray(emailResult?.sent) ? emailResult.sent : [];
+        const failed = Array.isArray(emailResult?.failed) ? emailResult.failed : [];
+        sentRecipients = sent
+          .map((item) => ({
+            employee_id: String(item.employee_id ?? '').trim(),
+            email: String(item.email ?? '').trim()
+          }))
+          .filter((item) => Boolean(item.employee_id));
+        failedRecipients = failed
+          .map((item) => ({
+            employee_id: String(item.employee_id ?? '').trim(),
+            email: String(item.email ?? '').trim(),
+            error: String(item.error ?? 'Email send failed').trim()
+          }))
+          .filter((item) => Boolean(item.employee_id));
+        if (sentRecipients.length === 0 && failedRecipients.length === 0) {
+          sentRecipients = emailRecipients.map((r) => ({ employee_id: r.employee_id, email: r.email }));
+        }
+      } catch (sendErr) {
+        const reason = String(sendErr?.message || 'Email service unavailable');
+        failedRecipients = emailRecipients.map((r) => ({
+          employee_id: r.employee_id,
+          email: r.email,
+          error: reason
+        }));
+      }
+    }
+
+    res.json({
+      updated: updatedRows.length,
+      employee_ids: updatedRows.map((r) => r.id),
+      emailed: sentRecipients.length,
+      emailed_employee_ids: sentRecipients.map((r) => r.employee_id),
+      skipped: skippedRecipients.length,
+      skipped_recipients: skippedRecipients,
+      failed: failedRecipients.length,
+      failed_recipients: failedRecipients
+    });
   } catch (err) {
     next(err);
   }

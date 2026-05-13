@@ -11,6 +11,18 @@ import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
 
 const PAGE_SIZE = 50;
 
+function buildOnboardingInitiateToast(prefix, result) {
+  const updated = Number(result?.updated ?? 0);
+  const emailed = Number(result?.emailed ?? 0);
+  const skipped = Number(result?.skipped ?? 0);
+  const failed = Number(result?.failed ?? 0);
+  const base = `${prefix} for ${updated} employee${updated === 1 ? '' : 's'}`;
+  const suffix = [`emails sent: ${emailed}`];
+  if (skipped > 0) suffix.push(`skipped: ${skipped} (no email)`);
+  if (failed > 0) suffix.push(`failed: ${failed}`);
+  return `${base}. ${suffix.join(', ')}.`;
+}
+
 export default function PmClientDetail() {
   const { id, tab: tabSegment } = useParams();
   const navigate = useNavigate();
@@ -322,7 +334,7 @@ export default function PmClientDetail() {
     try {
       const ids = Array.from(selectedIds);
       const res = await api.initiateOnboarding(ids);
-      setToast(`Onboarding initiated for ${res.updated} employee${res.updated === 1 ? '' : 's'}`);
+      setToast(buildOnboardingInitiateToast('Onboarding initiated', res));
       setSelectedIds(new Set());
       await loadAll();
       navigate(pmClientTabUrl(id, 'in_progress'));
@@ -343,9 +355,7 @@ export default function PmClientDetail() {
       const res = await api.bulkSetRoleDetails(ids, payload);
       if (options.sendOnboardingNow && (res.employee_ids?.length ?? 0) > 0) {
         const initiateRes = await api.initiateOnboarding(res.employee_ids);
-        setToast(
-          `Role details set and onboarding initiated for ${initiateRes.updated} employee${initiateRes.updated === 1 ? '' : 's'}`
-        );
+        setToast(buildOnboardingInitiateToast('Role details set and onboarding initiated', initiateRes));
         navigate(pmClientTabUrl(id, 'in_progress'));
       } else {
         setToast(`Role details set for ${res.updated} employee${res.updated === 1 ? '' : 's'}`);
