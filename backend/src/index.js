@@ -15,6 +15,14 @@ const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:8088' }));
 app.use(express.json());
 
+app.get('/', (_req, res) =>
+  res.json({
+    ok: true,
+    service: 'onboarding-system-api',
+    health: '/health',
+  }),
+);
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.use('/api/me', requireAuth, meRouter);
