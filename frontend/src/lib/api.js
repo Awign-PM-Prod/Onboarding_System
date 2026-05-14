@@ -1,6 +1,15 @@
 import { supabase } from './supabase';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL;
+/** Base URL for the Express API (no trailing slash). Empty = same-origin, paths like `/api/me`. */
+const rawBase = import.meta.env.VITE_API_BASE_URL;
+const BASE_URL =
+  typeof rawBase === 'string' && rawBase.trim() !== '' ? rawBase.trim().replace(/\/+$/, '') : '';
+
+function apiUrl(path) {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  if (!BASE_URL) return p;
+  return `${BASE_URL}${p}`;
+}
 
 async function authHeader() {
   const { data } = await supabase.auth.getSession();
@@ -34,7 +43,7 @@ async function request(path, options = {}) {
     ...(await authHeader()),
     ...(options.headers || {})
   };
-  const res = await fetchWithTimeout(`${BASE_URL}${path}`, { ...options, headers });
+  const res = await fetchWithTimeout(apiUrl(path), { ...options, headers });
   const text = await res.text();
   const body = text ? JSON.parse(text) : null;
   if (!res.ok) {
@@ -65,7 +74,7 @@ async function fileRequest(path, options = {}) {
     ...(await authHeader()),
     ...(options.headers || {})
   };
-  const res = await fetchWithTimeout(`${BASE_URL}${path}`, { ...options, headers });
+  const res = await fetchWithTimeout(apiUrl(path), { ...options, headers });
   if (!res.ok) {
     const text = await res.text();
     let message = `Request failed (${res.status})`;

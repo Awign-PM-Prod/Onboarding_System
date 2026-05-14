@@ -7,7 +7,8 @@ RUN npm ci
 
 COPY . .
 
-ARG VITE_API_BASE_URL=/api
+# Default empty: SPA uses relative `/api/...` (see nginx.conf). Override at build: --build-arg or compose.
+ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 RUN npm run build
