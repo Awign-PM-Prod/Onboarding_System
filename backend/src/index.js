@@ -39,5 +39,5 @@ app.use((err, _req, res, _next) => {
 
 const port = Number(process.env.PORT) || 8089;
 app.listen(port, () => {
-  console.log(`API listening on http://localhost:${port}`);
+  console.log(`API listening on http://localhost:${port} (GET / + /health)`);
 });
