@@ -70,6 +70,15 @@ function applyCounts(target, employeeRow, formRow) {
   if (payrollReviewStatus === 'PAYROLL_REJECTED') next.payroll_rejected += 1;
 }
 
+function todayDateInIST() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 router.get('/dashboard-stats', async (req, res, next) => {
   try {
     const { data: clients, error: cErr } = await supabaseAdmin
@@ -118,6 +127,83 @@ router.get('/dashboard-stats', async (req, res, next) => {
     return res.json({
       totals,
       clients: clientRows.map((c) => byClient.get(c.id))
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/joining-status-reminders', async (req, res, next) => {
+  try {
+    const { data: clients, error: cErr } = await supabaseAdmin
+      .from('clients')
+      .select('id, client_name')
+      .eq('program_manager_id', req.user.id)
+      .order('client_name', { ascending: true });
+    if (cErr) throw cErr;
+
+    const clientRows = clients ?? [];
+    if (clientRows.length === 0) {
+      return res.json({ today: [], overdue: [] });
+    }
+
+    const clientIds = clientRows.map((c) => c.id);
+    const clientNameMap = new Map(clientRows.map((c) => [c.id, c.client_name]));
+
+    const { data: employees, error: eErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, date_of_joining, joining_status')
+      .in('client_id', clientIds)
+      .not('date_of_joining', 'is', null);
+    if (eErr) throw eErr;
+
+    const pendingJoinEmployees = (employees ?? []).filter((row) => {
+      const joining = String(row.joining_status ?? '').trim();
+      return joining.length === 0;
+    });
+    if (pendingJoinEmployees.length === 0) {
+      return res.json({ today: [], overdue: [] });
+    }
+
+    const pendingIds = pendingJoinEmployees.map((row) => row.id);
+    const { data: forms, error: fErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('employee_id, payroll_review_status')
+      .in('employee_id', pendingIds);
+    if (fErr) throw fErr;
+
+    const payrollApprovedSet = new Set(
+      (forms ?? [])
+        .filter((row) => String(row.payroll_review_status ?? '').trim() === 'PAYROLL_APPROVED')
+        .map((row) => row.employee_id)
+    );
+
+    const today = todayDateInIST();
+    const todayCountByClient = new Map();
+    const overdueCountByClient = new Map();
+
+    for (const row of pendingJoinEmployees) {
+      if (!payrollApprovedSet.has(row.id)) continue;
+      const doj = String(row.date_of_joining ?? '').trim();
+      if (!doj) continue;
+      const map = doj === today ? todayCountByClient : doj < today ? overdueCountByClient : null;
+      if (!map) continue;
+      map.set(row.client_id, (map.get(row.client_id) ?? 0) + 1);
+    }
+
+    const toPayload = (counterMap, dojLabel) =>
+      Array.from(counterMap.entries())
+        .map(([clientId, count]) => ({
+          client_id: clientId,
+          client_name: clientNameMap.get(clientId) ?? 'Client',
+          doj_label: dojLabel,
+          employee_count: count,
+        }))
+        .sort((a, b) => a.client_name.localeCompare(b.client_name));
+
+    return res.json({
+      today: toPayload(todayCountByClient, 'Today'),
+      overdue: toPayload(overdueCountByClient, 'Overdue'),
     });
   } catch (err) {
     next(err);

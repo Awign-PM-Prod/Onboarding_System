@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { matchPmClientDetailPath, pmClientTabUrl } from '../lib/pmClientRoutes';
+import { api } from '../lib/api';
 
 const ROLE_LABEL = {
   PAYROLL_LEAD: 'Payroll Lead',
@@ -56,6 +57,57 @@ function initialsFromName(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+function JoiningStatusReminderModal({ title, rows, onClose, onNext }) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 px-4">
+      <div className="w-full max-w-2xl rounded-xl bg-white p-5 shadow-2xl">
+        <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
+        <p className="mt-1 text-sm text-slate-600">
+          Please update their status after confirmations.
+        </p>
+        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-4 py-2 text-left font-medium">Client Name</th>
+                <th className="px-4 py-2 text-left font-medium">DOJ</th>
+                <th className="px-4 py-2 text-left font-medium">Number of employees</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {rows.map((row) => (
+                <tr key={`${row.client_id}-${row.doj_label}`}>
+                  <td className="px-4 py-2 text-slate-800">{row.client_name}</td>
+                  <td className="px-4 py-2 text-slate-700">{row.doj_label}</td>
+                  <td className="px-4 py-2 text-slate-700">{row.employee_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+          >
+            Close
+          </button>
+          {onNext && (
+            <button
+              type="button"
+              onClick={onNext}
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+            >
+              Next
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PmLayout() {
   const { profile, user, signOut } = useAuth();
   const navigate = useNavigate();
@@ -63,6 +115,9 @@ export default function PmLayout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [clientSidebarMeta, setClientSidebarMeta] = useState(null);
+  const [joiningReminderToday, setJoiningReminderToday] = useState([]);
+  const [joiningReminderOverdue, setJoiningReminderOverdue] = useState([]);
+  const [joiningReminderStep, setJoiningReminderStep] = useState('');
 
   const pathname = location.pathname;
   const clientRoute = useMemo(() => matchPmClientDetailPath(pathname), [pathname]);
@@ -80,6 +135,28 @@ export default function PmLayout() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync UI to external route
     setMobileNavOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadJoiningReminders = async () => {
+      try {
+        const payload = await api.getPmJoiningStatusReminders();
+        if (cancelled) return;
+        const todayRows = Array.isArray(payload?.today) ? payload.today : [];
+        const overdueRows = Array.isArray(payload?.overdue) ? payload.overdue : [];
+        setJoiningReminderToday(todayRows);
+        setJoiningReminderOverdue(overdueRows);
+        if (todayRows.length > 0) setJoiningReminderStep('today');
+        else if (overdueRows.length > 0) setJoiningReminderStep('overdue');
+      } catch {
+        // Non-blocking: PM navigation should continue even if reminder fetch fails.
+      }
+    };
+    loadJoiningReminders();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const initials = useMemo(
     () => initialsFromName(profile?.name ?? user?.email ?? ''),
@@ -265,6 +342,20 @@ export default function PmLayout() {
             <span>PL Reviewed</span>
             {cc && <span className={tabSeg === 'pl-reviewed' ? 'text-indigo-100' : 'text-slate-500'}>({cc.pl_reviewed})</span>}
           </NavLink>
+          <NavLink
+            to={pmClientTabUrl(c, 'employee_directory')}
+            className={() =>
+              `flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                tabSeg === 'employee-directory'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
+                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+              }`
+            }
+            onClick={() => setMobileNavOpen(false)}
+          >
+            <span>Employee Directory</span>
+            {cc && <span className={tabSeg === 'employee-directory' ? 'text-indigo-100' : 'text-slate-500'}>({cc.employee_directory})</span>}
+          </NavLink>
         </nav>
 
         {sidebarFooter}
@@ -314,6 +405,22 @@ export default function PmLayout() {
           <Outlet context={{ setClientSidebarMeta }} />
         </div>
       </div>
+      {joiningReminderStep === 'today' && joiningReminderToday.length > 0 && (
+        <JoiningStatusReminderModal
+          title="Joining Status Update Reminder (DOJ - Today)"
+          rows={joiningReminderToday}
+          onClose={() => setJoiningReminderStep('')}
+          onNext={joiningReminderOverdue.length > 0 ? () => setJoiningReminderStep('overdue') : null}
+        />
+      )}
+      {joiningReminderStep === 'overdue' && joiningReminderOverdue.length > 0 && (
+        <JoiningStatusReminderModal
+          title="Joining Status Update Reminder (DOJ - Overdue)"
+          rows={joiningReminderOverdue}
+          onClose={() => setJoiningReminderStep('')}
+          onNext={null}
+        />
+      )}
     </div>
   );
 }

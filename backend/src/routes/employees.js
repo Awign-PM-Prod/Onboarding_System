@@ -209,6 +209,10 @@ const REVIEWABLE_JOB_FORM_FIELDS = [
   'aad_district',
   'aad_pincode',
   'pd_alternate_number',
+  'pd_emergency_contact_name',
+  'pd_emergency_contact_relation',
+  'pd_current_address_same_as_aadhaar',
+  'pd_current_address',
   'pd_marital_status',
   'pd_driving_license',
   'pd_driving_license_url',
@@ -232,6 +236,10 @@ const REVIEWABLE_JOB_FORM_FIELDS = [
 ];
 const CORRECTION_EDITABLE_FIELDS = new Set([
   'pd_alternate_number',
+  'pd_emergency_contact_name',
+  'pd_emergency_contact_relation',
+  'pd_current_address_same_as_aadhaar',
+  'pd_current_address',
   'pd_marital_status',
   'pd_driving_license',
   'pd_driving_license_url',
@@ -280,6 +288,99 @@ function normalizeRejectedFields(raw) {
     uniq.add(key);
   }
   return Array.from(uniq);
+}
+
+function buildReinitiateFormResetPayload(nowIso) {
+  return {
+    email: null,
+    aadhaar_number: null,
+    aad_otp_session_id: null,
+    aad_otp_transaction_id: null,
+    aad_otp_requested_at: null,
+    aad_profile_photo: null,
+    aad_name: null,
+    aad_care_of: null,
+    aad_dob: null,
+    aad_gender: null,
+    aad_address: null,
+    aad_state: null,
+    aad_district: null,
+    aad_pincode: null,
+    pd_alternate_number: null,
+    pd_city: null,
+    pd_age: null,
+    pd_marital_status: null,
+    pd_driving_license: null,
+    pd_driving_license_url: null,
+    pd_emergency_contact_name: null,
+    pd_emergency_contact_relation: null,
+    pd_current_address_same_as_aadhaar: null,
+    pd_current_address: null,
+    qual_highest_qualification: null,
+    qual_education_certificate_url: null,
+    qual_additional_certificates_url: [],
+    kyc_aadhar_front_url: null,
+    kyc_aadhar_back_url: null,
+    kyc_pan_number: null,
+    kyc_pan_card_url: null,
+    kyc_account_holder_name: null,
+    kyc_account_number: null,
+    kyc_ifsc_code: null,
+    kyc_bank_passbook_url: null,
+    bp_passport_photo_url: null,
+    bp_esic_number: null,
+    bp_pf_uan_number: null,
+    bp_police_verification_url: null,
+    submission_status: null,
+    submission_attempt_count: 1,
+    review_status: null,
+    editable_fields: [],
+    review_reason: null,
+    reviewed_by: null,
+    reviewed_at: null,
+    payroll_review_status: null,
+    payroll_review_reason: null,
+    payroll_reviewed_by: null,
+    payroll_reviewed_at: null,
+    updated_at: nowIso,
+  };
+}
+
+async function ensureActiveAssignmentHistory(rows) {
+  const normalized = (rows ?? [])
+    .map((row) => ({
+      employee_id: String(row?.id ?? '').trim(),
+      client_id: String(row?.client_id ?? '').trim(),
+    }))
+    .filter((row) => row.employee_id && row.client_id);
+  if (normalized.length === 0) return;
+
+  const employeeIds = normalized.map((row) => row.employee_id);
+  const { data: existing, error: existingErr } = await supabaseAdmin
+    .from('employee_project_assignments')
+    .select('employee_id, client_id, assignment_status')
+    .in('employee_id', employeeIds)
+    .eq('assignment_status', 'ACTIVE');
+  if (existingErr) throw existingErr;
+
+  const activeByEmployee = new Map();
+  for (const row of existing ?? []) {
+    activeByEmployee.set(String(row.employee_id), String(row.client_id));
+  }
+
+  const toInsert = normalized
+    .filter((row) => !activeByEmployee.has(row.employee_id))
+    .map((row) => ({
+      employee_id: row.employee_id,
+      client_id: row.client_id,
+      assignment_status: 'ACTIVE',
+    }));
+  if (toInsert.length === 0) return;
+
+  const { error: insErr } = await supabaseAdmin
+    .from('employee_project_assignments')
+    .insert(toInsert);
+  if (insErr) throw insErr;
 }
 
 function hasProvidedReviewValue(v) {
@@ -571,6 +672,7 @@ router.post('/', async (req, res, next) => {
         .select();
       if (error) throw error;
       inserted = data;
+      await ensureActiveAssignmentHistory(inserted);
     }
 
     res.status(errors.length ? 207 : 201).json({
@@ -668,8 +770,12 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
 
     let inserted = 0;
     if (toInsert.length) {
-      const { error } = await supabaseAdmin.from('employees').insert(toInsert);
+      const { data, error } = await supabaseAdmin
+        .from('employees')
+        .insert(toInsert)
+        .select('id, client_id');
       if (error) throw error;
+      await ensureActiveAssignmentHistory(data ?? []);
       inserted = toInsert.length;
     }
 
@@ -836,6 +942,211 @@ router.post('/initiate-onboarding', async (req, res, next) => {
       whatsapp_skipped_recipients: skippedWhatsappRecipients,
       whatsapp_failed: whatsappFailedRecipients.length,
       whatsapp_failed_recipients: whatsappFailedRecipients
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/reinitiate-rejected-onboarding', async (req, res, next) => {
+  try {
+    const clientId = String(req.body?.client_id ?? '').trim();
+    const ids = Array.isArray(req.body?.employee_ids) ? req.body.employee_ids : [];
+    if (!clientId) return res.status(400).json({ error: 'client_id is required.' });
+    if (ids.length === 0) return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
+
+    const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
+    if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const uniqueIds = Array.from(new Set(ids.map((x) => String(x ?? '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) {
+      return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
+    }
+
+    const { data: employees, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select('id')
+      .eq('client_id', clientId)
+      .in('id', uniqueIds);
+    if (empErr) throw empErr;
+
+    const eligibleEmployeeIds = (employees ?? []).map((row) => row.id);
+    if (eligibleEmployeeIds.length === 0) {
+      return res.status(404).json({ error: 'No matching employees found for this client.' });
+    }
+
+    const { data: forms, error: formsErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('id, employee_id, review_status, payroll_review_status')
+      .eq('client_id', clientId)
+      .in('employee_id', eligibleEmployeeIds);
+    if (formsErr) throw formsErr;
+
+    const resettableForms = (forms ?? []).filter((row) => {
+      const pmRejected = String(row.review_status ?? '').trim().toUpperCase() === 'REJECTED';
+      const plRejected = String(row.payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_REJECTED';
+      return pmRejected || plRejected;
+    });
+    if (resettableForms.length === 0) {
+      return res.status(400).json({
+        error: 'Only PM Rejected or PL Rejected employees can be re-initiated.',
+      });
+    }
+
+    const resettableFormIds = resettableForms.map((row) => row.id);
+    const resettableEmployeeIds = resettableForms.map((row) => row.employee_id);
+    const now = new Date().toISOString();
+
+    const { error: resetFormErr } = await supabaseAdmin
+      .from('job_app_form')
+      .update(buildReinitiateFormResetPayload(now))
+      .in('id', resettableFormIds);
+    if (resetFormErr) throw resetFormErr;
+
+    const { error: resetEmpErr } = await supabaseAdmin
+      .from('employees')
+      .update({
+        onboarding_initiated: true,
+        onboarding_status: 'FORM_SENT',
+        aadhaar_number: null,
+      })
+      .in('id', resettableEmployeeIds);
+    if (resetEmpErr) throw resetEmpErr;
+
+    return res.json({
+      updated: resettableEmployeeIds.length,
+      employee_ids: resettableEmployeeIds,
+      skipped: uniqueIds.length - resettableEmployeeIds.length,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/transfer-project', async (req, res, next) => {
+  try {
+    const employeeId = String(req.params.id ?? '').trim();
+    const sourceClientId = String(req.body?.client_id ?? '').trim();
+    const targetClientId = String(req.body?.target_client_id ?? '').trim();
+    const transferReason = String(req.body?.reason ?? '').trim() || 'TRANSFERRED';
+
+    if (!employeeId) return res.status(400).json({ error: 'employee id is required.' });
+    if (!sourceClientId) return res.status(400).json({ error: 'client_id is required.' });
+    if (!targetClientId) return res.status(400).json({ error: 'target_client_id is required.' });
+    if (sourceClientId === targetClientId) {
+      return res.status(400).json({ error: 'Target project must be different from current project.' });
+    }
+
+    const ownedSource = await fetchProgramManagerOwnedClient(req, sourceClientId);
+    if (!ownedSource) return res.status(403).json({ error: 'Not authorized for source client.' });
+    const ownedTarget = await fetchProgramManagerOwnedClient(req, targetClientId);
+    if (!ownedTarget) return res.status(403).json({ error: 'Not authorized for target client.' });
+
+    const { data: employeeRow, error: employeeErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, mobile')
+      .eq('id', employeeId)
+      .maybeSingle();
+    if (employeeErr) throw employeeErr;
+    if (!employeeRow || String(employeeRow.client_id ?? '') !== sourceClientId) {
+      return res.status(404).json({ error: 'Employee not found in source project.' });
+    }
+
+    const now = new Date().toISOString();
+    await ensureActiveAssignmentHistory([{ id: employeeRow.id, client_id: sourceClientId }]);
+
+    const { data: activeAssignRows, error: activeAssignErr } = await supabaseAdmin
+      .from('employee_project_assignments')
+      .select('id, client_id')
+      .eq('employee_id', employeeId)
+      .eq('assignment_status', 'ACTIVE')
+      .limit(1);
+    if (activeAssignErr) throw activeAssignErr;
+    const activeAssignment = (activeAssignRows ?? [])[0] ?? null;
+    if (!activeAssignment || String(activeAssignment.client_id ?? '') !== sourceClientId) {
+      return res.status(400).json({ error: 'Employee does not have an active assignment in the selected source project.' });
+    }
+
+    const { error: closeAssignErr } = await supabaseAdmin
+      .from('employee_project_assignments')
+      .update({
+        assignment_status: 'INACTIVE',
+        left_at: now,
+        left_reason: transferReason,
+        transferred_by: req.user.id,
+        updated_at: now,
+      })
+      .eq('id', activeAssignment.id);
+    if (closeAssignErr) throw closeAssignErr;
+
+    const { error: createAssignErr } = await supabaseAdmin
+      .from('employee_project_assignments')
+      .upsert({
+        employee_id: employeeId,
+        client_id: targetClientId,
+        assignment_status: 'ACTIVE',
+        assigned_at: now,
+        left_at: null,
+        left_reason: null,
+        transferred_by: req.user.id,
+        updated_at: now,
+      }, { onConflict: 'employee_id,client_id' });
+    if (createAssignErr) throw createAssignErr;
+
+    const { data: updatedEmployee, error: employeeUpdateErr } = await supabaseAdmin
+      .from('employees')
+      .update({
+        client_id: targetClientId,
+        designation: null,
+        date_of_joining: null,
+        ctc_type: null,
+        ctc_value: null,
+        onboarding_initiated: false,
+        onboarding_status: 'AVAILABLE',
+        aadhaar_number: null,
+        joining_status: null,
+        joining_actual_date: null,
+        joining_status_change_count: 0,
+        joining_status_set_at: null,
+        joining_status_set_by: null,
+        joining_status_updated_at: null,
+        joining_status_updated_by: null,
+        payroll_pf_uan_number: null,
+        payroll_esic_number: null,
+        payroll_numbers_updated_at: null,
+        payroll_numbers_updated_by: null,
+      })
+      .eq('id', employeeId)
+      .select('*')
+      .maybeSingle();
+    if (employeeUpdateErr) throw employeeUpdateErr;
+
+    const { data: formRow, error: formErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('id')
+      .eq('employee_id', employeeId)
+      .maybeSingle();
+    if (formErr) throw formErr;
+    if (formRow?.id) {
+      const { error: resetFormErr } = await supabaseAdmin
+        .from('job_app_form')
+        .update({
+          ...buildReinitiateFormResetPayload(now),
+          client_id: targetClientId,
+          name: String(employeeRow.name ?? '').trim() || null,
+          mobile: String(employeeRow.mobile ?? '').trim() || null,
+        })
+        .eq('id', formRow.id);
+      if (resetFormErr) throw resetFormErr;
+    }
+
+    return res.json({
+      employee: updatedEmployee,
+      transfer: {
+        from_client_id: sourceClientId,
+        to_client_id: targetClientId,
+        transferred_at: now,
+      },
     });
   } catch (err) {
     next(err);

@@ -21,6 +21,10 @@ const MAX_SUBMISSION_ATTEMPTS = 3;
 const CORRECTION_FIELD_SET = new Set([
   'email',
   'pd_alternate_number',
+  'pd_emergency_contact_name',
+  'pd_emergency_contact_relation',
+  'pd_current_address_same_as_aadhaar',
+  'pd_current_address',
   'pd_marital_status',
   'pd_driving_license',
   'pd_driving_license_url',
@@ -41,10 +45,8 @@ const CORRECTION_FIELD_SET = new Set([
   'bp_police_verification_url'
 ]);
 const CORRECTION_OPTIONAL_FIELDS = new Set([
-  'pd_alternate_number',
   'qual_additional_certificates_url',
   'bp_esic_number',
-  'bp_pf_uan_number',
   'bp_police_verification_url'
 ]);
 
@@ -463,6 +465,18 @@ async function resolveOnboardingEmployee(mobile, employeeIdFilter) {
   return (data ?? [])[0] ?? null;
 }
 
+async function resolveAadhaarNameForEmployee(employeeId) {
+  const id = String(employeeId ?? '').trim();
+  if (!id) return '';
+  const { data, error } = await supabaseAdmin
+    .from('job_app_form')
+    .select('aad_name')
+    .eq('employee_id', id)
+    .maybeSingle();
+  if (error) throw error;
+  return String(data?.aad_name ?? '').trim();
+}
+
 async function upsertJobAppFormFromEmployee(emp) {
   const now = new Date().toISOString();
   const snapshot = {
@@ -773,28 +787,54 @@ router.post('/bank/verify', async (req, res, next) => {
       return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
     }
 
-    const edgeResult = await invokeBankVerifyEdge({
-      idNumber: accountNumber,
-      ifsc,
-    });
+    let edgeResult = null;
+    try {
+      edgeResult = await invokeBankVerifyEdge({
+        idNumber: accountNumber,
+        ifsc,
+      });
+    } catch (edgeErr) {
+      const remarks = String(
+        edgeErr?.details?.data?.remarks ??
+        edgeErr?.details?.upstream?.data?.remarks ??
+        ''
+      ).trim();
+      const providerMessage = String(
+        edgeErr?.details?.message ??
+        edgeErr?.details?.upstream?.message ??
+        edgeErr?.message ??
+        ''
+      ).trim();
+      const reason = remarks || providerMessage || 'Bank verification failed.';
+      return res.status(400).json({
+        error: `${reason.replace(/[. ]+$/, '')}. Please re-enter account number and IFSC and check again.`
+      });
+    }
     const providerData = edgeResult?.data ?? {};
     const accountExists = Boolean(providerData?.account_exists);
     const providerFullName = String(providerData?.full_name ?? '').trim();
+    const providerRemarks = String(providerData?.remarks ?? '').trim();
 
     if (!accountExists) {
-      return res.status(400).json({ error: 'Bank account could not be verified. Please check details and try again.' });
+      const reason = providerRemarks || String(edgeResult?.message ?? '').trim() || 'Bank account could not be verified';
+      return res.status(400).json({
+        error: `${reason.replace(/[. ]+$/, '')}. Please re-enter account number and IFSC and check again.`
+      });
     }
     if (!providerFullName) {
       return res.status(400).json({ error: 'Bank verification did not return account holder name.' });
     }
 
-    const employeeName = String(row?.name ?? '').trim();
-    const holderMatchesEmployee = namesLikelyMatch(employeeName, providerFullName);
+    const aadhaarName = await resolveAadhaarNameForEmployee(row.id);
+    if (!aadhaarName) {
+      return res.status(400).json({ error: 'Aadhaar name not found. Complete Aadhaar verification first.' });
+    }
+    const holderMatchesEmployee = namesLikelyMatch(aadhaarName, providerFullName);
     if (!holderMatchesEmployee) {
       return res.status(400).json({
-        error: 'Account holder name does not match employee name.',
+        error: 'Account holder name does not match Aadhaar name.',
         details: {
-          employee_name: employeeName,
+          aadhaar_name: aadhaarName,
           bank_name: providerFullName,
         },
       });
@@ -859,13 +899,16 @@ router.post('/pan/verify', async (req, res, next) => {
       return res.status(400).json({ error: 'PAN verification did not return full name.' });
     }
 
-    const employeeName = String(row?.name ?? '').trim();
-    const holderMatchesEmployee = namesLikelyMatch(employeeName, providerFullName);
+    const aadhaarName = await resolveAadhaarNameForEmployee(row.id);
+    if (!aadhaarName) {
+      return res.status(400).json({ error: 'Aadhaar name not found. Complete Aadhaar verification first.' });
+    }
+    const holderMatchesEmployee = namesLikelyMatch(aadhaarName, providerFullName);
     if (!holderMatchesEmployee) {
       return res.status(400).json({
-        error: 'PAN name does not match employee name.',
+        error: 'PAN name does not match Aadhaar name.',
         details: {
-          employee_name: employeeName,
+          aadhaar_name: aadhaarName,
           pan_name: providerFullName,
         },
       });
@@ -1390,10 +1433,10 @@ router.patch('/job-app-form', async (req, res, next) => {
 
       const esic = String(body.bp_esic_number ?? '').trim() || null;
       const pfUanRaw = String(body.bp_pf_uan_number ?? '').replace(/\s/g, '');
-      const pfUan = pfUanRaw.length > 0 ? pfUanRaw : null;
-      if (pfUan && !/^\d{12}$/.test(pfUan)) {
-        return res.status(400).json({ error: 'PF UAN must be exactly 12 digits if provided.' });
+      if (!/^\d{12}$/.test(pfUanRaw)) {
+        return res.status(400).json({ error: 'PF UAN number is required and must be exactly 12 digits.' });
       }
+      const pfUan = pfUanRaw;
 
       const policeRaw = String(body.bp_police_verification_url ?? '').trim();
       const policeUrl = policeRaw.length > 0 ? policeRaw : null;
@@ -1565,11 +1608,36 @@ router.patch('/job-app-form', async (req, res, next) => {
       return res.json({ form: data });
     }
 
-    const altern = String(body.pd_alternate_number ?? '').replace(/\D/g, '');
-    if (altern.length > 0 && altern.length !== 10) {
-      return res.status(400).json({ error: 'Alternate number must be 10 digits or empty' });
+    const emergencyName = String(body.pd_emergency_contact_name ?? '').trim();
+    const emergencyRelation = String(body.pd_emergency_contact_relation ?? '').trim();
+    const sameAsAadhaarRaw = body.pd_current_address_same_as_aadhaar;
+    const sameAsAadhaar =
+      sameAsAadhaarRaw === true ||
+      sameAsAadhaarRaw === 'true' ||
+      sameAsAadhaarRaw === 'yes' ||
+      sameAsAadhaarRaw === 'YES'
+        ? true
+        : sameAsAadhaarRaw === false ||
+            sameAsAadhaarRaw === 'false' ||
+            sameAsAadhaarRaw === 'no' ||
+            sameAsAadhaarRaw === 'NO'
+          ? false
+          : null;
+    const currentAddressRaw = String(body.pd_current_address ?? '').trim();
+    if (emergencyName.length < 2) {
+      return res.status(400).json({ error: 'Emergency contact name is required.' });
     }
-    const alternNorm = altern.length === 10 ? altern : null;
+    if (emergencyRelation.length < 2) {
+      return res.status(400).json({ error: 'Emergency contact relation is required.' });
+    }
+    if (sameAsAadhaar == null) {
+      return res.status(400).json({ error: 'Please choose whether current address is same as Aadhaar address.' });
+    }
+    const altern = String(body.pd_alternate_number ?? '').replace(/\D/g, '');
+    if (altern.length !== 10) {
+      return res.status(400).json({ error: 'Emergency contact number must be 10 digits.' });
+    }
+    const alternNorm = altern;
 
     const dl = String(body.pd_driving_license ?? '').trim();
     const licenseUrl = String(body.pd_driving_license_url ?? '').trim();
@@ -1581,7 +1649,7 @@ router.patch('/job-app-form', async (req, res, next) => {
 
     const { data: formSnap, error: snapErr } = await supabaseAdmin
       .from('job_app_form')
-      .select('aad_dob, aad_district')
+      .select('aad_dob, aad_district, aad_address')
       .eq('employee_id', emp.id)
       .eq('mobile', mobile)
       .maybeSingle();
@@ -1592,11 +1660,23 @@ router.patch('/job-app-form', async (req, res, next) => {
 
     const pdCity = pdCityFromAadDistrict(formSnap.aad_district);
     const pdAge = computePdAgeFromAadDob(formSnap.aad_dob);
+    const aadAddress = String(formSnap.aad_address ?? '').trim();
+    const currentAddress = sameAsAadhaar ? aadAddress : currentAddressRaw;
+    if (!sameAsAadhaar && currentAddress.length < 10) {
+      return res.status(400).json({ error: 'Please add your current address.' });
+    }
+    if (sameAsAadhaar && !currentAddress) {
+      return res.status(400).json({ error: 'Aadhaar address is unavailable. Please choose No and enter current address.' });
+    }
 
     /** Personal step: sync pd_city / pd_age from Aadhaar snapshot (not sent by client). */
     const update = {
       email: String(body.email ?? '').trim() || null,
       pd_alternate_number: alternNorm,
+      pd_emergency_contact_name: emergencyName,
+      pd_emergency_contact_relation: emergencyRelation,
+      pd_current_address_same_as_aadhaar: sameAsAadhaar,
+      pd_current_address: currentAddress || null,
       pd_marital_status: String(body.pd_marital_status ?? '').trim() || null,
       pd_driving_license: dl || null,
       pd_driving_license_url: dl === 'Yes' ? licenseUrl : null,

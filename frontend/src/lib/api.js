@@ -26,15 +26,16 @@ async function authHeader() {
 }
 
 const REQUEST_TIMEOUT_MS = 15_000;
+const BANK_VERIFY_TIMEOUT_MS = 60_000;
 
-async function fetchWithTimeout(url, options) {
+async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s (is the backend running at ${BASE_URL}?)`);
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s (is the backend running at ${BASE_URL}?)`);
     }
     if (err instanceof TypeError) {
       throw new Error(`Cannot reach backend at ${BASE_URL} (${err.message})`);
@@ -45,13 +46,13 @@ async function fetchWithTimeout(url, options) {
   }
 }
 
-async function request(path, options = {}) {
+async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   const headers = {
     'Content-Type': 'application/json',
     ...(await authHeader()),
     ...(options.headers || {})
   };
-  const res = await fetchWithTimeout(apiUrl(path), { ...options, headers });
+  const res = await fetchWithTimeout(apiUrl(path), { ...options, headers }, timeoutMs);
   const text = await res.text();
   const body = text ? JSON.parse(text) : null;
   if (!res.ok) {
@@ -109,6 +110,7 @@ export const api = {
 
   listPmClients: () => request('/api/pm/clients'),
   getPmDashboardStats: () => request('/api/pm/clients/dashboard-stats'),
+  getPmJoiningStatusReminders: () => request('/api/pm/clients/joining-status-reminders'),
   listEmployees: (clientId) =>
     request(`/api/employees?client_id=${encodeURIComponent(clientId)}`),
   getEmployeeJobAppForm: ({ clientId, employeeId, payrollReview = false }) => {
@@ -190,6 +192,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ employee_ids: employeeIds })
     }),
+  reinitiateRejectedOnboarding: ({ clientId, employeeIds }) =>
+    request('/api/employees/reinitiate-rejected-onboarding', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: clientId, employee_ids: employeeIds })
+    }),
+  transferEmployeeProject: ({ clientId, employeeId, targetClientId, reason }) =>
+    request(`/api/employees/${encodeURIComponent(employeeId)}/transfer-project`, {
+      method: 'POST',
+      body: JSON.stringify({
+        client_id: clientId,
+        target_client_id: targetClientId,
+        reason: reason || null
+      })
+    }),
   lookupOnboardingMobile: ({ mobile, employeeId }) =>
     request('/api/public/onboarding/mobile-lookup', {
       method: 'POST',
@@ -225,7 +241,7 @@ export const api = {
         account_number: accountNumber,
         ifsc
       })
-    }),
+    }, BANK_VERIFY_TIMEOUT_MS),
   sendOnboardingStatusOtp: ({ mobile, employeeId }) =>
     request('/api/public/onboarding/status/send-otp', {
       method: 'POST',

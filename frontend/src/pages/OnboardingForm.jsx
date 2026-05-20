@@ -79,9 +79,20 @@ function ageFromIsoDob(iso) {
 }
 
 function buildPersonalDraft(f) {
+  const sameRaw = f.pd_current_address_same_as_aadhaar;
+  const sameAsAadhaar =
+    sameRaw === true || String(sameRaw).toLowerCase() === 'true'
+      ? 'yes'
+      : sameRaw === false || String(sameRaw).toLowerCase() === 'false'
+        ? 'no'
+        : '';
   return {
     email: f.email ?? '',
     pd_alternate_number: f.pd_alternate_number ? String(f.pd_alternate_number) : '',
+    pd_emergency_contact_name: f.pd_emergency_contact_name ?? '',
+    pd_emergency_contact_relation: f.pd_emergency_contact_relation ?? '',
+    pd_current_address_same_as_aadhaar: sameAsAadhaar,
+    pd_current_address: f.pd_current_address ?? '',
     pd_marital_status: f.pd_marital_status ?? '',
     pd_driving_license: f.pd_driving_license ?? '',
   };
@@ -151,13 +162,23 @@ const STEP_PREFIX_RULES = {
   photo: ['bp_']
 };
 const STEP_OPTIONAL_FIELDS = {
-  personal: ['pd_alternate_number'],
+  personal: [],
   qualification: ['qual_additional_certificates_url'],
   kyc: [],
-  photo: ['bp_esic_number', 'bp_pf_uan_number', 'bp_police_verification_url']
+  photo: ['bp_esic_number', 'bp_police_verification_url']
 };
 const STEP_ALL_FIELDS = {
-  personal: ['email', 'pd_alternate_number', 'pd_marital_status', 'pd_driving_license', 'pd_driving_license_url'],
+  personal: [
+    'email',
+    'pd_emergency_contact_name',
+    'pd_emergency_contact_relation',
+    'pd_alternate_number',
+    'pd_current_address_same_as_aadhaar',
+    'pd_current_address',
+    'pd_marital_status',
+    'pd_driving_license',
+    'pd_driving_license_url'
+  ],
   qualification: ['qual_highest_qualification', 'qual_education_certificate_url', 'qual_additional_certificates_url'],
   kyc: [
     'kyc_aadhar_front_url',
@@ -533,6 +554,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   const [bankVerified, setBankVerified] = useState(false);
   const [bankVerifying, setBankVerifying] = useState(false);
   const [bankVerifyMsg, setBankVerifyMsg] = useState('');
+  const [bankBranchSummary, setBankBranchSummary] = useState(null);
+  const [bankBranchConfirmed, setBankBranchConfirmed] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -566,6 +589,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         IFSC_CODE_REGEX.test(ifscLoaded)
     );
     setBankVerifyMsg('');
+    setBankBranchSummary(null);
+    setBankBranchConfirmed(false);
     setError('');
   }, [jobForm, correction]);
 
@@ -732,11 +757,20 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         setAccountHolder(result.account_holder_name ?? h);
         setAccountNumber(result.account_number ?? acct);
         setIfsc(result.ifsc ?? ifscNorm);
+        const ifscDetails = result.ifsc_details ?? {};
+        setBankBranchSummary({
+          bankName: String(ifscDetails.bank_name ?? ifscDetails.bank ?? '').trim(),
+          branch: String(ifscDetails.branch ?? '').trim(),
+          state: String(ifscDetails.state ?? '').trim()
+        });
+        setBankBranchConfirmed(false);
         setBankVerified(true);
-        setBankVerifyMsg('Bank details verified successfully.');
+        setBankVerifyMsg('Bank details verified. Please confirm the branch below.');
       })
       .catch((err) => {
         setBankVerified(false);
+        setBankBranchSummary(null);
+        setBankBranchConfirmed(false);
         setBankVerifyMsg(err.message || 'Bank verification failed. Please check details and try again.');
       })
       .finally(() => {
@@ -753,12 +787,11 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     (!isRequired('kyc_pan_card_url', true) || Boolean(String(panCardUrl).trim())) &&
     (!isRequired('kyc_bank_passbook_url', true) || Boolean(String(passbookUrl).trim()));
   const panOk = !isRequired('kyc_pan_number', true) || (panVerified && PAN_NUMBER_REGEX.test(panNumber.trim()));
-  const bankOk =
-    !(
-      isRequired('kyc_account_holder_name', true) ||
-      isRequired('kyc_account_number', true) ||
-      isRequired('kyc_ifsc_code', true)
-    ) || bankVerified;
+  const bankRequired =
+    isRequired('kyc_account_holder_name', true) ||
+    isRequired('kyc_account_number', true) ||
+    isRequired('kyc_ifsc_code', true);
+  const bankOk = !bankRequired || (bankVerified && bankBranchConfirmed);
   const canNext = docsOk && panOk && bankOk;
 
   const handleNext = async () => {
@@ -918,6 +951,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
               setAccountHolder(e.target.value);
               setBankVerified(false);
               setBankVerifyMsg('');
+              setBankBranchSummary(null);
+              setBankBranchConfirmed(false);
             }}
             className={fieldClass(false)}
             placeholder="Name as on bank account"
@@ -938,6 +973,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
                 setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 18));
                 setBankVerified(false);
                 setBankVerifyMsg('');
+                setBankBranchSummary(null);
+                setBankBranchConfirmed(false);
               }}
               className={fieldClass(false)}
               placeholder="Account number"
@@ -956,6 +993,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
                 setIfsc(e.target.value.replace(/\s/g, '').toUpperCase().slice(0, 11));
                 setBankVerified(false);
                 setBankVerifyMsg('');
+                setBankBranchSummary(null);
+                setBankBranchConfirmed(false);
               }}
               className={fieldClass(false)}
               placeholder="HDFC0001234"
@@ -971,9 +1010,37 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         >
           {bankVerifying ? 'Verifying…' : 'Verify bank'}
         </button>}
+        {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) && (
+          <p className="text-xs text-slate-500">
+            Bank verification may take up to 40 seconds. If it fails, re-enter account number and IFSC, then verify again.
+          </p>
+        )}
         {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) && bankVerifyMsg && (
           <p className={`text-sm ${bankVerified ? 'text-emerald-700' : 'text-rose-600'}`}>{bankVerifyMsg}</p>
         )}
+        {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) &&
+          bankVerified &&
+          bankBranchSummary && (
+            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3">
+              <p className="text-sm font-medium text-sky-900">
+                {bankBranchSummary.bankName || '—'}, {bankBranchSummary.branch || '—'}, {bankBranchSummary.state || '—'}
+              </p>
+              <label className="mt-2 inline-flex items-start gap-2 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={bankBranchConfirmed}
+                  onChange={(e) => setBankBranchConfirmed(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>I confirm this is my bank branch.</span>
+              </label>
+              {!bankBranchConfirmed && (
+                <p className="mt-1 text-xs text-amber-700">
+                  Please confirm the bank branch details to continue.
+                </p>
+              )}
+            </div>
+          )}
         {shouldShow('kyc_bank_passbook_url') && <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-passbook">
             Bank passbook / statement {isRequired('kyc_bank_passbook_url', true) && <span className="text-rose-500">*</span>}
@@ -1019,9 +1086,11 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
 }
 
 function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, onGoToStatus, correction }) {
+  const PF_UAN_DEMO_VIDEO_URL = 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4';
   const [photoUrl, setPhotoUrl] = useState(() => jobForm.bp_passport_photo_url ?? '');
   const [esic, setEsic] = useState(() => jobForm.bp_esic_number ?? '');
   const [pfUan, setPfUan] = useState(() => String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, ''));
+  const [hasPfUan, setHasPfUan] = useState(() => (String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, '').length === 12 ? 'yes' : ''));
   const [policeUrl, setPoliceUrl] = useState(() => jobForm.bp_police_verification_url ?? '');
   const [photoUp, setPhotoUp] = useState(false);
   const [policeUp, setPoliceUp] = useState(false);
@@ -1037,7 +1106,9 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     const visible = correction?.active ? correction.visibleFields : null;
     setPhotoUrl(visible?.has('bp_passport_photo_url') ? '' : (jobForm.bp_passport_photo_url ?? ''));
     setEsic(visible?.has('bp_esic_number') ? '' : (jobForm.bp_esic_number ?? ''));
-    setPfUan(visible?.has('bp_pf_uan_number') ? '' : String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, ''));
+    const nextPfUan = visible?.has('bp_pf_uan_number') ? '' : String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, '');
+    setPfUan(nextPfUan);
+    setHasPfUan(nextPfUan.length === 12 ? 'yes' : '');
     setPoliceUrl(visible?.has('bp_police_verification_url') ? '' : (jobForm.bp_police_verification_url ?? ''));
     setPhotoErr('');
     setPoliceErr('');
@@ -1101,11 +1172,14 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   const isRequired = (field, fallbackRequired = false) =>
     correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
   const canSubmit = !isRequired('bp_passport_photo_url', true) || Boolean(String(photoUrl).trim());
+  const pfUanRequired = isRequired('bp_pf_uan_number', true);
+  const hasPfUanError =
+    pfUanRequired && hasPfUan !== 'yes' ? 'PF UAN number is mandatory to submit the form.' : '';
   const pfUanError =
-    pfUan.length > 0 && pfUan.length !== 12 ? 'PF UAN must be 12 digits, or leave empty.' : '';
+    hasPfUan === 'yes' && pfUan.length !== 12 ? 'PF UAN must be exactly 12 digits.' : '';
 
   const handleSubmit = async () => {
-    if (!canSubmit || saving || pfUanError) return;
+    if (!canSubmit || saving || hasPfUanError || pfUanError) return;
     setSaving(true);
     setError('');
     try {
@@ -1115,7 +1189,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         patch_step: 'bank_photo',
         bp_passport_photo_url: String(photoUrl).trim(),
         bp_esic_number: String(esic).trim() || null,
-        bp_pf_uan_number: pfUan.length === 12 ? pfUan : null,
+        bp_pf_uan_number: pfUan,
         bp_police_verification_url: String(policeUrl).trim() || null,
       });
       setSubmitted(true);
@@ -1187,7 +1261,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
 
         {(shouldShow('bp_esic_number') || shouldShow('bp_pf_uan_number') || shouldShow('bp_police_verification_url')) && (
         <div className="border-t border-slate-200 pt-6">
-          <p className="mb-4 text-sm font-medium text-slate-700">Optional information</p>
+          <p className="mb-4 text-sm font-medium text-slate-700">Additional information</p>
           <div className="space-y-4">
             {shouldShow('bp_esic_number') && <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-esic">
@@ -1205,8 +1279,38 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
             </div>}
             {shouldShow('bp_pf_uan_number') && <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-pf-uan">
-                PF UAN Number (Optional)
+                Do you have PF UAN number? <span className="text-rose-500">*</span>
               </label>
+              <div className="flex flex-wrap items-center gap-5">
+                <label className="inline-flex items-center gap-2 text-sm text-slate-800" htmlFor="bp-pf-uan-yes">
+                  <input
+                    id="bp-pf-uan-yes"
+                    type="radio"
+                    name="bp-has-pf-uan"
+                    value="yes"
+                    checked={hasPfUan === 'yes'}
+                    onChange={() => setHasPfUan('yes')}
+                    className="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Yes
+                </label>
+                <label className="inline-flex items-center gap-2 text-sm text-slate-800" htmlFor="bp-pf-uan-no">
+                  <input
+                    id="bp-pf-uan-no"
+                    type="radio"
+                    name="bp-has-pf-uan"
+                    value="no"
+                    checked={hasPfUan === 'no'}
+                    onChange={() => {
+                      setHasPfUan('no');
+                      setPfUan('');
+                    }}
+                    className="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  No
+                </label>
+              </div>
+              {hasPfUan === 'yes' && (
               <input
                 id="bp-pf-uan"
                 type="text"
@@ -1214,10 +1318,25 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                 maxLength={12}
                 value={pfUan}
                 onChange={(e) => setPfUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
-                className={fieldClass(false)}
-                placeholder="PF UAN Number (Optional)"
+                className={`${fieldClass(false)} mt-2`}
+                placeholder="Enter your 12-digit PF UAN number"
                 autoComplete="off"
               />
+              )}
+              {hasPfUan === 'no' && (
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <p>Refer to the video and generate one PF UAN for yourself.</p>
+                  <a
+                    href={PF_UAN_DEMO_VIDEO_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 inline-flex items-center text-sm font-medium text-indigo-700 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-800"
+                  >
+                    Watch demo video
+                  </a>
+                </div>
+              )}
+              {hasPfUanError && <p className="mt-1.5 text-sm text-rose-600">{hasPfUanError}</p>}
               {pfUanError && <p className="mt-1.5 text-sm text-rose-600">{pfUanError}</p>}
             </div>}
             {shouldShow('bp_police_verification_url') && <div>
@@ -1275,7 +1394,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         </button>
         <button
           type="button"
-          disabled={!canSubmit || saving || Boolean(pfUanError)}
+          disabled={!canSubmit || saving || Boolean(hasPfUanError) || Boolean(pfUanError)}
           onClick={handleSubmit}
           className="inline-flex items-center justify-center gap-1 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -1301,7 +1420,13 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       const visible = correction.visibleFields;
       setDraft({
         email: visible.has('email') ? '' : base.email,
+        pd_emergency_contact_name: visible.has('pd_emergency_contact_name') ? '' : base.pd_emergency_contact_name,
+        pd_emergency_contact_relation: visible.has('pd_emergency_contact_relation') ? '' : base.pd_emergency_contact_relation,
         pd_alternate_number: visible.has('pd_alternate_number') ? '' : base.pd_alternate_number,
+        pd_current_address_same_as_aadhaar: visible.has('pd_current_address_same_as_aadhaar')
+          ? ''
+          : base.pd_current_address_same_as_aadhaar,
+        pd_current_address: visible.has('pd_current_address') ? '' : base.pd_current_address,
         pd_marital_status: visible.has('pd_marital_status') ? '' : base.pd_marital_status,
         pd_driving_license: visible.has('pd_driving_license') ? '' : base.pd_driving_license
       });
@@ -1319,12 +1444,26 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   const dl = String(draft.pd_driving_license).trim();
   const needsLicenseImage = dl === 'Yes';
   const licenseImageOk = !needsLicenseImage || Boolean(String(licenseImageUrl).trim());
+  const sameAsAadhaarChoice = String(draft.pd_current_address_same_as_aadhaar ?? '').toLowerCase();
+  const sameAsAadhaarSelected = sameAsAadhaarChoice === 'yes' || sameAsAadhaarChoice === 'no';
+  const currentAddressValue = String(draft.pd_current_address ?? '').trim();
+  const currentAddressOk =
+    sameAsAadhaarChoice === 'yes'
+      ? Boolean(String(jobForm?.aad_address ?? '').trim())
+      : sameAsAadhaarChoice === 'no'
+        ? currentAddressValue.length > 0
+        : false;
   const shouldShow = (field) => !correction?.active || correction.visibleFields.has(field);
   const isRequired = (field, fallbackRequired = false) =>
     correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
 
   const requiredOk =
     (!isRequired('email', true) || String(draft.email).trim()) &&
+    (!isRequired('pd_emergency_contact_name', true) || String(draft.pd_emergency_contact_name).trim()) &&
+    (!isRequired('pd_emergency_contact_relation', true) || String(draft.pd_emergency_contact_relation).trim()) &&
+    (!isRequired('pd_alternate_number', true) || TEN_DIGIT_REGEX.test(String(draft.pd_alternate_number))) &&
+    (!isRequired('pd_current_address_same_as_aadhaar', true) || sameAsAadhaarSelected) &&
+    (!isRequired('pd_current_address', true) || currentAddressOk) &&
     (!isRequired('pd_marital_status', true) || String(draft.pd_marital_status).trim()) &&
     (!isRequired('pd_driving_license', true) || Boolean(dl)) &&
     (!isRequired('pd_driving_license_url', true) || licenseImageOk);
@@ -1359,12 +1498,35 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
     setError('');
     try {
       const alt = String(draft.pd_alternate_number).replace(/\D/g, '');
+      if (alt.length !== 10) {
+        setError('Emergency contact number must be 10 digits.');
+        setSaving(false);
+        return;
+      }
+      if (!sameAsAadhaarSelected) {
+        setError('Please choose whether current address is same as Aadhaar address.');
+        setSaving(false);
+        return;
+      }
+      if (sameAsAadhaarChoice === 'no' && !currentAddressValue) {
+        setError('Please add your current address.');
+        setSaving(false);
+        return;
+      }
+      const currentAddressPayload =
+        sameAsAadhaarChoice === 'yes'
+          ? String(jobForm?.aad_address ?? '').trim()
+          : currentAddressValue;
       const { form } = await api.patchJobAppForm({
         mobile,
         employee_id: employeeId || null,
         patch_step: 'personal',
         email: String(draft.email).trim(),
-        pd_alternate_number: alt.length === 10 ? alt : null,
+        pd_emergency_contact_name: String(draft.pd_emergency_contact_name).trim(),
+        pd_emergency_contact_relation: String(draft.pd_emergency_contact_relation).trim(),
+        pd_alternate_number: alt,
+        pd_current_address_same_as_aadhaar: sameAsAadhaarChoice === 'yes',
+        pd_current_address: currentAddressPayload,
         pd_marital_status: String(draft.pd_marital_status).trim(),
         pd_driving_license: dl,
         pd_driving_license_url: needsLicenseImage ? String(licenseImageUrl).trim() : null,
@@ -1399,20 +1561,116 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               />
             </div>
           )}
-          {shouldShow('pd_alternate_number') && (
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
-                Alternate Number / Alternate WhatsApp Number (Optional)
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={10}
-                className={fieldClass(false)}
-                placeholder="10-digit alternate number"
-                value={draft.pd_alternate_number}
-                onChange={(e) => setDraft((d) => ({ ...d, pd_alternate_number: normalizeMobile(e.target.value) }))}
-              />
+          {(shouldShow('pd_emergency_contact_name') ||
+            shouldShow('pd_alternate_number') ||
+            shouldShow('pd_emergency_contact_relation')) && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Emergency Contact</h4>
+              <div className="space-y-3">
+                {shouldShow('pd_emergency_contact_name') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                      Name {isRequired('pd_emergency_contact_name', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      className={fieldClass(false)}
+                      placeholder="Enter emergency contact name"
+                      value={draft.pd_emergency_contact_name}
+                      onChange={(e) => setDraft((d) => ({ ...d, pd_emergency_contact_name: e.target.value }))}
+                    />
+                  </div>
+                )}
+                {shouldShow('pd_alternate_number') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                      Number {isRequired('pd_alternate_number', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={10}
+                      className={fieldClass(false)}
+                      placeholder="10-digit emergency contact number"
+                      value={draft.pd_alternate_number}
+                      onChange={(e) => setDraft((d) => ({ ...d, pd_alternate_number: normalizeMobile(e.target.value) }))}
+                    />
+                  </div>
+                )}
+                {shouldShow('pd_emergency_contact_relation') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                      Relation {isRequired('pd_emergency_contact_relation', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      className={fieldClass(false)}
+                      placeholder="e.g. Father, Mother, Spouse"
+                      value={draft.pd_emergency_contact_relation}
+                      onChange={(e) => setDraft((d) => ({ ...d, pd_emergency_contact_relation: e.target.value }))}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {(shouldShow('pd_current_address_same_as_aadhaar') || shouldShow('pd_current_address')) && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Current Address</h4>
+              {shouldShow('pd_current_address_same_as_aadhaar') && (
+                <div>
+                  <p className="mb-2 text-sm font-medium text-slate-800">
+                    Same as Aadhaar Address? {isRequired('pd_current_address_same_as_aadhaar', true) && <span className="text-rose-500">*</span>}
+                  </p>
+                  <div className="flex items-center gap-5">
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                      <input
+                        type="radio"
+                        name="corr-current-address-same"
+                        checked={sameAsAadhaarChoice === 'yes'}
+                        onChange={() =>
+                          setDraft((d) => ({
+                            ...d,
+                            pd_current_address_same_as_aadhaar: 'yes',
+                            pd_current_address: String(jobForm?.aad_address ?? '')
+                          }))
+                        }
+                      />
+                      Yes
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                      <input
+                        type="radio"
+                        name="corr-current-address-same"
+                        checked={sameAsAadhaarChoice === 'no'}
+                        onChange={() =>
+                          setDraft((d) => ({
+                            ...d,
+                            pd_current_address_same_as_aadhaar: 'no',
+                            pd_current_address: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_address
+                          }))
+                        }
+                      />
+                      No
+                    </label>
+                  </div>
+                </div>
+              )}
+              {shouldShow('pd_current_address') && (
+                <div className="mt-3">
+                  {sameAsAadhaarChoice === 'no' && (
+                    <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
+                  )}
+                  <textarea
+                    rows={3}
+                    className={`${fieldClass(sameAsAadhaarChoice === 'yes')} resize-none`}
+                    value={sameAsAadhaarChoice === 'yes' ? String(jobForm?.aad_address ?? '') : draft.pd_current_address}
+                    onChange={(e) => setDraft((d) => ({ ...d, pd_current_address: e.target.value }))}
+                    readOnly={sameAsAadhaarChoice === 'yes'}
+                    placeholder="Enter your full current address"
+                  />
+                </div>
+              )}
             </div>
           )}
           {shouldShow('pd_marital_status') && (
@@ -1496,7 +1754,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
     <div className="space-y-10">
       <div className="text-center">
         <h2 className="text-2xl font-semibold text-slate-900">Personal Info</h2>
-        <p className="mt-2 text-sm text-slate-600">Confirm details from your Aadhaar and add any optional contacts.</p>
+        <p className="mt-2 text-sm text-slate-600">Confirm details from your Aadhaar and add emergency contact details.</p>
       </div>
 
       {/* Section A — read-only Aadhaar-matched */}
@@ -1540,24 +1798,54 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               <p className="mt-1 text-xs text-sky-900">This mobile number is locked and cannot be changed.</p>
             </div>
           </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
-              Alternate Number / Alternate WhatsApp Number (Optional)
-            </label>
-            <input
-              type="text"
-              inputMode="numeric"
-              maxLength={10}
-              className={fieldClass(false)}
-              placeholder="10-digit alternate number"
-              value={draft.pd_alternate_number}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, pd_alternate_number: normalizeMobile(e.target.value) }))
-              }
-            />
-            <p className="mt-1.5 text-xs text-slate-500">
-              Optional: Provide if you have a different contact number for emergencies or WhatsApp updates.
-            </p>
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+            <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Emergency Contact</h4>
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                  Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  className={fieldClass(false)}
+                  placeholder="Enter emergency contact name"
+                  value={draft.pd_emergency_contact_name}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, pd_emergency_contact_name: e.target.value }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                  Number <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={10}
+                  className={fieldClass(false)}
+                  placeholder="10-digit emergency contact number"
+                  value={draft.pd_alternate_number}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, pd_alternate_number: normalizeMobile(e.target.value) }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                  Relation <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  className={fieldClass(false)}
+                  placeholder="e.g. Father, Mother, Spouse"
+                  value={draft.pd_emergency_contact_relation}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, pd_emergency_contact_relation: e.target.value }))
+                  }
+                />
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -1622,6 +1910,55 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               tabIndex={-1}
               className={`${fieldClass(true)} tabular-nums`}
               value={jobForm.aad_pincode ?? ''}
+            />
+          </div>
+          <div>
+            <h4 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-700">Current Address</h4>
+            <p className="mb-2 text-sm font-medium text-slate-800">
+              Same as Aadhaar Address? <span className="text-rose-500">*</span>
+            </p>
+            <div className="mb-3 flex items-center gap-5">
+              <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                <input
+                  type="radio"
+                  name="current-address-same"
+                  checked={sameAsAadhaarChoice === 'yes'}
+                  onChange={() =>
+                    setDraft((d) => ({
+                      ...d,
+                      pd_current_address_same_as_aadhaar: 'yes',
+                      pd_current_address: String(jobForm?.aad_address ?? '')
+                    }))
+                  }
+                />
+                Yes
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                <input
+                  type="radio"
+                  name="current-address-same"
+                  checked={sameAsAadhaarChoice === 'no'}
+                  onChange={() =>
+                    setDraft((d) => ({
+                      ...d,
+                      pd_current_address_same_as_aadhaar: 'no',
+                      pd_current_address: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_address
+                    }))
+                  }
+                />
+                No
+              </label>
+            </div>
+            {sameAsAadhaarChoice === 'no' && (
+              <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
+            )}
+            <textarea
+              rows={3}
+              className={`${fieldClass(sameAsAadhaarChoice === 'yes')} resize-none`}
+              value={sameAsAadhaarChoice === 'yes' ? String(jobForm?.aad_address ?? '') : draft.pd_current_address}
+              onChange={(e) => setDraft((d) => ({ ...d, pd_current_address: e.target.value }))}
+              readOnly={sameAsAadhaarChoice === 'yes'}
+              placeholder="Enter your full current address"
             />
           </div>
           <div className="cursor-not-allowed">
@@ -1804,6 +2141,41 @@ export default function OnboardingForm() {
       )
     );
     const visibleFields = new Set(requiredFields);
+    if (step === 'personal') {
+      if (!String(jobFormRow?.pd_emergency_contact_name ?? '').trim()) {
+        visibleFields.add('pd_emergency_contact_name');
+        requiredFields.add('pd_emergency_contact_name');
+      }
+      if (!String(jobFormRow?.pd_emergency_contact_relation ?? '').trim()) {
+        visibleFields.add('pd_emergency_contact_relation');
+        requiredFields.add('pd_emergency_contact_relation');
+      }
+      if (!TEN_DIGIT_REGEX.test(String(jobFormRow?.pd_alternate_number ?? ''))) {
+        visibleFields.add('pd_alternate_number');
+        requiredFields.add('pd_alternate_number');
+      }
+      const sameAsAad = jobFormRow?.pd_current_address_same_as_aadhaar;
+      const sameAsAadChoice =
+        sameAsAad === true || String(sameAsAad).toLowerCase() === 'true'
+          ? 'yes'
+          : sameAsAad === false || String(sameAsAad).toLowerCase() === 'false'
+            ? 'no'
+            : '';
+      if (!sameAsAadChoice) {
+        visibleFields.add('pd_current_address_same_as_aadhaar');
+        requiredFields.add('pd_current_address_same_as_aadhaar');
+      }
+      if (sameAsAadChoice === 'no' && !String(jobFormRow?.pd_current_address ?? '').trim()) {
+        visibleFields.add('pd_current_address');
+        requiredFields.add('pd_current_address');
+      }
+    }
+    if (step === 'photo') {
+      if (!TWELVE_DIGIT_REGEX.test(String(jobFormRow?.bp_pf_uan_number ?? ''))) {
+        visibleFields.add('bp_pf_uan_number');
+        requiredFields.add('bp_pf_uan_number');
+      }
+    }
     for (const optionalField of STEP_OPTIONAL_FIELDS[step] || []) {
       if (isEmptyForCorrection(jobFormRow?.[optionalField])) {
         visibleFields.add(optionalField);

@@ -4,6 +4,7 @@ export const PM_CLIENT_TAB_SEGMENT = {
   role_assigned: 'role-assigned',
   in_progress: 'in-progress',
   pl_reviewed: 'pl-reviewed',
+  employee_directory: 'employee-directory',
   add_employee: 'add-employees'
 };
 
@@ -13,6 +14,7 @@ export const PM_TAB_SEGMENT_TO_KEY = {
   'role-assigned': 'role_assigned',
   'in-progress': 'in_progress',
   'pl-reviewed': 'pl_reviewed',
+  'employee-directory': 'employee_directory',
   'add-employees': 'add_employee'
 };
 

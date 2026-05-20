@@ -10,6 +10,35 @@ import { api } from '../lib/api';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
 
 const PAGE_SIZE = 50;
+const DIRECTORY_STATUS_OPTIONS = [
+  'AVAILABLE',
+  'PENDING',
+  'ROLE_ASSIGNED',
+  'FORM_SENT',
+  'Form Submitted',
+  'Submitted',
+  'SUBMITTED',
+  'CORRECTION_REQUESTED',
+  'Correction Requested',
+  'APPROVED',
+  'REJECTED',
+  'PM Approved',
+  'PM Rejected',
+  'PENDING_PAYROLL_LEAD',
+  'Pending Payroll Review',
+  'PAYROLL_APPROVED',
+  'PAYROLL_REJECTED',
+  'Payroll Approved',
+  'Payroll Rejected',
+  'JOINED',
+  'Joined',
+  'NOT_JOINED',
+  'Not Joined',
+  'JOINED_OTHER_DATE',
+  'Joined on other date',
+  'JOINED_ABSCONDED',
+  'Joined and absconded'
+];
 
 function buildOnboardingInitiateToast(prefix, result) {
   const updated = Number(result?.updated ?? 0);
@@ -28,6 +57,7 @@ export default function PmClientDetail() {
   const navigate = useNavigate();
   const { setClientSidebarMeta } = useOutletContext() ?? {};
   const [client, setClient] = useState(null);
+  const [pmClients, setPmClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -54,6 +84,7 @@ export default function PmClientDetail() {
     in_progress_rejected: 1,
     pl_reviewed_approved: 1,
     pl_reviewed_rejected: 1,
+    employee_directory: 1,
     add_employee: 1
   });
   /** Within Onboarding In Progress: form still open vs submitted applications */
@@ -77,6 +108,11 @@ export default function PmClientDetail() {
   const [joiningInlineDate, setJoiningInlineDate] = useState('');
   const [joiningInlineLoading, setJoiningInlineLoading] = useState(false);
   const joiningInlineSelectRef = useRef(null);
+  const [transferModalEmployee, setTransferModalEmployee] = useState(null);
+  const [transferTargetClientId, setTransferTargetClientId] = useState('');
+  const [transferReason, setTransferReason] = useState('');
+  const [transferLoading, setTransferLoading] = useState(false);
+  const [directoryStatusFilter, setDirectoryStatusFilter] = useState('');
 
   const loadAll = async () => {
     setLoading(true);
@@ -90,6 +126,7 @@ export default function PmClientDetail() {
       if (!found) {
         setError('Client not found or not assigned to you.');
       } else {
+        setPmClients(clients);
         setClient(found);
         setEmployees(emps);
       }
@@ -172,6 +209,50 @@ export default function PmClientDetail() {
     () => employees.filter((e) => reviewStatus(e) === 'REJECTED'),
     [employees]
   );
+  const employeeDirectoryRows = useMemo(
+    () =>
+      employees.map((row) => {
+        const payrollReviewStatus = String(row.form_payroll_review_status ?? '').trim();
+        const formReviewStatus = String(row.form_review_status ?? '').trim();
+        const formSubmissionStatus = String(row.form_submission_status ?? '').trim();
+        const joiningStatus = String(row.joining_status ?? '').trim().toUpperCase();
+
+        let latestStatus = row.onboarding_status ?? '';
+        if (joiningStatus === 'JOINED') latestStatus = 'Joined';
+        else if (joiningStatus === 'NOT_JOINED') latestStatus = 'Not Joined';
+        else if (joiningStatus === 'JOINED_OTHER_DATE') latestStatus = 'Joined on other date';
+        else if (joiningStatus === 'JOINED_ABSCONDED') latestStatus = 'Joined and absconded';
+        else if (payrollReviewStatus === 'PAYROLL_APPROVED') latestStatus = 'Payroll Approved';
+        else if (payrollReviewStatus === 'PAYROLL_REJECTED') latestStatus = 'Payroll Rejected';
+        else if (payrollReviewStatus === 'PENDING_PAYROLL_LEAD') latestStatus = 'Pending Payroll Review';
+        else if (formReviewStatus === 'APPROVED') latestStatus = 'PM Approved';
+        else if (formReviewStatus === 'REJECTED') latestStatus = 'PM Rejected';
+        else if (formReviewStatus === 'CORRECTION_REQUESTED') latestStatus = 'Correction Requested';
+        else if (formSubmissionStatus === 'Submitted') latestStatus = 'Form Submitted';
+
+        return { ...row, onboarding_status: latestStatus };
+      }),
+    [employees]
+  );
+  const directoryStatusOptions = useMemo(() => {
+    const fromRows = Array.from(
+      new Set(
+        employeeDirectoryRows
+          .map((row) => String(row.onboarding_status ?? '').trim())
+          .filter(Boolean)
+      )
+    );
+    const merged = Array.from(new Set([...DIRECTORY_STATUS_OPTIONS, ...fromRows]));
+    return merged.sort((a, b) => a.localeCompare(b));
+  }, [employeeDirectoryRows]);
+  const filteredEmployeeDirectoryRows = useMemo(
+    () =>
+      employeeDirectoryRows.filter((row) => {
+        if (!directoryStatusFilter) return true;
+        return String(row.onboarding_status ?? '').trim() === directoryStatusFilter;
+      }),
+    [employeeDirectoryRows, directoryStatusFilter]
+  );
   const inProgressTotal =
     formSentRows.length +
     responsesRows.length +
@@ -245,6 +326,8 @@ export default function PmClientDetail() {
         ? filteredRoleAssigned
         : activeTab === 'add_employee'
           ? []
+          : activeTab === 'employee_directory'
+            ? filteredEmployeeDirectoryRows
           : activeTab === 'pl_reviewed'
             ? plReviewedSubtab === 'approved'
               ? plApprovedRows
@@ -281,7 +364,8 @@ export default function PmClientDetail() {
         pending: pending.length,
         role_assigned: roleAssigned.length,
         in_progress: inProgressTotal,
-        pl_reviewed: plReviewedTotal
+        pl_reviewed: plReviewedTotal,
+        employee_directory: employees.length
       }
     });
   }, [
@@ -289,7 +373,8 @@ export default function PmClientDetail() {
     pending.length,
     roleAssigned.length,
     inProgressTotal,
-    plReviewedTotal
+    plReviewedTotal,
+    employees.length
   ]);
   useEffect(() => {
     if (activeTab === 'add_employee') return;
@@ -343,6 +428,67 @@ export default function PmClientDetail() {
       setError(err.message);
     } finally {
       setCtaLoading(false);
+    }
+  };
+
+  const handleBulkReinitiate = async () => {
+    if (selectedIds.size === 0) return;
+    setCtaLoading(true);
+    setError(null);
+    try {
+      const ids = Array.from(selectedIds);
+      const res = await api.reinitiateRejectedOnboarding({ clientId: id, employeeIds: ids });
+      const updated = Number(res?.updated ?? 0);
+      setToast(
+        `Re-initiated onboarding for ${updated} employee${updated === 1 ? '' : 's'}${selectedIds.size ? ` (${selectedIds.size} selected)` : ''}.`
+      );
+      setSelectedIds(new Set());
+      await loadAll();
+      navigate(pmClientTabUrl(id, 'in_progress'));
+      setTimeout(() => setToast(null), 3500);
+    } catch (err) {
+      setError(err.message || 'Could not re-initiate selected employees.');
+    } finally {
+      setCtaLoading(false);
+    }
+  };
+
+  const openTransferModal = (row) => {
+    setTransferModalEmployee(row);
+    setTransferTargetClientId('');
+    setTransferReason('');
+    setError(null);
+  };
+
+  const closeTransferModal = () => {
+    if (transferLoading) return;
+    setTransferModalEmployee(null);
+    setTransferTargetClientId('');
+    setTransferReason('');
+  };
+
+  const handleTransferEmployee = async () => {
+    if (!transferModalEmployee || !transferTargetClientId) return;
+    setTransferLoading(true);
+    setError(null);
+    try {
+      const res = await api.transferEmployeeProject({
+        clientId: id,
+        employeeId: transferModalEmployee.id,
+        targetClientId: transferTargetClientId,
+        reason: transferReason,
+      });
+      const targetClientName =
+        pmClients.find((c) => c.id === transferTargetClientId)?.client_name || 'target project';
+      setToast(`${res?.employee?.name ?? transferModalEmployee.name} transferred to ${targetClientName}.`);
+      closeTransferModal();
+      await loadAll();
+      navigate(pmClientTabUrl(id, 'employee_directory'));
+      setTimeout(() => setToast(null), 3500);
+    } catch (err) {
+      setError(err.message || 'Could not transfer employee.');
+    } finally {
+      setTransferLoading(false);
     }
   };
 
@@ -568,6 +714,11 @@ export default function PmClientDetail() {
     setPageByTab((prev) => ({ ...prev, role_assigned: 1 }));
   };
 
+  const transferTargetProjects = useMemo(
+    () => pmClients.filter((pmClient) => pmClient.id !== id),
+    [pmClients, id]
+  );
+
   const designationLayoutClass =
     client && client.designations.length > 4
       ? 'grid grid-cols-2 gap-1.5 sm:grid-cols-4'
@@ -783,6 +934,68 @@ export default function PmClientDetail() {
                 {ctaLoading ? 'Sending...' : `Send onboarding form${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
               </button>
             )}
+          </div>
+        )}
+
+        {((activeTab === 'in_progress' && inProgressSubtab === 'rejected') ||
+          (activeTab === 'pl_reviewed' && plReviewedSubtab === 'rejected')) && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+            <p className="text-sm text-rose-900">
+              Select rejected employees and re-initiate onboarding to let them refill the form from the beginning.
+            </p>
+            <button
+              type="button"
+              onClick={handleBulkReinitiate}
+              disabled={selectedIds.size === 0 || ctaLoading}
+              className="rounded-md bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {ctaLoading
+                ? 'Re-initiating...'
+                : `Re-initiate selected${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
+            </button>
+          </div>
+        )}
+
+        {activeTab === 'employee_directory' && (
+          <div className="mb-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+              <p className="text-sm text-indigo-900">
+                Active employees in this project. Use Transfer to move an employee to another project.
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-[240px]">
+                  <label className="mb-1 block text-xs font-medium text-slate-600">Filter by status</label>
+                  <select
+                    value={directoryStatusFilter}
+                    onChange={(e) => {
+                      setDirectoryStatusFilter(e.target.value);
+                      setPageByTab((prev) => ({ ...prev, employee_directory: 1 }));
+                    }}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  >
+                    <option value="">All statuses</option>
+                    {directoryStatusOptions.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDirectoryStatusFilter('');
+                    setPageByTab((prev) => ({ ...prev, employee_directory: 1 }));
+                  }}
+                  disabled={!directoryStatusFilter}
+                  className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Clear filter
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1119,7 +1332,9 @@ export default function PmClientDetail() {
           selectable={
             activeTab === 'pending' ||
             activeTab === 'role_assigned' ||
-            (activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved')
+            (activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') ||
+            (activeTab === 'in_progress' && inProgressSubtab === 'rejected') ||
+            (activeTab === 'pl_reviewed' && plReviewedSubtab === 'rejected')
           }
           showJobColumns={activeTab !== 'pending'}
           showStatusColumn={activeTab !== 'pl_reviewed'}
@@ -1133,8 +1348,14 @@ export default function PmClientDetail() {
             activeTab === 'in_progress' && inProgressSubtab !== 'form_sent' && inProgressSubtab !== 'approved'
           }
           onViewResponse={openResponseModal}
-          actionLabel={activeTab === 'pending' ? 'Set Details' : null}
-          onRowAction={activeTab === 'pending' ? (row) => setRowRoleModalEmployee(row) : null}
+          actionLabel={activeTab === 'pending' ? 'Set Details' : activeTab === 'employee_directory' ? 'Transfer' : null}
+          onRowAction={
+            activeTab === 'pending'
+              ? (row) => setRowRoleModalEmployee(row)
+              : activeTab === 'employee_directory'
+                ? openTransferModal
+                : null
+          }
         />
         )}
 
@@ -1199,6 +1420,71 @@ export default function PmClientDetail() {
             onClose={() => setRowRoleModalEmployee(null)}
             onSubmit={handleSingleRoleDetails}
           />
+        )}
+        {transferModalEmployee && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+            <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
+              <h3 className="text-lg font-semibold text-slate-900">Transfer Employee</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Transfer <span className="font-medium text-slate-800">{transferModalEmployee.name}</span> to another project.
+                Current onboarding data will reset and status will move to Available.
+              </p>
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Target project
+                  </label>
+                  <select
+                    value={transferTargetClientId}
+                    onChange={(e) => setTransferTargetClientId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  >
+                    <option value="">Select target project</option>
+                    {transferTargetProjects.map((pmClient) => (
+                      <option key={pmClient.id} value={pmClient.id}>
+                        {pmClient.client_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Reason (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={transferReason}
+                    onChange={(e) => setTransferReason(e.target.value)}
+                    placeholder="Transfer reason"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+                </div>
+                {transferTargetProjects.length === 0 && (
+                  <p className="text-xs text-amber-700">
+                    No other projects available under your access for transfer.
+                  </p>
+                )}
+              </div>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeTransferModal}
+                  disabled={transferLoading}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTransferEmployee}
+                  disabled={!transferTargetClientId || transferLoading}
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {transferLoading ? 'Transferring...' : 'Transfer'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
         <EmployeeFormResponseModal
           open={responseModalOpen}

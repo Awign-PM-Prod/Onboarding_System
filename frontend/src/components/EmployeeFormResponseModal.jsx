@@ -23,6 +23,11 @@ function stripFieldPrefix(key) {
 }
 
 function prettifyKey(key) {
+  if (key === 'pd_emergency_contact_name') return 'Emergency Contact Name';
+  if (key === 'pd_emergency_contact_relation') return 'Emergency Contact Relation';
+  if (key === 'pd_alternate_number') return 'Emergency Contact Number';
+  if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
+  if (key === 'pd_current_address') return 'Current Address';
   return stripFieldPrefix(key)
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -70,6 +75,7 @@ function formatDisplayValue(key, val) {
       </pre>
     );
   }
+  if (typeof val === 'boolean') return val ? 'Yes' : 'No';
   const s = String(val);
   if (/_url$/i.test(key) && /^https?:\/\//i.test(s)) {
     return (
@@ -117,7 +123,11 @@ const ORDERED_FIELDS = [
   'aad_district',
   'aad_pincode',
   // Personal info
+  'pd_emergency_contact_name',
+  'pd_emergency_contact_relation',
   'pd_alternate_number',
+  'pd_current_address_same_as_aadhaar',
+  'pd_current_address',
   'pd_marital_status',
   'pd_driving_license',
   'pd_driving_license_url',
@@ -159,7 +169,11 @@ const DOCUMENT_TAB_DEFINITIONS = [
 const DOCUMENT_FIELD_KEYS = new Set(DOCUMENT_TAB_DEFINITIONS.map((item) => item.key));
 
 const PM_MARKABLE_FIELDS = new Set([
+  'pd_emergency_contact_name',
+  'pd_emergency_contact_relation',
   'pd_alternate_number',
+  'pd_current_address_same_as_aadhaar',
+  'pd_current_address',
   'pd_marital_status',
   'pd_driving_license',
   'pd_driving_license_url',
