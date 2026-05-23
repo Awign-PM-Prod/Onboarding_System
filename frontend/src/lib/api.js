@@ -293,6 +293,15 @@ export const api = {
     fd.append('file', file);
     return uploadRequest(`/api/public/onboarding/kyc-document-upload?${q.toString()}`, fd);
   },
+  validateKycDocument: ({ mobile, employeeId, file, kind }) => {
+    const q = new URLSearchParams();
+    q.set('kind', kind);
+    const fd = new FormData();
+    fd.append('mobile', mobile);
+    if (employeeId) fd.append('employee_id', employeeId);
+    fd.append('file', file);
+    return uploadRequest(`/api/public/onboarding/kyc-document-validate?${q.toString()}`, fd);
+  },
   listAdminClients: () => request('/api/admin/clients'),
   getAdminComplianceStats: () => request('/api/admin/compliance-stats'),
 

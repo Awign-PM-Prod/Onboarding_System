@@ -11,20 +11,28 @@ const BANK_PHOTO_DOCUMENTS_BUCKET = 'bank-photo-documents';
 const MAX_DRIVING_LICENSE_BYTES = 12 * 1024 * 1024;
 const MAX_QUALIFICATION_BYTES = 12 * 1024 * 1024;
 const MAX_KYC_DOCUMENT_BYTES = 12 * 1024 * 1024;
+const MAX_KYC_VALIDATE_BYTES = 6 * 1024 * 1024;
 const MAX_BANK_PHOTO_DOCUMENT_BYTES = 12 * 1024 * 1024;
 
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const ACCOUNT_NUMBER_REGEX = /^[0-9]{6,18}$/;
+const PINCODE_REGEX = /^[0-9]{6}$/;
 const MAX_SUBMISSION_ATTEMPTS = 3;
 
 const CORRECTION_FIELD_SET = new Set([
   'email',
+  'pd_father_name',
+  'pd_mother_name',
+  'pd_spouse_name',
   'pd_alternate_number',
   'pd_emergency_contact_name',
   'pd_emergency_contact_relation',
   'pd_current_address_same_as_aadhaar',
   'pd_current_address',
+  'pd_current_state',
+  'pd_current_city',
+  'pd_current_pincode',
   'pd_marital_status',
   'pd_driving_license',
   'pd_driving_license_url',
@@ -83,6 +91,11 @@ function extFromMime(mime) {
   return 'img';
 }
 
+function isAllowedOcrImageMime(mime) {
+  const m = String(mime || '').toLowerCase();
+  return m === 'image/jpeg' || m === 'image/jpg' || m === 'image/png' || m === 'image/webp';
+}
+
 function isAllowedQualificationMime(mime) {
   const m = String(mime || '').toLowerCase();
   if (m.startsWith('image/')) return true;
@@ -133,8 +146,8 @@ const kycImageOnlyUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_KYC_DOCUMENT_BYTES },
   fileFilter: (_req, file, cb) => {
-    if (!String(file.mimetype || '').startsWith('image/')) {
-      cb(new Error('Only image files are allowed'));
+    if (!isAllowedOcrImageMime(file.mimetype)) {
+      cb(new Error('Only JPG, JPEG, PNG, or WEBP images are allowed'));
       return;
     }
     cb(null, true);
@@ -244,6 +257,8 @@ const BANK_VERIFY_EDGE_FUNCTION =
   process.env.BANK_VERIFY_EDGE_FUNCTION || 'bank-verify';
 const PAN_VERIFY_EDGE_FUNCTION =
   process.env.PAN_VERIFY_EDGE_FUNCTION || 'pan-verify';
+const KYC_DOC_VALIDATE_EDGE_FUNCTION =
+  process.env.KYC_DOC_VALIDATE_EDGE_FUNCTION || 'kyc-document-validate';
 /** Fixed demo OTP for onboarding status login until SMS integration. */
 const DEMO_STATUS_OTP = '123123';
 const STATUS_SESSION_TTL_MS = 60 * 60 * 1000;
@@ -379,6 +394,52 @@ async function invokePanVerifyEdge({ idNumber }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ id_number: idNumber }),
+  });
+
+  const raw = await resp.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
+  if (!resp.ok) {
+    const msg = body?.error || body?.message || `Edge function failed (${resp.status})`;
+    const err = new Error(msg);
+    err.details = body?.upstream ?? body ?? null;
+    throw err;
+  }
+  return body;
+}
+
+async function invokeKycDocValidateEdge({
+  kind,
+  mimeType,
+  imageBase64,
+  expectedAadhaarNumber,
+  expectedPanNumber,
+}) {
+  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to invoke edge functions.');
+  }
+
+  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(KYC_DOC_VALIDATE_EDGE_FUNCTION)}`;
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      kind,
+      mime_type: mimeType,
+      image_base64: imageBase64,
+      expected_aadhaar_number: expectedAadhaarNumber || null,
+      expected_pan_number: expectedPanNumber || null,
+    }),
   });
 
   const raw = await resp.text();
@@ -1148,6 +1209,99 @@ router.post('/qualification-certificate-upload', (req, res, next) => {
 });
 
 const KYC_UPLOAD_KINDS = new Set(['aadhaar_front', 'aadhaar_back', 'pan_card', 'bank_passbook']);
+const KYC_VALIDATE_KINDS = new Set(['aadhaar_front', 'aadhaar_back', 'pan_card']);
+
+const kycValidateUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_KYC_VALIDATE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (!isAllowedOcrImageMime(file.mimetype)) {
+      cb(new Error('Only JPG, JPEG, PNG, or WEBP images are allowed'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+router.post('/kyc-document-validate', (req, res, next) => {
+  const kind = String(req.query?.kind || '').trim();
+  if (!KYC_VALIDATE_KINDS.has(kind)) {
+    return res.status(400).json({
+      error: 'Invalid kind. Use ?kind=aadhaar_front, aadhaar_back, or pan_card',
+    });
+  }
+  kycValidateUpload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'File must be 6 MB or smaller for auto-check' });
+      }
+      return res.status(400).json({ error: err.message || 'Invalid upload' });
+    }
+    next();
+  });
+}, async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const kind = String(req.query?.kind || '').trim();
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+    if (!req.file?.buffer) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const emp = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!emp) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    const { data: form, error: formErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('aadhaar_number, kyc_pan_number')
+      .eq('employee_id', emp.id)
+      .maybeSingle();
+    if (formErr) throw formErr;
+    const normalizedPan = String(form?.kyc_pan_number ?? '').replace(/\s/g, '').toUpperCase();
+    if (kind === 'pan_card' && !PAN_NUMBER_REGEX.test(normalizedPan)) {
+      return res.json({
+        ok: true,
+        checked: false,
+        warnings: [
+          'Please verify PAN number first, then upload PAN card image.',
+        ],
+        details: 'PAN number not verified yet',
+      });
+    }
+
+    try {
+      const edgeResult = await invokeKycDocValidateEdge({
+        kind,
+        mimeType: req.file.mimetype,
+        imageBase64: req.file.buffer.toString('base64'),
+        expectedAadhaarNumber: String(form?.aadhaar_number ?? '').replace(/\D/g, ''),
+        expectedPanNumber: normalizedPan,
+      });
+      return res.json({
+        ok: true,
+        checked: true,
+        result: edgeResult?.result ?? null,
+      });
+    } catch (edgeErr) {
+      return res.json({
+        ok: true,
+        checked: false,
+        warnings: [
+          'Could not auto-check this document right now. You can continue, but upload a clear image.',
+        ],
+        details: edgeErr?.message || 'Auto-check unavailable',
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.post('/kyc-document-upload', (req, res, next) => {
   const kind = String(req.query?.kind || '').trim();
@@ -1184,6 +1338,19 @@ router.post('/kyc-document-upload', (req, res, next) => {
     }
 
     const kind = String(req.query?.kind || '').trim();
+    if (kind === 'pan_card') {
+      const { data: form, error: formErr } = await supabaseAdmin
+        .from('job_app_form')
+        .select('kyc_pan_number')
+        .eq('employee_id', emp.id)
+        .maybeSingle();
+      if (formErr) throw formErr;
+      const normalizedPan = String(form?.kyc_pan_number ?? '').replace(/\s/g, '').toUpperCase();
+      if (!PAN_NUMBER_REGEX.test(normalizedPan)) {
+        return res.status(400).json({ error: 'Please verify PAN number first before uploading PAN card image.' });
+      }
+    }
+
     const ext =
       kind === 'bank_passbook'
         ? extForKycBankFile(req.file.mimetype, req.file.originalname)
@@ -1610,6 +1777,11 @@ router.patch('/job-app-form', async (req, res, next) => {
 
     const emergencyName = String(body.pd_emergency_contact_name ?? '').trim();
     const emergencyRelation = String(body.pd_emergency_contact_relation ?? '').trim();
+    const fatherName = String(body.pd_father_name ?? '').trim();
+    const motherName = String(body.pd_mother_name ?? '').trim();
+    const spouseNameRaw = String(body.pd_spouse_name ?? '').trim();
+    const maritalStatus = String(body.pd_marital_status ?? '').trim();
+    const isMarried = maritalStatus.toLowerCase() === 'married';
     const sameAsAadhaarRaw = body.pd_current_address_same_as_aadhaar;
     const sameAsAadhaar =
       sameAsAadhaarRaw === true ||
@@ -1624,8 +1796,20 @@ router.patch('/job-app-form', async (req, res, next) => {
           ? false
           : null;
     const currentAddressRaw = String(body.pd_current_address ?? '').trim();
+    const currentStateRaw = String(body.pd_current_state ?? '').trim();
+    const currentCityRaw = String(body.pd_current_city ?? '').trim();
+    const currentPincodeRaw = String(body.pd_current_pincode ?? '').replace(/\D/g, '');
     if (emergencyName.length < 2) {
       return res.status(400).json({ error: 'Emergency contact name is required.' });
+    }
+    if (fatherName.length < 2) {
+      return res.status(400).json({ error: "Father's name is required." });
+    }
+    if (motherName.length < 2) {
+      return res.status(400).json({ error: "Mother's name is required." });
+    }
+    if (isMarried && spouseNameRaw.length < 2) {
+      return res.status(400).json({ error: 'Spouse name is required for married candidates.' });
     }
     if (emergencyRelation.length < 2) {
       return res.status(400).json({ error: 'Emergency contact relation is required.' });
@@ -1649,7 +1833,7 @@ router.patch('/job-app-form', async (req, res, next) => {
 
     const { data: formSnap, error: snapErr } = await supabaseAdmin
       .from('job_app_form')
-      .select('aad_dob, aad_district, aad_address')
+      .select('aad_dob, aad_district, aad_address, aad_state, aad_pincode')
       .eq('employee_id', emp.id)
       .eq('mobile', mobile)
       .maybeSingle();
@@ -1661,23 +1845,50 @@ router.patch('/job-app-form', async (req, res, next) => {
     const pdCity = pdCityFromAadDistrict(formSnap.aad_district);
     const pdAge = computePdAgeFromAadDob(formSnap.aad_dob);
     const aadAddress = String(formSnap.aad_address ?? '').trim();
+    const aadState = String(formSnap.aad_state ?? '').trim();
+    const aadCity = String(formSnap.aad_district ?? '').trim();
+    const aadPincode = String(formSnap.aad_pincode ?? '').replace(/\D/g, '');
     const currentAddress = sameAsAadhaar ? aadAddress : currentAddressRaw;
+    const currentState = sameAsAadhaar ? aadState : currentStateRaw;
+    const currentCity = sameAsAadhaar ? aadCity : currentCityRaw;
+    const currentPincode = sameAsAadhaar ? aadPincode : currentPincodeRaw;
     if (!sameAsAadhaar && currentAddress.length < 10) {
       return res.status(400).json({ error: 'Please add your current address.' });
     }
     if (sameAsAadhaar && !currentAddress) {
       return res.status(400).json({ error: 'Aadhaar address is unavailable. Please choose No and enter current address.' });
     }
+    if (!sameAsAadhaar && currentState.length < 2) {
+      return res.status(400).json({ error: 'Please enter your current state.' });
+    }
+    if (sameAsAadhaar && !currentState) {
+      return res.status(400).json({ error: 'Aadhaar state is unavailable. Please choose No and enter current state.' });
+    }
+    if (!sameAsAadhaar && currentCity.length < 2) {
+      return res.status(400).json({ error: 'Please enter your current city.' });
+    }
+    if (sameAsAadhaar && !currentCity) {
+      return res.status(400).json({ error: 'Aadhaar city is unavailable. Please choose No and enter current city.' });
+    }
+    if (!PINCODE_REGEX.test(currentPincode)) {
+      return res.status(400).json({ error: 'Current pincode must be exactly 6 digits.' });
+    }
 
     /** Personal step: sync pd_city / pd_age from Aadhaar snapshot (not sent by client). */
     const update = {
       email: String(body.email ?? '').trim() || null,
+      pd_father_name: fatherName,
+      pd_mother_name: motherName,
+      pd_spouse_name: isMarried ? spouseNameRaw : null,
       pd_alternate_number: alternNorm,
       pd_emergency_contact_name: emergencyName,
       pd_emergency_contact_relation: emergencyRelation,
       pd_current_address_same_as_aadhaar: sameAsAadhaar,
       pd_current_address: currentAddress || null,
-      pd_marital_status: String(body.pd_marital_status ?? '').trim() || null,
+      pd_current_state: currentState || null,
+      pd_current_city: currentCity || null,
+      pd_current_pincode: currentPincode || null,
+      pd_marital_status: maritalStatus || null,
       pd_driving_license: dl || null,
       pd_driving_license_url: dl === 'Yes' ? licenseUrl : null,
       pd_city: pdCity,

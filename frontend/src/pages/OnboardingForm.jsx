@@ -16,6 +16,7 @@ const BP_MAX_BYTES = 12 * 1024 * 1024;
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const ACCOUNT_NUMBER_REGEX = /^[0-9]{6,18}$/;
+const PINCODE_REGEX = /^[0-9]{6}$/;
 
 const HIGHEST_QUALIFICATION_OPTIONS = [
   '10th Pass',
@@ -61,12 +62,6 @@ function formatAadGender(code) {
   return code || '—';
 }
 
-function fatherNameFromCareOf(careOf) {
-  return String(careOf ?? '')
-    .replace(/^C\/O:\s*/i, '')
-    .trim();
-}
-
 function ageFromIsoDob(iso) {
   if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
   const d = new Date(`${iso}T12:00:00`);
@@ -93,9 +88,21 @@ function buildPersonalDraft(f) {
     pd_emergency_contact_relation: f.pd_emergency_contact_relation ?? '',
     pd_current_address_same_as_aadhaar: sameAsAadhaar,
     pd_current_address: f.pd_current_address ?? '',
+    pd_current_state: f.pd_current_state ?? '',
+    pd_current_city: f.pd_current_city ?? '',
+    pd_current_pincode: f.pd_current_pincode ? String(f.pd_current_pincode).replace(/\D/g, '').slice(0, 6) : '',
+    pd_father_name: f.pd_father_name ?? '',
+    pd_mother_name: f.pd_mother_name ?? '',
+    pd_spouse_name: f.pd_spouse_name ?? '',
     pd_marital_status: f.pd_marital_status ?? '',
     pd_driving_license: f.pd_driving_license ?? '',
   };
+}
+
+function spouseLabelForGender(code) {
+  const c = String(code ?? '').trim().toUpperCase();
+  if (c === 'F') return "Husband's Name";
+  return "Spouse's Name";
 }
 
 function cityFromJobForm(f) {
@@ -170,11 +177,17 @@ const STEP_OPTIONAL_FIELDS = {
 const STEP_ALL_FIELDS = {
   personal: [
     'email',
+    'pd_father_name',
+    'pd_mother_name',
+    'pd_spouse_name',
     'pd_emergency_contact_name',
     'pd_emergency_contact_relation',
     'pd_alternate_number',
     'pd_current_address_same_as_aadhaar',
     'pd_current_address',
+    'pd_current_state',
+    'pd_current_city',
+    'pd_current_pincode',
     'pd_marital_status',
     'pd_driving_license',
     'pd_driving_license_url'
@@ -252,7 +265,7 @@ function FormStepper({ currentStep }) {
     { n: 1, label: 'Personal' },
     { n: 2, label: 'Qualification' },
     { n: 3, label: 'KYC' },
-    { n: 4, label: 'Bank & Photo' },
+    { n: 4, label: 'Final Compliance Details' },
   ];
   return (
     <nav className="mb-8" aria-label="Form progress">
@@ -514,6 +527,71 @@ function isAllowedKycPassbookFile(file) {
   return m.startsWith('image/') || m === 'application/pdf';
 }
 
+function isAllowedOcrImageFile(file) {
+  const m = String(file?.type || '').toLowerCase();
+  return m === 'image/jpeg' || m === 'image/jpg' || m === 'image/png' || m === 'image/webp';
+}
+
+function kycKindLabel(kind) {
+  if (kind === 'aadhaar_front') return 'Aadhaar front';
+  if (kind === 'aadhaar_back') return 'Aadhaar back';
+  return 'PAN';
+}
+
+function kycValidationHint(kind, validation) {
+  const explicitWarnings = Array.isArray(validation?.warnings)
+    ? validation.warnings.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : [];
+  if (!validation?.checked) {
+    return {
+      tone: 'warn',
+      text:
+        explicitWarnings[0] ||
+        'Could not auto-check this document right now. You can continue, but upload a clear image.',
+    };
+  }
+
+  const result = validation?.result ?? {};
+  const docLabel = kycKindLabel(kind);
+  if (result?.is_expected_kind === false) {
+    return {
+      tone: 'warn',
+      text: `This does not look like a ${docLabel} image. Please upload the correct image.`,
+    };
+  }
+
+  if (kind === 'aadhaar_front' && result?.matches?.aadhaar_number_match === false) {
+    return {
+      tone: 'warn',
+      text: 'This does not seem to match the Aadhaar number added by you.',
+    };
+  }
+  if (kind === 'pan_card' && result?.matches?.pan_number_match === false) {
+    return {
+      tone: 'warn',
+      text: 'This does not seem to match the PAN number added by you.',
+    };
+  }
+
+  if (kind === 'aadhaar_front' && result?.matches?.aadhaar_number_match === true) {
+    return { tone: 'success', text: 'Aadhaar front verified.' };
+  }
+  if (kind === 'pan_card' && result?.matches?.pan_number_match === true) {
+    return { tone: 'success', text: 'PAN card verified.' };
+  }
+  if (kind === 'aadhaar_back') {
+    return { tone: 'success', text: 'Aadhaar back verified.' };
+  }
+
+  const modelWarnings = Array.isArray(result?.warnings)
+    ? result.warnings.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : [];
+  if (modelWarnings.length > 0) {
+    return { tone: 'warn', text: modelWarnings[0] };
+  }
+  return { tone: 'success', text: `${docLabel} image looks correct.` };
+}
+
 function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSuccess, correction }) {
   const aadhaarVerified = Boolean(
     String(jobForm?.aadhaar_number ?? '').trim() || String(jobForm?.aad_name ?? '').trim()
@@ -547,6 +625,9 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   const [backErr, setBackErr] = useState('');
   const [panCardErr, setPanCardErr] = useState('');
   const [passErr, setPassErr] = useState('');
+  const [frontHint, setFrontHint] = useState(null);
+  const [backHint, setBackHint] = useState(null);
+  const [panCardHint, setPanCardHint] = useState(null);
 
   const [panVerified, setPanVerified] = useState(false);
   const [panVerifying, setPanVerifying] = useState(false);
@@ -574,6 +655,9 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     setBackErr('');
     setPanCardErr('');
     setPassErr('');
+    setFrontHint(null);
+    setBackHint(null);
+    setPanCardHint(null);
     const panLoaded = visible?.has('kyc_pan_number')
       ? ''
       : String(jobForm.kyc_pan_number ?? '').replace(/\s/g, '').toUpperCase();
@@ -599,12 +683,24 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     return url ?? '';
   };
 
+  const validateKyc = async (kind, file) => {
+    try {
+      const validation = await api.validateKycDocument({ mobile, employeeId, file, kind });
+      return kycValidationHint(kind, validation);
+    } catch {
+      return {
+        tone: 'warn',
+        text: 'Could not auto-check this document right now. You can continue, but upload a clear image.',
+      };
+    }
+  };
+
   const handleAadhaarFront = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setFrontErr('Images only (e.g. JPG, PNG).');
+    if (!isAllowedOcrImageFile(file)) {
+      setFrontErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
     if (file.size > KYC_MAX_BYTES) {
@@ -612,8 +708,10 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       return;
     }
     setFrontErr('');
+    setFrontHint(null);
     setFrontUp(true);
     try {
+      setFrontHint(await validateKyc('aadhaar_front', file));
       setFrontUrl(await uploadKyc('aadhaar_front', file));
     } catch (err) {
       setFrontErr(err.message || 'Upload failed.');
@@ -626,8 +724,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setBackErr('Images only (e.g. JPG, PNG).');
+    if (!isAllowedOcrImageFile(file)) {
+      setBackErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
     if (file.size > KYC_MAX_BYTES) {
@@ -635,8 +733,10 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       return;
     }
     setBackErr('');
+    setBackHint(null);
     setBackUp(true);
     try {
+      setBackHint(await validateKyc('aadhaar_back', file));
       setBackUrl(await uploadKyc('aadhaar_back', file));
     } catch (err) {
       setBackErr(err.message || 'Upload failed.');
@@ -649,8 +749,12 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setPanCardErr('Images only (e.g. JPG, PNG).');
+    if (!panVerified || !PAN_NUMBER_REGEX.test(panNumber.trim())) {
+      setPanCardErr('Please verify PAN number first, then upload PAN card image.');
+      return;
+    }
+    if (!isAllowedOcrImageFile(file)) {
+      setPanCardErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
     if (file.size > KYC_MAX_BYTES) {
@@ -658,8 +762,10 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       return;
     }
     setPanCardErr('');
+    setPanCardHint(null);
     setPanCardUp(true);
     try {
+      setPanCardHint(await validateKyc('pan_card', file));
       setPanCardUrl(await uploadKyc('pan_card', file));
     } catch (err) {
       setPanCardErr(err.message || 'Upload failed.');
@@ -849,14 +955,19 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             <input
               id="kyc-aad-front"
               type="file"
-              accept="image/*"
+              accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
               disabled={frontUp}
               onChange={handleAadhaarFront}
               className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
             />
-            <p className="mt-1 text-xs text-slate-500">Images only · max 12MB</p>
+            <p className="mt-1 text-xs text-slate-500">Only JPG, JPEG, PNG, WEBP allowed · max 12MB</p>
             {frontUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
             {frontErr && <p className="mt-2 text-sm text-rose-600">{frontErr}</p>}
+            {frontHint && (
+              <p className={`mt-2 text-sm ${frontHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {frontHint.text}
+              </p>
+            )}
             {frontUrl && !frontUp && <UploadedFileBanner href={frontUrl} />}
           </div>}
           {shouldShow('kyc_aadhar_back_url') && <div>
@@ -866,14 +977,19 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             <input
               id="kyc-aad-back"
               type="file"
-              accept="image/*"
+              accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
               disabled={backUp}
               onChange={handleAadhaarBack}
               className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
             />
-            <p className="mt-1 text-xs text-slate-500">Images only · max 12MB</p>
+            <p className="mt-1 text-xs text-slate-500">Only JPG, JPEG, PNG, WEBP allowed · max 12MB</p>
             {backUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
             {backErr && <p className="mt-2 text-sm text-rose-600">{backErr}</p>}
+            {backHint && (
+              <p className={`mt-2 text-sm ${backHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {backHint.text}
+              </p>
+            )}
             {backUrl && !backUp && <UploadedFileBanner href={backUrl} />}
           </div>}
         </div>
@@ -923,14 +1039,21 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           <input
             id="kyc-pan-card"
             type="file"
-            accept="image/*"
-            disabled={panCardUp}
+            accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
+            disabled={panCardUp || !panVerified}
             onChange={handlePanCard}
             className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
           />
-          <p className="mt-1 text-xs text-slate-500">Images only · max 12MB</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Only JPG, JPEG, PNG, WEBP allowed · max 12MB · verify PAN number first
+          </p>
           {panCardUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
           {panCardErr && <p className="mt-2 text-sm text-rose-600">{panCardErr}</p>}
+          {panCardHint && (
+            <p className={`mt-2 text-sm ${panCardHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {panCardHint.text}
+            </p>
+          )}
           {panCardUrl && !panCardUp && <UploadedFileBanner href={panCardUrl} />}
         </div>}
       </section>
@@ -1401,7 +1524,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
           {saving ? 'Submitting…' : 'Submit'}
         </button>
       </div>
-      <p className="text-center text-xs text-slate-500">Step 4 of 4 · Bank &amp; Photo</p>
+      <p className="text-center text-xs text-slate-500">Step 4 of 4 · Final Compliance Details</p>
     </div>
   );
 }
@@ -1420,6 +1543,9 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       const visible = correction.visibleFields;
       setDraft({
         email: visible.has('email') ? '' : base.email,
+        pd_father_name: visible.has('pd_father_name') ? '' : base.pd_father_name,
+        pd_mother_name: visible.has('pd_mother_name') ? '' : base.pd_mother_name,
+        pd_spouse_name: visible.has('pd_spouse_name') ? '' : base.pd_spouse_name,
         pd_emergency_contact_name: visible.has('pd_emergency_contact_name') ? '' : base.pd_emergency_contact_name,
         pd_emergency_contact_relation: visible.has('pd_emergency_contact_relation') ? '' : base.pd_emergency_contact_relation,
         pd_alternate_number: visible.has('pd_alternate_number') ? '' : base.pd_alternate_number,
@@ -1427,6 +1553,9 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           ? ''
           : base.pd_current_address_same_as_aadhaar,
         pd_current_address: visible.has('pd_current_address') ? '' : base.pd_current_address,
+        pd_current_state: visible.has('pd_current_state') ? '' : base.pd_current_state,
+        pd_current_city: visible.has('pd_current_city') ? '' : base.pd_current_city,
+        pd_current_pincode: visible.has('pd_current_pincode') ? '' : base.pd_current_pincode,
         pd_marital_status: visible.has('pd_marital_status') ? '' : base.pd_marital_status,
         pd_driving_license: visible.has('pd_driving_license') ? '' : base.pd_driving_license
       });
@@ -1447,11 +1576,40 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   const sameAsAadhaarChoice = String(draft.pd_current_address_same_as_aadhaar ?? '').toLowerCase();
   const sameAsAadhaarSelected = sameAsAadhaarChoice === 'yes' || sameAsAadhaarChoice === 'no';
   const currentAddressValue = String(draft.pd_current_address ?? '').trim();
+  const currentStateValue = String(draft.pd_current_state ?? '').trim();
+  const currentCityValue = String(draft.pd_current_city ?? '').trim();
+  const currentPincodeValue = String(draft.pd_current_pincode ?? '').replace(/\D/g, '');
+  const fatherName = String(draft.pd_father_name ?? '').trim();
+  const motherName = String(draft.pd_mother_name ?? '').trim();
+  const spouseName = String(draft.pd_spouse_name ?? '').trim();
+  const isMarried = String(draft.pd_marital_status ?? '').trim().toLowerCase() === 'married';
+  const spouseLabel = spouseLabelForGender(jobForm.aad_gender);
+  const aadCurrentState = String(jobForm?.aad_state ?? '').trim();
+  const aadCurrentCity = cityFromJobForm(jobForm);
+  const aadCurrentPincode = String(jobForm?.aad_pincode ?? '').replace(/\D/g, '');
   const currentAddressOk =
     sameAsAadhaarChoice === 'yes'
       ? Boolean(String(jobForm?.aad_address ?? '').trim())
       : sameAsAadhaarChoice === 'no'
         ? currentAddressValue.length > 0
+        : false;
+  const currentStateOk =
+    sameAsAadhaarChoice === 'yes'
+      ? Boolean(aadCurrentState)
+      : sameAsAadhaarChoice === 'no'
+        ? currentStateValue.length > 0
+        : false;
+  const currentCityOk =
+    sameAsAadhaarChoice === 'yes'
+      ? Boolean(aadCurrentCity && aadCurrentCity !== '—')
+      : sameAsAadhaarChoice === 'no'
+        ? currentCityValue.length > 0
+        : false;
+  const currentPincodeOk =
+    sameAsAadhaarChoice === 'yes'
+      ? PINCODE_REGEX.test(aadCurrentPincode)
+      : sameAsAadhaarChoice === 'no'
+        ? PINCODE_REGEX.test(currentPincodeValue)
         : false;
   const shouldShow = (field) => !correction?.active || correction.visibleFields.has(field);
   const isRequired = (field, fallbackRequired = false) =>
@@ -1459,11 +1617,17 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
 
   const requiredOk =
     (!isRequired('email', true) || String(draft.email).trim()) &&
+    (!isRequired('pd_father_name', true) || fatherName) &&
+    (!isRequired('pd_mother_name', true) || motherName) &&
+    (!isRequired('pd_spouse_name', true) || !isMarried || spouseName) &&
     (!isRequired('pd_emergency_contact_name', true) || String(draft.pd_emergency_contact_name).trim()) &&
     (!isRequired('pd_emergency_contact_relation', true) || String(draft.pd_emergency_contact_relation).trim()) &&
     (!isRequired('pd_alternate_number', true) || TEN_DIGIT_REGEX.test(String(draft.pd_alternate_number))) &&
     (!isRequired('pd_current_address_same_as_aadhaar', true) || sameAsAadhaarSelected) &&
     (!isRequired('pd_current_address', true) || currentAddressOk) &&
+    (!isRequired('pd_current_state', true) || currentStateOk) &&
+    (!isRequired('pd_current_city', true) || currentCityOk) &&
+    (!isRequired('pd_current_pincode', true) || currentPincodeOk) &&
     (!isRequired('pd_marital_status', true) || String(draft.pd_marital_status).trim()) &&
     (!isRequired('pd_driving_license', true) || Boolean(dl)) &&
     (!isRequired('pd_driving_license_url', true) || licenseImageOk);
@@ -1503,6 +1667,21 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         setSaving(false);
         return;
       }
+      if (fatherName.length < 2) {
+        setError("Father's name is required.");
+        setSaving(false);
+        return;
+      }
+      if (motherName.length < 2) {
+        setError("Mother's name is required.");
+        setSaving(false);
+        return;
+      }
+      if (isMarried && spouseName.length < 2) {
+        setError(`${spouseLabel} is required for married candidates.`);
+        setSaving(false);
+        return;
+      }
       if (!sameAsAadhaarSelected) {
         setError('Please choose whether current address is same as Aadhaar address.');
         setSaving(false);
@@ -1517,16 +1696,49 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         sameAsAadhaarChoice === 'yes'
           ? String(jobForm?.aad_address ?? '').trim()
           : currentAddressValue;
+      const currentStatePayload =
+        sameAsAadhaarChoice === 'yes'
+          ? aadCurrentState
+          : currentStateValue;
+      const currentCityPayload =
+        sameAsAadhaarChoice === 'yes'
+          ? aadCurrentCity === '—' ? '' : aadCurrentCity
+          : currentCityValue;
+      const currentPincodePayload =
+        sameAsAadhaarChoice === 'yes'
+          ? aadCurrentPincode
+          : currentPincodeValue;
+      if (!currentStatePayload) {
+        setError('Please add your current state.');
+        setSaving(false);
+        return;
+      }
+      if (!currentCityPayload) {
+        setError('Please add your current city.');
+        setSaving(false);
+        return;
+      }
+      if (!PINCODE_REGEX.test(currentPincodePayload)) {
+        setError('Current pincode must be exactly 6 digits.');
+        setSaving(false);
+        return;
+      }
       const { form } = await api.patchJobAppForm({
         mobile,
         employee_id: employeeId || null,
         patch_step: 'personal',
         email: String(draft.email).trim(),
+        pd_father_name: fatherName,
+        pd_mother_name: motherName,
+        pd_spouse_name: isMarried ? spouseName : null,
         pd_emergency_contact_name: String(draft.pd_emergency_contact_name).trim(),
         pd_emergency_contact_relation: String(draft.pd_emergency_contact_relation).trim(),
         pd_alternate_number: alt,
         pd_current_address_same_as_aadhaar: sameAsAadhaarChoice === 'yes',
         pd_current_address: currentAddressPayload,
+        pd_current_state: currentStatePayload,
+        pd_current_city: currentCityPayload,
+        pd_current_pincode: currentPincodePayload,
         pd_marital_status: String(draft.pd_marital_status).trim(),
         pd_driving_license: dl,
         pd_driving_license_url: needsLicenseImage ? String(licenseImageUrl).trim() : null,
@@ -1559,6 +1771,237 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                 value={draft.email}
                 onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
               />
+            </div>
+          )}
+          {(shouldShow('pd_father_name') || shouldShow('pd_mother_name') || (isMarried && shouldShow('pd_spouse_name'))) && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Family Details</h4>
+              <div className="space-y-3">
+                {shouldShow('pd_father_name') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                      Father&apos;s Name {isRequired('pd_father_name', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      className={fieldClass(false)}
+                      placeholder="Enter father's name"
+                      value={draft.pd_father_name}
+                      onChange={(e) => setDraft((d) => ({ ...d, pd_father_name: e.target.value }))}
+                    />
+                  </div>
+                )}
+                {shouldShow('pd_mother_name') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                      Mother&apos;s Name {isRequired('pd_mother_name', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      className={fieldClass(false)}
+                      placeholder="Enter mother's name"
+                      value={draft.pd_mother_name}
+                      onChange={(e) => setDraft((d) => ({ ...d, pd_mother_name: e.target.value }))}
+                    />
+                  </div>
+                )}
+                {isMarried && shouldShow('pd_spouse_name') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                      {spouseLabel} {isRequired('pd_spouse_name', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      className={fieldClass(false)}
+                      placeholder={`Enter ${spouseLabel.toLowerCase()}`}
+                      value={draft.pd_spouse_name}
+                      onChange={(e) => setDraft((d) => ({ ...d, pd_spouse_name: e.target.value }))}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {(shouldShow('pd_current_address_same_as_aadhaar') ||
+            shouldShow('pd_current_address') ||
+            shouldShow('pd_current_state') ||
+            shouldShow('pd_current_city') ||
+            shouldShow('pd_current_pincode')) && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Current Address</h4>
+              {shouldShow('pd_current_address_same_as_aadhaar') && (
+                <div>
+                  <p className="mb-2 text-sm font-medium text-slate-800">
+                    Same as Aadhaar Address? {isRequired('pd_current_address_same_as_aadhaar', true) && <span className="text-rose-500">*</span>}
+                  </p>
+                  <div className="flex items-center gap-5">
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                      <input
+                        type="radio"
+                        name="corr-current-address-same"
+                        checked={sameAsAadhaarChoice === 'yes'}
+                        onChange={() =>
+                          setDraft((d) => ({
+                            ...d,
+                            pd_current_address_same_as_aadhaar: 'yes',
+                            pd_current_address: String(jobForm?.aad_address ?? ''),
+                            pd_current_state: aadCurrentState,
+                            pd_current_city: aadCurrentCity === '—' ? '' : aadCurrentCity,
+                            pd_current_pincode: aadCurrentPincode,
+                          }))
+                        }
+                      />
+                      Yes
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                      <input
+                        type="radio"
+                        name="corr-current-address-same"
+                        checked={sameAsAadhaarChoice === 'no'}
+                        onChange={() =>
+                          setDraft((d) => ({
+                            ...d,
+                            pd_current_address_same_as_aadhaar: 'no',
+                            pd_current_address: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_address,
+                            pd_current_state: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_state,
+                            pd_current_city: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_city,
+                            pd_current_pincode: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_pincode,
+                          }))
+                        }
+                      />
+                      No
+                    </label>
+                  </div>
+                </div>
+              )}
+              {shouldShow('pd_current_address') && (
+                <div className="mt-3">
+                  {sameAsAadhaarChoice === 'no' && (
+                    <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
+                  )}
+                  <textarea
+                    rows={3}
+                    className={`${fieldClass(sameAsAadhaarChoice === 'yes')} resize-none`}
+                    value={sameAsAadhaarChoice === 'yes' ? String(jobForm?.aad_address ?? '') : draft.pd_current_address}
+                    onChange={(e) => setDraft((d) => ({ ...d, pd_current_address: e.target.value }))}
+                    readOnly={sameAsAadhaarChoice === 'yes'}
+                    placeholder="Enter your full current address"
+                  />
+                </div>
+              )}
+              {shouldShow('pd_current_state') && (
+                <div className="mt-3">
+                  <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                    Current State {isRequired('pd_current_state', true) && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    type="text"
+                    className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                    value={sameAsAadhaarChoice === 'yes' ? aadCurrentState : draft.pd_current_state}
+                    onChange={(e) => setDraft((d) => ({ ...d, pd_current_state: e.target.value }))}
+                    readOnly={sameAsAadhaarChoice === 'yes'}
+                    placeholder="Enter current state"
+                  />
+                </div>
+              )}
+              {shouldShow('pd_current_city') && (
+                <div className="mt-3">
+                  <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                    Current City {isRequired('pd_current_city', true) && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    type="text"
+                    className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                    value={sameAsAadhaarChoice === 'yes' ? (aadCurrentCity === '—' ? '' : aadCurrentCity) : draft.pd_current_city}
+                    onChange={(e) => setDraft((d) => ({ ...d, pd_current_city: e.target.value }))}
+                    readOnly={sameAsAadhaarChoice === 'yes'}
+                    placeholder="Enter current city"
+                  />
+                </div>
+              )}
+              {shouldShow('pd_current_pincode') && (
+                <div className="mt-3">
+                  <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                    Current Pincode {isRequired('pd_current_pincode', true) && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                    value={sameAsAadhaarChoice === 'yes' ? aadCurrentPincode : draft.pd_current_pincode}
+                    onChange={(e) => setDraft((d) => ({ ...d, pd_current_pincode: e.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                    readOnly={sameAsAadhaarChoice === 'yes'}
+                    placeholder="6-digit pincode"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {shouldShow('pd_marital_status') && (
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                Marital Status {isRequired('pd_marital_status', true) && <span className="text-rose-500">*</span>}
+              </label>
+              <select
+                className={fieldClass(false)}
+                value={draft.pd_marital_status}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setDraft((d) => ({ ...d, pd_marital_status: next, pd_spouse_name: next === 'Married' ? d.pd_spouse_name : '' }));
+                }}
+              >
+                <option value="">Select Marital Status</option>
+                {MARITAL_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {shouldShow('pd_driving_license') && (
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                Do you have a Driving License? {isRequired('pd_driving_license', true) && <span className="text-rose-500">*</span>}
+              </label>
+              <select
+                className={fieldClass(false)}
+                value={draft.pd_driving_license}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDraft((d) => ({ ...d, pd_driving_license: v }));
+                  if (v !== 'Yes') {
+                    setLicenseImageUrl('');
+                    setLicenseError('');
+                  }
+                }}
+              >
+                <option value="">Select</option>
+                {DRIVING_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {shouldShow('pd_driving_license_url') && needsLicenseImage && (
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="driving-license-file">
+                Upload Driving License Image {isRequired('pd_driving_license_url', true) && <span className="text-rose-500">*</span>}
+              </label>
+              <input
+                id="driving-license-file"
+                type="file"
+                accept="image/*"
+                disabled={licenseUploading}
+                onChange={handleLicenseFile}
+                className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+              {licenseUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
+              {licenseError && <p className="mt-2 text-sm text-rose-600">{licenseError}</p>}
+              {licenseImageUrl && !licenseUploading && <UploadedFileBanner href={licenseImageUrl} />}
             </div>
           )}
           {(shouldShow('pd_emergency_contact_name') ||
@@ -1614,128 +2057,6 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               </div>
             </div>
           )}
-          {(shouldShow('pd_current_address_same_as_aadhaar') || shouldShow('pd_current_address')) && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-              <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Current Address</h4>
-              {shouldShow('pd_current_address_same_as_aadhaar') && (
-                <div>
-                  <p className="mb-2 text-sm font-medium text-slate-800">
-                    Same as Aadhaar Address? {isRequired('pd_current_address_same_as_aadhaar', true) && <span className="text-rose-500">*</span>}
-                  </p>
-                  <div className="flex items-center gap-5">
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-800">
-                      <input
-                        type="radio"
-                        name="corr-current-address-same"
-                        checked={sameAsAadhaarChoice === 'yes'}
-                        onChange={() =>
-                          setDraft((d) => ({
-                            ...d,
-                            pd_current_address_same_as_aadhaar: 'yes',
-                            pd_current_address: String(jobForm?.aad_address ?? '')
-                          }))
-                        }
-                      />
-                      Yes
-                    </label>
-                    <label className="inline-flex items-center gap-2 text-sm text-slate-800">
-                      <input
-                        type="radio"
-                        name="corr-current-address-same"
-                        checked={sameAsAadhaarChoice === 'no'}
-                        onChange={() =>
-                          setDraft((d) => ({
-                            ...d,
-                            pd_current_address_same_as_aadhaar: 'no',
-                            pd_current_address: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_address
-                          }))
-                        }
-                      />
-                      No
-                    </label>
-                  </div>
-                </div>
-              )}
-              {shouldShow('pd_current_address') && (
-                <div className="mt-3">
-                  {sameAsAadhaarChoice === 'no' && (
-                    <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
-                  )}
-                  <textarea
-                    rows={3}
-                    className={`${fieldClass(sameAsAadhaarChoice === 'yes')} resize-none`}
-                    value={sameAsAadhaarChoice === 'yes' ? String(jobForm?.aad_address ?? '') : draft.pd_current_address}
-                    onChange={(e) => setDraft((d) => ({ ...d, pd_current_address: e.target.value }))}
-                    readOnly={sameAsAadhaarChoice === 'yes'}
-                    placeholder="Enter your full current address"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          {shouldShow('pd_marital_status') && (
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
-                Marital Status {isRequired('pd_marital_status', true) && <span className="text-rose-500">*</span>}
-              </label>
-              <select
-                className={fieldClass(false)}
-                value={draft.pd_marital_status}
-                onChange={(e) => setDraft((d) => ({ ...d, pd_marital_status: e.target.value }))}
-              >
-                <option value="">Select Marital Status</option>
-                {MARITAL_OPTIONS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          {shouldShow('pd_driving_license') && (
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
-                Do you have a Driving License? {isRequired('pd_driving_license', true) && <span className="text-rose-500">*</span>}
-              </label>
-              <select
-                className={fieldClass(false)}
-                value={draft.pd_driving_license}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setDraft((d) => ({ ...d, pd_driving_license: v }));
-                  if (v !== 'Yes') {
-                    setLicenseImageUrl('');
-                    setLicenseError('');
-                  }
-                }}
-              >
-                <option value="">Select</option>
-                {DRIVING_OPTIONS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          {shouldShow('pd_driving_license_url') && needsLicenseImage && (
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="driving-license-file">
-                Upload Driving License Image {isRequired('pd_driving_license_url', true) && <span className="text-rose-500">*</span>}
-              </label>
-              <input
-                id="driving-license-file"
-                type="file"
-                accept="image/*"
-                disabled={licenseUploading}
-                onChange={handleLicenseFile}
-                className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              {licenseUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-              {licenseError && <p className="mt-2 text-sm text-rose-600">{licenseError}</p>}
-              {licenseImageUrl && !licenseUploading && <UploadedFileBanner href={licenseImageUrl} />}
-            </div>
-          )}
         </div>
         {error && <p className="text-sm text-rose-600">{error}</p>}
         <button
@@ -1779,18 +2100,6 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           </div>
           <div className="cursor-not-allowed">
             <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              Father&apos;s Name (As per Aadhaar) <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              readOnly
-              tabIndex={-1}
-              className={fieldClass(true)}
-              value={fatherNameFromCareOf(jobForm.aad_care_of)}
-            />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
               Mobile Number <span className="text-rose-500">*</span>
             </label>
             <div className="select-none rounded-lg border border-sky-200 bg-sky-50 px-4 py-3">
@@ -1798,6 +2107,297 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               <p className="mt-1 text-xs text-sky-900">This mobile number is locked and cannot be changed.</p>
             </div>
           </div>
+        </div>
+      </section>
+
+      <hr className="border-slate-200" />
+
+      {/* Section B — Aadhaar-locked identity + editable application fields */}
+      <section>
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+          <p>
+            State, city, address, pincode, date of birth, age, and gender come from your Aadhaar record and cannot be
+            edited here.
+          </p>
+        </div>
+        <h3 className="mb-4 text-lg font-semibold text-slate-900">Personal Details</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-800">
+              Email Address <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="email"
+              autoComplete="email"
+              className={fieldClass(false)}
+              placeholder="example@example.com"
+              value={draft.email}
+              onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-800">
+              Father&apos;s Name <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="text"
+              className={fieldClass(false)}
+              placeholder="Enter father's name"
+              value={draft.pd_father_name}
+              onChange={(e) => setDraft((d) => ({ ...d, pd_father_name: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-800">
+              Mother&apos;s Name <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="text"
+              className={fieldClass(false)}
+              placeholder="Enter mother's name"
+              value={draft.pd_mother_name}
+              onChange={(e) => setDraft((d) => ({ ...d, pd_mother_name: e.target.value }))}
+            />
+          </div>
+          <div className="cursor-not-allowed">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
+              Complete Address (As per Aadhaar) <span className="text-rose-500">*</span>
+            </label>
+            <textarea
+              readOnly
+              tabIndex={-1}
+              rows={3}
+              className={`${fieldClass(true)} resize-none`}
+              value={jobForm.aad_address ?? ''}
+            />
+          </div>
+          <div className="cursor-not-allowed">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
+              State <span className="text-rose-500">*</span>
+            </label>
+            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={jobForm.aad_state ?? ''} />
+          </div>
+          <div className="cursor-not-allowed">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
+              City <span className="text-rose-500">*</span>
+            </label>
+            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={cityFromJobForm(jobForm)} />
+          </div>
+          <div className="cursor-not-allowed">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
+              Pincode <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="text"
+              readOnly
+              tabIndex={-1}
+              className={`${fieldClass(true)} tabular-nums`}
+              value={jobForm.aad_pincode ?? ''}
+            />
+          </div>
+          <div>
+            <h4 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-700">Current Address</h4>
+            <p className="mb-2 text-sm font-medium text-slate-800">
+              Same as Aadhaar Address? <span className="text-rose-500">*</span>
+            </p>
+            <div className="mb-3 flex items-center gap-5">
+              <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                <input
+                  type="radio"
+                  name="current-address-same"
+                  checked={sameAsAadhaarChoice === 'yes'}
+                  onChange={() =>
+                    setDraft((d) => ({
+                      ...d,
+                      pd_current_address_same_as_aadhaar: 'yes',
+                      pd_current_address: String(jobForm?.aad_address ?? ''),
+                      pd_current_state: aadCurrentState,
+                      pd_current_city: aadCurrentCity === '—' ? '' : aadCurrentCity,
+                      pd_current_pincode: aadCurrentPincode,
+                    }))
+                  }
+                />
+                Yes
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+                <input
+                  type="radio"
+                  name="current-address-same"
+                  checked={sameAsAadhaarChoice === 'no'}
+                  onChange={() =>
+                    setDraft((d) => ({
+                      ...d,
+                      pd_current_address_same_as_aadhaar: 'no',
+                      pd_current_address: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_address,
+                      pd_current_state: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_state,
+                      pd_current_city: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_city,
+                      pd_current_pincode: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_pincode,
+                    }))
+                  }
+                />
+                No
+              </label>
+            </div>
+            {sameAsAadhaarChoice === 'no' && (
+              <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
+            )}
+            <textarea
+              rows={3}
+              className={`${fieldClass(sameAsAadhaarChoice === 'yes')} resize-none`}
+              value={sameAsAadhaarChoice === 'yes' ? String(jobForm?.aad_address ?? '') : draft.pd_current_address}
+              onChange={(e) => setDraft((d) => ({ ...d, pd_current_address: e.target.value }))}
+              readOnly={sameAsAadhaarChoice === 'yes'}
+              placeholder="Enter your full current address"
+            />
+            <div className="mt-3">
+              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                Current State <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                value={sameAsAadhaarChoice === 'yes' ? aadCurrentState : draft.pd_current_state}
+                onChange={(e) => setDraft((d) => ({ ...d, pd_current_state: e.target.value }))}
+                readOnly={sameAsAadhaarChoice === 'yes'}
+                placeholder="Enter current state"
+              />
+            </div>
+            <div className="mt-3">
+              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                Current City <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                value={sameAsAadhaarChoice === 'yes' ? (aadCurrentCity === '—' ? '' : aadCurrentCity) : draft.pd_current_city}
+                onChange={(e) => setDraft((d) => ({ ...d, pd_current_city: e.target.value }))}
+                readOnly={sameAsAadhaarChoice === 'yes'}
+                placeholder="Enter current city"
+              />
+            </div>
+            <div className="mt-3">
+              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                Current Pincode <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                value={sameAsAadhaarChoice === 'yes' ? aadCurrentPincode : draft.pd_current_pincode}
+                onChange={(e) => setDraft((d) => ({ ...d, pd_current_pincode: e.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                readOnly={sameAsAadhaarChoice === 'yes'}
+                placeholder="6-digit pincode"
+              />
+            </div>
+          </div>
+          <div className="cursor-not-allowed">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
+              Date of Birth <span className="text-rose-500">*</span>
+            </label>
+            <input
+              type="text"
+              readOnly
+              tabIndex={-1}
+              className={`${fieldClass(true)} tabular-nums`}
+              value={formatAadDob(jobForm.aad_dob)}
+            />
+          </div>
+          <div className="cursor-not-allowed">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">Age</label>
+            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={ageDisplay} placeholder="—" />
+          </div>
+          <div className="cursor-not-allowed">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">Gender</label>
+            <input
+              type="text"
+              readOnly
+              tabIndex={-1}
+              className={fieldClass(true)}
+              value={formatAadGender(jobForm.aad_gender)}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-800">
+              Marital Status <span className="text-rose-500">*</span>
+            </label>
+            <select
+              className={fieldClass(false)}
+              value={draft.pd_marital_status}
+              onChange={(e) => {
+                const next = e.target.value;
+                setDraft((d) => ({ ...d, pd_marital_status: next, pd_spouse_name: next === 'Married' ? d.pd_spouse_name : '' }));
+              }}
+            >
+              <option value="">Select Marital Status</option>
+              {MARITAL_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          {isMarried && (
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                {spouseLabel} <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                className={fieldClass(false)}
+                placeholder={`Enter ${spouseLabel.toLowerCase()}`}
+                value={draft.pd_spouse_name}
+                onChange={(e) => setDraft((d) => ({ ...d, pd_spouse_name: e.target.value }))}
+              />
+            </div>
+          )}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-800">
+              Do you have a Driving License? <span className="text-rose-500">*</span>
+            </label>
+            <select
+              className={fieldClass(false)}
+              value={draft.pd_driving_license}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDraft((d) => ({ ...d, pd_driving_license: v }));
+                if (v !== 'Yes') {
+                  setLicenseImageUrl('');
+                  setLicenseError('');
+                }
+              }}
+            >
+              <option value="">Select</option>
+              {DRIVING_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {needsLicenseImage && (
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="driving-license-file">
+                Upload Driving License Image <span className="text-rose-500">*</span>
+              </label>
+              <input
+                id="driving-license-file"
+                type="file"
+                accept="image/*"
+                disabled={licenseUploading}
+                onChange={handleLicenseFile}
+                className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+              <p className="mt-1.5 text-xs text-slate-500">
+                Max file size: 12MB. Supported: image/* (JPEG, PNG, WebP, GIF, HEIC, etc.)
+              </p>
+              {licenseUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
+              {licenseError && <p className="mt-2 text-sm text-rose-600">{licenseError}</p>}
+              {licenseImageUrl && !licenseUploading && <UploadedFileBanner href={licenseImageUrl} />}
+            </div>
+          )}
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
             <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Emergency Contact</h4>
             <div className="space-y-4">
@@ -1847,209 +2447,6 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               </div>
             </div>
           </div>
-        </div>
-      </section>
-
-      <hr className="border-slate-200" />
-
-      {/* Section B — Aadhaar-locked identity + editable application fields */}
-      <section>
-        <div className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-          <p>
-            State, city, address, pincode, date of birth, age, and gender come from your Aadhaar record and cannot be
-            edited here.
-          </p>
-        </div>
-        <h3 className="mb-4 text-lg font-semibold text-slate-900">Personal Details</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
-              Email Address <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="email"
-              autoComplete="email"
-              className={fieldClass(false)}
-              placeholder="example@example.com"
-              value={draft.email}
-              onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
-            />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              State <span className="text-rose-500">*</span>
-            </label>
-            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={jobForm.aad_state ?? ''} />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              City <span className="text-rose-500">*</span>
-            </label>
-            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={cityFromJobForm(jobForm)} />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              Complete Address (As per Aadhaar) <span className="text-rose-500">*</span>
-            </label>
-            <textarea
-              readOnly
-              tabIndex={-1}
-              rows={3}
-              className={`${fieldClass(true)} resize-none`}
-              value={jobForm.aad_address ?? ''}
-            />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              Pincode <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              readOnly
-              tabIndex={-1}
-              className={`${fieldClass(true)} tabular-nums`}
-              value={jobForm.aad_pincode ?? ''}
-            />
-          </div>
-          <div>
-            <h4 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-700">Current Address</h4>
-            <p className="mb-2 text-sm font-medium text-slate-800">
-              Same as Aadhaar Address? <span className="text-rose-500">*</span>
-            </p>
-            <div className="mb-3 flex items-center gap-5">
-              <label className="inline-flex items-center gap-2 text-sm text-slate-800">
-                <input
-                  type="radio"
-                  name="current-address-same"
-                  checked={sameAsAadhaarChoice === 'yes'}
-                  onChange={() =>
-                    setDraft((d) => ({
-                      ...d,
-                      pd_current_address_same_as_aadhaar: 'yes',
-                      pd_current_address: String(jobForm?.aad_address ?? '')
-                    }))
-                  }
-                />
-                Yes
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm text-slate-800">
-                <input
-                  type="radio"
-                  name="current-address-same"
-                  checked={sameAsAadhaarChoice === 'no'}
-                  onChange={() =>
-                    setDraft((d) => ({
-                      ...d,
-                      pd_current_address_same_as_aadhaar: 'no',
-                      pd_current_address: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_address
-                    }))
-                  }
-                />
-                No
-              </label>
-            </div>
-            {sameAsAadhaarChoice === 'no' && (
-              <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
-            )}
-            <textarea
-              rows={3}
-              className={`${fieldClass(sameAsAadhaarChoice === 'yes')} resize-none`}
-              value={sameAsAadhaarChoice === 'yes' ? String(jobForm?.aad_address ?? '') : draft.pd_current_address}
-              onChange={(e) => setDraft((d) => ({ ...d, pd_current_address: e.target.value }))}
-              readOnly={sameAsAadhaarChoice === 'yes'}
-              placeholder="Enter your full current address"
-            />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              Date of Birth <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              readOnly
-              tabIndex={-1}
-              className={`${fieldClass(true)} tabular-nums`}
-              value={formatAadDob(jobForm.aad_dob)}
-            />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">Age</label>
-            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={ageDisplay} placeholder="—" />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">Gender</label>
-            <input
-              type="text"
-              readOnly
-              tabIndex={-1}
-              className={fieldClass(true)}
-              value={formatAadGender(jobForm.aad_gender)}
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
-              Marital Status <span className="text-rose-500">*</span>
-            </label>
-            <select
-              className={fieldClass(false)}
-              value={draft.pd_marital_status}
-              onChange={(e) => setDraft((d) => ({ ...d, pd_marital_status: e.target.value }))}
-            >
-              <option value="">Select Marital Status</option>
-              {MARITAL_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
-              Do you have a Driving License? <span className="text-rose-500">*</span>
-            </label>
-            <select
-              className={fieldClass(false)}
-              value={draft.pd_driving_license}
-              onChange={(e) => {
-                const v = e.target.value;
-                setDraft((d) => ({ ...d, pd_driving_license: v }));
-                if (v !== 'Yes') {
-                  setLicenseImageUrl('');
-                  setLicenseError('');
-                }
-              }}
-            >
-              <option value="">Select</option>
-              {DRIVING_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {needsLicenseImage && (
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="driving-license-file">
-                Upload Driving License Image <span className="text-rose-500">*</span>
-              </label>
-              <input
-                id="driving-license-file"
-                type="file"
-                accept="image/*"
-                disabled={licenseUploading}
-                onChange={handleLicenseFile}
-                className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              <p className="mt-1.5 text-xs text-slate-500">
-                Max file size: 12MB. Supported: image/* (JPEG, PNG, WebP, GIF, HEIC, etc.)
-              </p>
-              {licenseUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-              {licenseError && <p className="mt-2 text-sm text-rose-600">{licenseError}</p>}
-              {licenseImageUrl && !licenseUploading && <UploadedFileBanner href={licenseImageUrl} />}
-            </div>
-          )}
         </div>
 
         {error && <p className="text-sm text-rose-600">{error}</p>}
