@@ -135,6 +135,7 @@ const ORDERED_FIELDS = [
   'pd_age',
   // Qualification
   'qual_highest_qualification',
+  'qual_highest_qualification_doc_url',
   'qual_education_certificate_url',
   'qual_additional_certificates_url',
   // KYC
@@ -157,6 +158,7 @@ const DOCUMENT_TAB_DEFINITIONS = [
   { key: 'aad_profile_photo', label: 'Profile Photo' },
   { key: 'kyc_aadhar_front_url', label: 'Aadhaar Front' },
   { key: 'kyc_aadhar_back_url', label: 'Aadhaar Back' },
+  { key: 'qual_highest_qualification_doc_url', label: 'Highest Qualification' },
   { key: 'qual_education_certificate_url', label: 'Education' },
   { key: 'qual_additional_certificates_url', label: 'Additional Cert' },
   { key: 'kyc_bank_passbook_url', label: 'Bank Passbook' },
@@ -178,6 +180,7 @@ const PM_MARKABLE_FIELDS = new Set([
   'pd_driving_license',
   'pd_driving_license_url',
   'qual_highest_qualification',
+  'qual_highest_qualification_doc_url',
   'qual_education_certificate_url',
   'qual_additional_certificates_url',
   'kyc_aadhar_front_url',

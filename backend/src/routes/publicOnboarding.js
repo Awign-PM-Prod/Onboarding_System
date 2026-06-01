@@ -8,10 +8,23 @@ const DRIVING_LICENSE_BUCKET = 'driving-licenses';
 const QUALIFICATION_BUCKET = 'qualification-certificates';
 const KYC_DOCUMENTS_BUCKET = 'kyc-documents';
 const BANK_PHOTO_DOCUMENTS_BUCKET = 'bank-photo-documents';
+const ONBOARDING_DOCUMENT_FIELD_CONFIG = {
+  pd_driving_license_url: { bucket: DRIVING_LICENSE_BUCKET, mode: 'single' },
+  qual_highest_qualification_doc_url: { bucket: QUALIFICATION_BUCKET, mode: 'single' },
+  qual_education_certificate_url: { bucket: QUALIFICATION_BUCKET, mode: 'single' },
+  qual_additional_certificates_url: { bucket: QUALIFICATION_BUCKET, mode: 'array' },
+  kyc_aadhar_front_url: { bucket: KYC_DOCUMENTS_BUCKET, mode: 'single' },
+  kyc_aadhar_back_url: { bucket: KYC_DOCUMENTS_BUCKET, mode: 'single' },
+  kyc_pan_card_url: { bucket: KYC_DOCUMENTS_BUCKET, mode: 'single' },
+  kyc_bank_passbook_url: { bucket: KYC_DOCUMENTS_BUCKET, mode: 'single' },
+  bp_passport_photo_url: { bucket: BANK_PHOTO_DOCUMENTS_BUCKET, mode: 'single' },
+  bp_police_verification_url: { bucket: BANK_PHOTO_DOCUMENTS_BUCKET, mode: 'single' },
+};
 const MAX_DRIVING_LICENSE_BYTES = 12 * 1024 * 1024;
 const MAX_QUALIFICATION_BYTES = 12 * 1024 * 1024;
-const MAX_KYC_DOCUMENT_BYTES = 12 * 1024 * 1024;
-const MAX_KYC_VALIDATE_BYTES = 6 * 1024 * 1024;
+const MAX_KYC_IMAGE_DOCUMENT_BYTES = 5 * 1024 * 1024;
+const MAX_KYC_BANK_PASSBOOK_BYTES = 12 * 1024 * 1024;
+const MAX_KYC_VALIDATE_BYTES = 5 * 1024 * 1024;
 const MAX_BANK_PHOTO_DOCUMENT_BYTES = 12 * 1024 * 1024;
 
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -37,6 +50,7 @@ const CORRECTION_FIELD_SET = new Set([
   'pd_driving_license',
   'pd_driving_license_url',
   'qual_highest_qualification',
+  'qual_highest_qualification_doc_url',
   'qual_education_certificate_url',
   'qual_additional_certificates_url',
   'kyc_aadhar_front_url',
@@ -144,7 +158,7 @@ function extForKycBankFile(mime, originalname) {
 
 const kycImageOnlyUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_KYC_DOCUMENT_BYTES },
+  limits: { fileSize: MAX_KYC_IMAGE_DOCUMENT_BYTES },
   fileFilter: (_req, file, cb) => {
     if (!isAllowedOcrImageMime(file.mimetype)) {
       cb(new Error('Only JPG, JPEG, PNG, or WEBP images are allowed'));
@@ -156,7 +170,7 @@ const kycImageOnlyUpload = multer({
 
 const kycBankPassbookUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_KYC_DOCUMENT_BYTES },
+  limits: { fileSize: MAX_KYC_BANK_PASSBOOK_BYTES },
   fileFilter: (_req, file, cb) => {
     if (!isAllowedKycBankPassbookMime(file.mimetype)) {
       cb(new Error('Bank passbook must be an image or PDF'));
@@ -261,10 +275,14 @@ const KYC_DOC_VALIDATE_EDGE_FUNCTION =
   process.env.KYC_DOC_VALIDATE_EDGE_FUNCTION || 'kyc-document-validate';
 /** Fixed demo OTP for onboarding status login until SMS integration. */
 const DEMO_STATUS_OTP = '123123';
+/** Fixed demo OTP for Aadhaar resume flow until SMS integration. */
+const DEMO_AADHAAR_RESUME_OTP = '123123';
 const STATUS_SESSION_TTL_MS = 60 * 60 * 1000;
 
 /** @type {Map<string, { otp: string, expires: number }>} */
 const statusOtpBySession = new Map();
+/** @type {Map<string, { otp: string, expires: number }>} */
+const aadhaarResumeOtpBySession = new Map();
 /** @type {Map<string, { employeeId: string, mobile: string, expires: number }>} */
 const statusAuthByToken = new Map();
 
@@ -538,6 +556,52 @@ async function resolveAadhaarNameForEmployee(employeeId) {
   return String(data?.aad_name ?? '').trim();
 }
 
+async function fetchClientOnboardingFlags(clientId) {
+  const id = String(clientId ?? '').trim();
+  if (!id) {
+    return {
+      require_license_upload: true,
+      require_qualification_certificate_upload: true,
+    };
+  }
+  const { data, error } = await supabaseAdmin
+    .from('clients')
+    .select('require_license_upload, require_qualification_certificate_upload')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    require_license_upload: data?.require_license_upload !== false,
+    require_qualification_certificate_upload: data?.require_qualification_certificate_upload !== false,
+  };
+}
+
+async function formWithClientFlags(form) {
+  if (!form || typeof form !== 'object') return form;
+  const flags = await fetchClientOnboardingFlags(form.client_id);
+  return {
+    ...form,
+    require_license_upload: flags.require_license_upload,
+    require_qualification_certificate_upload: flags.require_qualification_certificate_upload,
+  };
+}
+
+function storagePathFromPublicUrl(fileUrl, bucket) {
+  const rawUrl = String(fileUrl ?? '').trim();
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl);
+    const marker = `/storage/v1/object/public/${bucket}/`;
+    const idx = parsed.pathname.indexOf(marker);
+    if (idx === -1) return null;
+    const pathPart = parsed.pathname.slice(idx + marker.length);
+    const normalized = decodeURIComponent(pathPart).replace(/^\/+/, '').trim();
+    return normalized || null;
+  } catch {
+    return null;
+  }
+}
+
 async function upsertJobAppFormFromEmployee(emp) {
   const now = new Date().toISOString();
   const snapshot = {
@@ -703,6 +767,7 @@ router.post('/aadhaar/send-otp', async (req, res, next) => {
         email: row.email ?? null,
         designation: row.designation ?? null,
         aadhaar_number: aadhaarDigits,
+        aadhaar_verified: false,
         aad_otp_session_id: sessionId,
         aad_otp_transaction_id: transactionId,
         aad_otp_requested_at: now,
@@ -752,7 +817,20 @@ router.post('/aadhaar/verify-otp', async (req, res, next) => {
       return res.status(400).json({ error: 'No active Aadhaar session found. Please request OTP again.' });
     }
 
-    const edgeResult = await invokeAadhaarVerifyOtpEdge({ sessionId, otp: otpIn });
+    let edgeResult;
+    try {
+      edgeResult = await invokeAadhaarVerifyOtpEdge({ sessionId, otp: otpIn });
+    } catch (err) {
+      const msg = String(err?.message || '').toLowerCase();
+      if (msg.includes('failed to download aadhaar details')) {
+        return res.status(502).json({
+          error: 'Aadhaar verification service is temporarily unavailable. Please try again in a minute.',
+        });
+      }
+      return res.status(502).json({
+        error: 'Could not verify Aadhaar OTP right now. Please retry.',
+      });
+    }
     const providerData = edgeResult?.data ?? {};
     const aadName = String(providerData?.name ?? '').trim();
     const aadCareOf = String(providerData?.careof ?? '').trim();
@@ -772,6 +850,10 @@ router.post('/aadhaar/verify-otp', async (req, res, next) => {
     ]);
     const aadProfilePhoto = photoDataUrlFromBase64(providerData?.photo);
 
+    const providerUid = String(providerData?.aadhaar_number ?? providerData?.uid ?? '').replace(/\D/g, '');
+    const persistedAadhaarNumber = TWELVE_DIGIT_REGEX.test(providerUid)
+      ? providerUid
+      : String(formCurrent?.aadhaar_number ?? '').trim() || null;
     const now = new Date().toISOString();
     const { error: upsertErr } = await supabaseAdmin.from('job_app_form').upsert(
       {
@@ -781,7 +863,7 @@ router.post('/aadhaar/verify-otp', async (req, res, next) => {
         mobile: row.mobile,
         email: row.email ?? null,
         designation: row.designation ?? null,
-        aadhaar_number: String(formCurrent?.aadhaar_number ?? '').trim() || null,
+        aadhaar_number: persistedAadhaarNumber,
         aad_profile_photo: aadProfilePhoto,
         aad_name: aadName || null,
         aad_care_of: aadCareOf || null,
@@ -792,6 +874,7 @@ router.post('/aadhaar/verify-otp', async (req, res, next) => {
         aad_district: aadDistrict || null,
         aad_pincode: aadPincode || null,
         aad_otp_transaction_id: String(edgeResult?.transactionId ?? '').trim() || null,
+        aadhaar_verified: true,
         pd_city: pdCityFromAadDistrict(aadDistrict),
         pd_age: computePdAgeFromAadDob(aadDob),
         updated_at: now,
@@ -801,18 +884,133 @@ router.post('/aadhaar/verify-otp', async (req, res, next) => {
 
     if (upsertErr) throw upsertErr;
 
+    const { data: persistedRow, error: persistedErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('aadhaar_number, aad_profile_photo, aad_name, aad_care_of, aad_dob, aad_gender, aad_address, aad_state, aad_district, aad_pincode')
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (persistedErr) throw persistedErr;
+    if (!persistedRow) {
+      return res.status(500).json({ error: 'Aadhaar verification succeeded but details could not be persisted.' });
+    }
+
     return res.json({
       verified: true,
+      aadhaar_number: String(persistedRow?.aadhaar_number ?? '').trim() || '',
       aadhaarDetails: {
-        aad_profile_photo: aadProfilePhoto,
-        aad_name: aadName || '',
-        aad_care_of: aadCareOf || '',
-        aad_dob: aadDob,
-        aad_gender: aadGender,
-        aad_address: aadAddress || '',
-        aad_state: aadState || '',
-        aad_district: aadDistrict || '',
-        aad_pincode: aadPincode || '',
+        aad_profile_photo: String(persistedRow?.aad_profile_photo ?? ''),
+        aad_name: String(persistedRow?.aad_name ?? ''),
+        aad_care_of: String(persistedRow?.aad_care_of ?? ''),
+        aad_dob: persistedRow?.aad_dob ?? null,
+        aad_gender: String(persistedRow?.aad_gender ?? ''),
+        aad_address: String(persistedRow?.aad_address ?? ''),
+        aad_state: String(persistedRow?.aad_state ?? ''),
+        aad_district: String(persistedRow?.aad_district ?? ''),
+        aad_pincode: String(persistedRow?.aad_pincode ?? ''),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/aadhaar/resume/send-otp', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('aadhaar_number, aadhaar_verified')
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (formCurrentErr) throw formCurrentErr;
+
+    if (!formCurrent || formCurrent.aadhaar_verified !== true) {
+      return res.status(400).json({ error: 'Aadhaar is not verified yet. Please complete Aadhaar verification first.' });
+    }
+
+    const savedAadhaar = String(formCurrent?.aadhaar_number ?? '').trim();
+    if (!TWELVE_DIGIT_REGEX.test(savedAadhaar)) {
+      return res.status(400).json({ error: 'Saved Aadhaar number is invalid. Please verify Aadhaar again.' });
+    }
+
+    const key = sessionKey(row.id, mobile);
+    aadhaarResumeOtpBySession.set(key, { otp: DEMO_AADHAAR_RESUME_OTP, expires: Date.now() + OTP_TTL_MS });
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[public/onboarding] Aadhaar resume demo OTP for employee ${row.id}: ${DEMO_AADHAAR_RESUME_OTP}`);
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/aadhaar/resume/verify-otp', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const otpIn = String(req.body?.otp ?? '').replace(/\D/g, '');
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+    if (!/^\d{6}$/.test(otpIn)) {
+      return res.status(400).json({ error: 'OTP must be 6 digits' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    const key = sessionKey(row.id, mobile);
+    const entry = aadhaarResumeOtpBySession.get(key);
+    if (!entry || Date.now() > entry.expires) {
+      return res.status(400).json({ error: 'OTP expired or not found. Request a new OTP.' });
+    }
+    if (entry.otp !== otpIn) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+    aadhaarResumeOtpBySession.delete(key);
+
+    const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('aadhaar_number, aadhaar_verified, aad_profile_photo, aad_name, aad_care_of, aad_dob, aad_gender, aad_address, aad_state, aad_district, aad_pincode')
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (formCurrentErr) throw formCurrentErr;
+
+    if (!formCurrent || formCurrent.aadhaar_verified !== true) {
+      return res.status(400).json({ error: 'Aadhaar is not verified yet. Please complete Aadhaar verification first.' });
+    }
+
+    return res.json({
+      verified: true,
+      aadhaar_number: String(formCurrent?.aadhaar_number ?? '').trim() || '',
+      aadhaarDetails: {
+        aad_profile_photo: String(formCurrent?.aad_profile_photo ?? ''),
+        aad_name: String(formCurrent?.aad_name ?? ''),
+        aad_care_of: String(formCurrent?.aad_care_of ?? ''),
+        aad_dob: formCurrent?.aad_dob ?? null,
+        aad_gender: String(formCurrent?.aad_gender ?? ''),
+        aad_address: String(formCurrent?.aad_address ?? ''),
+        aad_state: String(formCurrent?.aad_state ?? ''),
+        aad_district: String(formCurrent?.aad_district ?? ''),
+        aad_pincode: String(formCurrent?.aad_pincode ?? ''),
       },
     });
   } catch (err) {
@@ -901,6 +1099,15 @@ router.post('/bank/verify', async (req, res, next) => {
       });
     }
 
+    const ifscDetails = providerData?.ifsc_details ?? {};
+    const bankSummary = [
+      String(ifscDetails?.bank ?? ifscDetails?.bank_name ?? '').trim(),
+      String(ifscDetails?.branch ?? '').trim(),
+      String(ifscDetails?.district ?? ifscDetails?.state ?? '').trim(),
+    ]
+      .filter(Boolean)
+      .join(', ');
+
     const now = new Date().toISOString();
     const { error: upsertErr } = await supabaseAdmin.from('job_app_form').upsert(
       {
@@ -913,6 +1120,9 @@ router.post('/bank/verify', async (req, res, next) => {
         kyc_account_holder_name: providerFullName,
         kyc_account_number: accountNumber,
         kyc_ifsc_code: ifsc,
+        kyc_bank_ifsc_details: bankSummary || null,
+        kyc_bank_verified: true,
+        kyc_bank_branch_confirmed: true,
         updated_at: now,
       },
       { onConflict: 'employee_id' }
@@ -986,6 +1196,7 @@ router.post('/pan/verify', async (req, res, next) => {
         email: row.email ?? null,
         designation: row.designation ?? null,
         kyc_pan_number: finalPan,
+        kyc_pan_verified: true,
         updated_at: now,
       },
       { onConflict: 'employee_id' }
@@ -1098,13 +1309,16 @@ router.post('/driving-license-upload', (req, res, next) => {
     if (!formCurrent) {
       return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
     }
+    const clientOnboardingFlags = await fetchClientOnboardingFlags(formCurrent.client_id);
+    if (!clientOnboardingFlags.require_license_upload) {
+      return res.status(400).json({ error: 'Driving license upload is not required for this client.' });
+    }
     if (formCurrent.review_status === 'REJECTED') {
       return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
     }
     if (formCurrent.review_status === 'APPROVED') {
       return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
     }
-
     const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
     const editableFields = editableFieldsFromFormRow(formCurrent);
     if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
@@ -1159,6 +1373,11 @@ router.post('/driving-license-upload', (req, res, next) => {
 });
 
 router.post('/qualification-certificate-upload', (req, res, next) => {
+  const kind = String(req.query?.kind || '').trim();
+  const allowedKinds = new Set(['iti_diploma_doc', 'highest_qualification_doc', 'additional_doc']);
+  if (!allowedKinds.has(kind)) {
+    return res.status(400).json({ error: 'Invalid kind. Use ?kind=iti_diploma_doc, highest_qualification_doc, or additional_doc' });
+  }
   qualificationUpload.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
@@ -1172,6 +1391,7 @@ router.post('/qualification-certificate-upload', (req, res, next) => {
   try {
     const mobile = normalizeMobile(req.body?.mobile);
     const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const kind = String(req.query?.kind || '').trim();
 
     if (!TEN_DIGIT_REGEX.test(mobile)) {
       return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
@@ -1184,9 +1404,33 @@ router.post('/qualification-certificate-upload', (req, res, next) => {
     if (!emp) {
       return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
     }
+    const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('*')
+      .eq('employee_id', emp.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (formCurrentErr) throw formCurrentErr;
+    if (!formCurrent) {
+      return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
+    }
+    if (formCurrent.review_status === 'REJECTED') {
+      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
+    }
+    if (formCurrent.review_status === 'APPROVED') {
+      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    }
+    const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
+    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
+      return res.status(400).json({ error: 'Application is already submitted and under review.' });
+    }
+    const clientOnboardingFlags = await fetchClientOnboardingFlags(formCurrent.client_id);
+    if (kind === 'iti_diploma_doc' && !clientOnboardingFlags.require_qualification_certificate_upload) {
+      return res.status(400).json({ error: 'ITI/Diploma certificate upload is not required for this client.' });
+    }
 
     const ext = extForQualificationFile(req.file.mimetype, req.file.originalname);
-    const objectPath = `onboarding/${emp.id}/${Date.now()}.${ext}`;
+    const objectPath = `onboarding/${emp.id}/${kind}/${Date.now()}.${ext}`;
 
     const { error: upErr } = await supabaseAdmin.storage
       .from(QUALIFICATION_BUCKET)
@@ -1201,6 +1445,35 @@ router.post('/qualification-certificate-upload', (req, res, next) => {
     if (!publicUrl) {
       return res.status(500).json({ error: 'Could not resolve file URL' });
     }
+
+    const now = new Date().toISOString();
+    if (kind === 'additional_doc') {
+      const existing = normalizeAdditionalCertificateUrls(formCurrent.qual_additional_certificates_url);
+      const merged = [...existing, publicUrl].slice(0, 20);
+      const { error: dbErr } = await supabaseAdmin
+        .from('job_app_form')
+        .update({
+          qual_additional_certificates_url: merged,
+          updated_at: now,
+        })
+        .eq('employee_id', emp.id)
+        .eq('mobile', mobile);
+      if (dbErr) throw dbErr;
+      return res.json({ url: publicUrl, urls: merged });
+    }
+
+    const qualField = kind === 'highest_qualification_doc'
+      ? 'qual_highest_qualification_doc_url'
+      : 'qual_education_certificate_url';
+    const { error: dbErr } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        [qualField]: publicUrl,
+        updated_at: now,
+      })
+      .eq('employee_id', emp.id)
+      .eq('mobile', mobile);
+    if (dbErr) throw dbErr;
 
     return res.json({ url: publicUrl });
   } catch (err) {
@@ -1233,7 +1506,7 @@ router.post('/kyc-document-validate', (req, res, next) => {
   kycValidateUpload.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'File must be 6 MB or smaller for auto-check' });
+        return res.status(400).json({ error: 'File must be 5 MB or smaller for auto-check' });
       }
       return res.status(400).json({ error: err.message || 'Invalid upload' });
     }
@@ -1314,7 +1587,10 @@ router.post('/kyc-document-upload', (req, res, next) => {
   multerMw.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'File must be 12 MB or smaller' });
+        const sizeMessage = kind === 'bank_passbook'
+          ? 'File must be 12 MB or smaller'
+          : 'File must be 5 MB or smaller';
+        return res.status(400).json({ error: sizeMessage });
       }
       return res.status(400).json({ error: err.message || 'Invalid upload' });
     }
@@ -1338,14 +1614,28 @@ router.post('/kyc-document-upload', (req, res, next) => {
     }
 
     const kind = String(req.query?.kind || '').trim();
+    const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('*')
+      .eq('employee_id', emp.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (formCurrentErr) throw formCurrentErr;
+    if (!formCurrent) {
+      return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
+    }
+    if (formCurrent.review_status === 'REJECTED') {
+      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
+    }
+    if (formCurrent.review_status === 'APPROVED') {
+      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    }
+    const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
+    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
+      return res.status(400).json({ error: 'Application is already submitted and under review.' });
+    }
     if (kind === 'pan_card') {
-      const { data: form, error: formErr } = await supabaseAdmin
-        .from('job_app_form')
-        .select('kyc_pan_number')
-        .eq('employee_id', emp.id)
-        .maybeSingle();
-      if (formErr) throw formErr;
-      const normalizedPan = String(form?.kyc_pan_number ?? '').replace(/\s/g, '').toUpperCase();
+      const normalizedPan = String(formCurrent?.kyc_pan_number ?? '').replace(/\s/g, '').toUpperCase();
       if (!PAN_NUMBER_REGEX.test(normalizedPan)) {
         return res.status(400).json({ error: 'Please verify PAN number first before uploading PAN card image.' });
       }
@@ -1370,6 +1660,23 @@ router.post('/kyc-document-upload', (req, res, next) => {
     if (!publicUrl) {
       return res.status(500).json({ error: 'Could not resolve file URL' });
     }
+
+    const fieldByKind = {
+      aadhaar_front: 'kyc_aadhar_front_url',
+      aadhaar_back: 'kyc_aadhar_back_url',
+      pan_card: 'kyc_pan_card_url',
+      bank_passbook: 'kyc_bank_passbook_url',
+    };
+    const field = fieldByKind[kind];
+    const { error: dbErr } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        [field]: publicUrl,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('employee_id', emp.id)
+      .eq('mobile', mobile);
+    if (dbErr) throw dbErr;
 
     return res.json({ url: publicUrl });
   } catch (err) {
@@ -1413,6 +1720,27 @@ router.post('/bp-document-upload', (req, res, next) => {
       return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
     }
 
+    const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('*')
+      .eq('employee_id', emp.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (formCurrentErr) throw formCurrentErr;
+    if (!formCurrent) {
+      return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
+    }
+    if (formCurrent.review_status === 'REJECTED') {
+      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
+    }
+    if (formCurrent.review_status === 'APPROVED') {
+      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    }
+    const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
+    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
+      return res.status(400).json({ error: 'Application is already submitted and under review.' });
+    }
+
     const kind = String(req.query?.kind || '').trim();
     const ext =
       kind === 'police_verification'
@@ -1433,6 +1761,19 @@ router.post('/bp-document-upload', (req, res, next) => {
     if (!publicUrl) {
       return res.status(500).json({ error: 'Could not resolve file URL' });
     }
+
+    const field = kind === 'police_verification'
+      ? 'bp_police_verification_url'
+      : 'bp_passport_photo_url';
+    const { error: dbErr } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        [field]: publicUrl,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('employee_id', emp.id)
+      .eq('mobile', mobile);
+    if (dbErr) throw dbErr;
 
     return res.json({ url: publicUrl });
   } catch (err) {
@@ -1464,7 +1805,116 @@ router.get('/job-app-form', async (req, res, next) => {
       return res.status(404).json({ error: 'Application form not found. Complete Aadhaar verification first.' });
     }
 
-    return res.json({ form: data });
+    return res.json({ form: await formWithClientFlags(data) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/delete-document', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const field = String(req.body?.field ?? '').trim();
+    const fieldConfig = ONBOARDING_DOCUMENT_FIELD_CONFIG[field];
+    const requestedUrl = String(req.body?.url ?? '').trim();
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+    if (!fieldConfig) {
+      return res.status(400).json({ error: 'Unsupported document field.' });
+    }
+
+    const emp = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!emp) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    const { data: formCurrent, error: formErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('*')
+      .eq('employee_id', emp.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (formErr) throw formErr;
+    if (!formCurrent) {
+      return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
+    }
+    if (formCurrent.review_status === 'REJECTED') {
+      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
+    }
+    if (formCurrent.review_status === 'APPROVED') {
+      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    }
+    const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
+    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
+      return res.status(400).json({ error: 'Application is already submitted and under review.' });
+    }
+
+    let updatePayload = {};
+
+    if (fieldConfig.mode === 'array') {
+      const existing = normalizeAdditionalCertificateUrls(formCurrent[field]);
+      const targetUrl = requestedUrl;
+      if (!targetUrl) {
+        return res.status(400).json({ error: 'Document URL is required for this field.' });
+      }
+
+      const storagePath = storagePathFromPublicUrl(targetUrl, fieldConfig.bucket);
+      if (!storagePath) {
+        return res.status(400).json({ error: 'Could not resolve file path from URL.' });
+      }
+      if (!storagePath.startsWith(`onboarding/${emp.id}/`)) {
+        return res.status(400).json({ error: 'Invalid file path for this employee.' });
+      }
+      const { error: removeErr } = await supabaseAdmin.storage
+        .from(fieldConfig.bucket)
+        .remove([storagePath]);
+      if (removeErr) throw removeErr;
+
+      updatePayload = {
+        [field]: existing.filter((u) => u !== targetUrl),
+      };
+    } else {
+      const targetUrl = requestedUrl || String(formCurrent[field] ?? '').trim();
+      if (!targetUrl) {
+        return res.status(400).json({ error: 'No uploaded file found for this field.' });
+      }
+
+      const storagePath = storagePathFromPublicUrl(targetUrl, fieldConfig.bucket);
+      if (!storagePath) {
+        return res.status(400).json({ error: 'Could not resolve file path from URL.' });
+      }
+      if (!storagePath.startsWith(`onboarding/${emp.id}/`)) {
+        return res.status(400).json({ error: 'Invalid file path for this employee.' });
+      }
+      const { error: removeErr } = await supabaseAdmin.storage
+        .from(fieldConfig.bucket)
+        .remove([storagePath]);
+      if (removeErr) throw removeErr;
+
+      updatePayload = {
+        [field]: null,
+      };
+    }
+
+    const { data: updated, error: updateErr } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        ...updatePayload,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('employee_id', emp.id)
+      .eq('mobile', mobile)
+      .select('*')
+      .maybeSingle();
+    if (updateErr) throw updateErr;
+    if (!updated) {
+      return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
+    }
+
+    return res.json({ ok: true, form: await formWithClientFlags(updated) });
   } catch (err) {
     next(err);
   }
@@ -1557,6 +2007,7 @@ router.patch('/job-app-form', async (req, res, next) => {
     if (formCurrent.review_status === 'APPROVED') {
       return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
     }
+    const clientOnboardingFlags = await fetchClientOnboardingFlags(formCurrent.client_id);
 
     const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
     const editableFields = editableFieldsFromFormRow(formCurrent);
@@ -1658,7 +2109,7 @@ router.patch('/job-app-form', async (req, res, next) => {
         .eq('id', emp.id);
       if (empStatusErr) throw empStatusErr;
 
-      return res.json({ form: data });
+      return res.json({ form: await formWithClientFlags(data) });
     }
 
     if (patchStep === 'kyc') {
@@ -1674,6 +2125,12 @@ router.patch('/job-app-form', async (req, res, next) => {
         .replace(/\s/g, '')
         .toUpperCase();
       const passUrl = String(body.kyc_bank_passbook_url ?? '').trim();
+      const bankBranchConfirmedRaw = body.kyc_bank_branch_confirmed;
+      const bankBranchConfirmed =
+        bankBranchConfirmedRaw === true ||
+        bankBranchConfirmedRaw === 'true' ||
+        bankBranchConfirmedRaw === 'yes' ||
+        bankBranchConfirmedRaw === 'YES';
 
       if (!front) {
         return res.status(400).json({ error: 'Aadhaar front image is required.' });
@@ -1709,6 +2166,9 @@ router.patch('/job-app-form', async (req, res, next) => {
         kyc_account_number: acct,
         kyc_ifsc_code: ifsc,
         kyc_bank_passbook_url: passUrl,
+        kyc_pan_verified: true,
+        kyc_bank_verified: true,
+        kyc_bank_branch_confirmed: bankBranchConfirmed,
       };
       const correctionScopeErr = ensureCorrectionEditScope(kycUpdate);
       if (correctionScopeErr) {
@@ -1731,24 +2191,30 @@ router.patch('/job-app-form', async (req, res, next) => {
         return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
       }
 
-      return res.json({ form: data });
+      return res.json({ form: await formWithClientFlags(data) });
     }
 
     if (patchStep === 'qualification') {
       const hq = String(body.qual_highest_qualification ?? '').trim();
-      const eduUrl = String(body.qual_education_certificate_url ?? '').trim();
+      const hqDocUrl = String(body.qual_highest_qualification_doc_url ?? '').trim();
+      const eduUrlIn = String(body.qual_education_certificate_url ?? '').trim();
+      const eduUrl = clientOnboardingFlags.require_qualification_certificate_upload ? eduUrlIn : '';
       const extraArr = normalizeAdditionalCertificateUrls(body.qual_additional_certificates_url);
 
       if (!hq || !HIGHEST_QUALIFICATION_VALUES.has(hq)) {
         return res.status(400).json({ error: 'Please select a valid highest qualification.' });
       }
-      if (!eduUrl) {
+      if (!hqDocUrl) {
+        return res.status(400).json({ error: 'Highest qualification document upload is required.' });
+      }
+      if (clientOnboardingFlags.require_qualification_certificate_upload && !eduUrl) {
         return res.status(400).json({ error: 'ITI/Diploma education certificate upload is required.' });
       }
 
       const qualUpdate = {
         qual_highest_qualification: hq,
-        qual_education_certificate_url: eduUrl,
+        qual_highest_qualification_doc_url: hqDocUrl,
+        qual_education_certificate_url: clientOnboardingFlags.require_qualification_certificate_upload ? eduUrl : null,
         qual_additional_certificates_url: extraArr,
       };
       const correctionScopeErr = ensureCorrectionEditScope(qualUpdate);
@@ -1772,7 +2238,7 @@ router.patch('/job-app-form', async (req, res, next) => {
         return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
       }
 
-      return res.json({ form: data });
+      return res.json({ form: await formWithClientFlags(data) });
     }
 
     const emergencyName = String(body.pd_emergency_contact_name ?? '').trim();
@@ -1824,8 +2290,10 @@ router.patch('/job-app-form', async (req, res, next) => {
     const alternNorm = altern;
 
     const dl = String(body.pd_driving_license ?? '').trim();
-    const licenseUrl = String(body.pd_driving_license_url ?? '').trim();
-    if (dl === 'Yes' && !licenseUrl) {
+    const licenseUrl = clientOnboardingFlags.require_license_upload
+      ? String(body.pd_driving_license_url ?? '').trim()
+      : '';
+    if (clientOnboardingFlags.require_license_upload && dl === 'Yes' && !licenseUrl) {
       return res.status(400).json({
         error: 'Driving license image is required when you have a driving license.',
       });
@@ -1889,8 +2357,8 @@ router.patch('/job-app-form', async (req, res, next) => {
       pd_current_city: currentCity || null,
       pd_current_pincode: currentPincode || null,
       pd_marital_status: maritalStatus || null,
-      pd_driving_license: dl || null,
-      pd_driving_license_url: dl === 'Yes' ? licenseUrl : null,
+      pd_driving_license: clientOnboardingFlags.require_license_upload ? (dl || null) : null,
+      pd_driving_license_url: clientOnboardingFlags.require_license_upload && dl === 'Yes' ? licenseUrl : null,
       pd_city: pdCity,
       pd_age: pdAge,
       updated_at: now,
@@ -1913,7 +2381,7 @@ router.patch('/job-app-form', async (req, res, next) => {
       return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
     }
 
-    return res.json({ form: data });
+    return res.json({ form: await formWithClientFlags(data) });
   } catch (err) {
     next(err);
   }

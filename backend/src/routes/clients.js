@@ -47,6 +47,12 @@ function validateClientPayload(body) {
   if (typeof body.insurance_applicable !== 'boolean') {
     errors.insurance_applicable = 'must be boolean';
   }
+  if (typeof body.require_license_upload !== 'boolean') {
+    errors.require_license_upload = 'must be boolean';
+  }
+  if (typeof body.require_qualification_certificate_upload !== 'boolean') {
+    errors.require_qualification_certificate_upload = 'must be boolean';
+  }
   if (body.insurance_applicable === true) {
     if (!body.insurance_name || !String(body.insurance_name).trim()) {
       errors.insurance_name = 'required when insurance is applicable';
@@ -227,6 +233,8 @@ router.post('/', async (req, res, next) => {
       program_manager_id: req.body.program_manager_id,
       insurance_applicable: req.body.insurance_applicable,
       insurance_name: req.body.insurance_applicable ? req.body.insurance_name.trim() : null,
+      require_license_upload: req.body.require_license_upload,
+      require_qualification_certificate_upload: req.body.require_qualification_certificate_upload,
       created_by: req.user.id
     };
 
@@ -295,7 +303,9 @@ router.put('/:id', async (req, res, next) => {
       contract_end_date: req.body.contract_end_date,
       program_manager_id: req.body.program_manager_id,
       insurance_applicable: req.body.insurance_applicable,
-      insurance_name: req.body.insurance_applicable ? req.body.insurance_name.trim() : null
+      insurance_name: req.body.insurance_applicable ? req.body.insurance_name.trim() : null,
+      require_license_upload: req.body.require_license_upload,
+      require_qualification_certificate_upload: req.body.require_qualification_certificate_upload,
     };
 
     const { error: updateErr } = await supabaseAdmin

@@ -12,6 +12,8 @@ const emptyForm = {
   program_manager_id: '',
   insurance_applicable: false,
   insurance_name: '',
+  require_license_upload: true,
+  require_qualification_certificate_upload: true,
   designations: []
 };
 
@@ -53,6 +55,8 @@ export default function ClientForm() {
           program_manager_id: found.program_manager_id,
           insurance_applicable: found.insurance_applicable,
           insurance_name: found.insurance_name ?? '',
+          require_license_upload: found.require_license_upload !== false,
+          require_qualification_certificate_upload: found.require_qualification_certificate_upload !== false,
           designations: found.designations ?? []
         });
       })
@@ -75,6 +79,12 @@ export default function ClientForm() {
     if (!form.program_manager_id) errs.program_manager_id = 'Required';
     if (form.insurance_applicable && !form.insurance_name.trim()) {
       errs.insurance_name = 'Required when insurance is applicable';
+    }
+    if (typeof form.require_license_upload !== 'boolean') {
+      errs.require_license_upload = 'Required';
+    }
+    if (typeof form.require_qualification_certificate_upload !== 'boolean') {
+      errs.require_qualification_certificate_upload = 'Required';
     }
     if (form.designations.length === 0) {
       errs.designations = 'Add at least one designation';
@@ -225,6 +235,48 @@ export default function ClientForm() {
               value={form.designations}
               onChange={designations => set({ designations })}
             />
+          </Field>
+
+          <Field label="Show Driving License Upload in Employee Form" error={fieldErrors.require_license_upload}>
+            <div className="flex gap-4 text-sm">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={form.require_license_upload === true}
+                  onChange={() => set({ require_license_upload: true })}
+                />
+                Yes
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={form.require_license_upload === false}
+                  onChange={() => set({ require_license_upload: false })}
+                />
+                No
+              </label>
+            </div>
+          </Field>
+
+          <Field label="Show ITI/Diploma Certificate Upload in Employee Form" error={fieldErrors.require_qualification_certificate_upload}>
+            <div className="flex gap-4 text-sm">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={form.require_qualification_certificate_upload === true}
+                  onChange={() => set({ require_qualification_certificate_upload: true })}
+                />
+                Yes
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={form.require_qualification_certificate_upload === false}
+                  onChange={() => set({ require_qualification_certificate_upload: false })}
+                />
+                No
+              </label>
+            </div>
           </Field>
 
           <div className="flex justify-end gap-3 pt-2">

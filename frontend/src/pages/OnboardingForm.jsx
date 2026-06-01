@@ -11,7 +11,8 @@ const MARITAL_OPTIONS = ['Single', 'Married', 'Divorced', 'Widowed'];
 const DRIVING_OPTIONS = ['Yes', 'No'];
 const DRIVING_LICENSE_MAX_BYTES = 12 * 1024 * 1024;
 const QUALIFICATION_MAX_BYTES = 12 * 1024 * 1024;
-const KYC_MAX_BYTES = 12 * 1024 * 1024;
+const KYC_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const KYC_PASSBOOK_MAX_BYTES = 12 * 1024 * 1024;
 const BP_MAX_BYTES = 12 * 1024 * 1024;
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -62,6 +63,22 @@ function formatAadGender(code) {
   return code || '—';
 }
 
+function aadhaarKycFromForm(form) {
+  const mapped = {
+    aad_profile_photo: String(form?.aad_profile_photo ?? ''),
+    aad_name: String(form?.aad_name ?? ''),
+    aad_care_of: String(form?.aad_care_of ?? ''),
+    aad_dob: form?.aad_dob ?? null,
+    aad_gender: String(form?.aad_gender ?? ''),
+    aad_address: String(form?.aad_address ?? ''),
+    aad_state: String(form?.aad_state ?? ''),
+    aad_district: String(form?.aad_district ?? ''),
+    aad_pincode: String(form?.aad_pincode ?? ''),
+  };
+  const hasDetails = Object.values(mapped).some((v) => (typeof v === 'string' ? v.trim() : Boolean(v)));
+  return hasDetails ? mapped : null;
+}
+
 function ageFromIsoDob(iso) {
   if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
   const d = new Date(`${iso}T12:00:00`);
@@ -105,6 +122,14 @@ function spouseLabelForGender(code) {
   return "Spouse's Name";
 }
 
+function clientRequiresLicenseUpload(form) {
+  return form?.require_license_upload !== false;
+}
+
+function clientRequiresQualificationCertificateUpload(form) {
+  return form?.require_qualification_certificate_upload !== false;
+}
+
 function cityFromJobForm(f) {
   return (f.pd_city ?? f.aad_district ?? '').trim() || '—';
 }
@@ -115,27 +140,83 @@ function fieldClass(readOnly) {
     : 'w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900';
 }
 
-function UploadedFileBanner({ href }) {
+function UploadedFileBanner({ href, onRemove, removing = false }) {
   if (!href) return null;
   return (
     <div
-      className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-green-200 bg-green-50 px-3 py-2.5 text-sm"
+      className="mt-3 flex items-center gap-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4"
       role="status"
     >
-      <span className="flex items-center gap-2 text-green-700">
-        <span className="text-base font-semibold leading-none text-green-600" aria-hidden>
-          ✓
-        </span>
-        <span className="font-medium">File uploaded</span>
-      </span>
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="font-medium text-blue-600 underline decoration-blue-600 underline-offset-2 hover:text-blue-800"
-      >
-        View Current File
-      </a>
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-100">
+        <IconCheckCircle className="h-6 w-6 text-emerald-600" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-emerald-800">Document uploaded</p>
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-0.5 block truncate text-xs font-medium text-indigo-600 underline underline-offset-2 hover:text-indigo-800"
+        >
+          View uploaded document ↗
+        </a>
+      </div>
+      {typeof onRemove === 'function' && (
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={removing}
+          className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {removing ? 'Removing…' : 'Remove'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+const FILE_INPUT_CLASS =
+  'block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60';
+
+function DocUploadField({
+  label,
+  required = false,
+  inputId,
+  accept,
+  uploading = false,
+  uploadingLabel = 'Uploading…',
+  error,
+  hint,
+  url,
+  onRemove,
+  removing = false,
+  onChange,
+  children,
+}) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor={inputId}>
+        {label}
+        {required && <span className="text-rose-500"> *</span>}
+      </label>
+      {!url && !uploading && (
+        <>
+          <input
+            id={inputId}
+            type="file"
+            accept={accept}
+            onChange={onChange}
+            className={FILE_INPUT_CLASS}
+          />
+          {hint && <p className="mt-1.5 text-xs text-slate-500">{hint}</p>}
+        </>
+      )}
+      {children}
+      {uploading && <p className="mt-2 text-sm text-slate-600">{uploadingLabel}</p>}
+      {error && <p className="mt-2 text-sm text-rose-600">{error}</p>}
+      {url && !uploading && (
+        <UploadedFileBanner href={url} onRemove={onRemove} removing={removing} />
+      )}
     </div>
   );
 }
@@ -192,7 +273,12 @@ const STEP_ALL_FIELDS = {
     'pd_driving_license',
     'pd_driving_license_url'
   ],
-  qualification: ['qual_highest_qualification', 'qual_education_certificate_url', 'qual_additional_certificates_url'],
+  qualification: [
+    'qual_highest_qualification',
+    'qual_highest_qualification_doc_url',
+    'qual_education_certificate_url',
+    'qual_additional_certificates_url'
+  ],
   kyc: [
     'kyc_aadhar_front_url',
     'kyc_aadhar_back_url',
@@ -319,11 +405,18 @@ function IconDocument({ className }) {
 }
 
 function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSuccess, correction }) {
+  const requireQualificationCertificate = clientRequiresQualificationCertificateUpload(jobForm);
   const [highest, setHighest] = useState(() => jobForm.qual_highest_qualification ?? '');
+  const [highestDocUrl, setHighestDocUrl] = useState(() => jobForm.qual_highest_qualification_doc_url ?? '');
   const [eduUrl, setEduUrl] = useState(() => jobForm.qual_education_certificate_url ?? '');
   const [additionalUrls, setAdditionalUrls] = useState(() => parseAdditionalCertificateUrls(jobForm));
+  const [highestDocUploading, setHighestDocUploading] = useState(false);
   const [eduUploading, setEduUploading] = useState(false);
   const [addUploading, setAddUploading] = useState(false);
+  const [highestDocRemoving, setHighestDocRemoving] = useState(false);
+  const [eduRemoving, setEduRemoving] = useState(false);
+  const [additionalRemoving, setAdditionalRemoving] = useState([]);
+  const [highestDocError, setHighestDocError] = useState('');
   const [eduError, setEduError] = useState('');
   const [addError, setAddError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -331,29 +424,47 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
   useEffect(() => {
     const visible = correction?.active ? correction.visibleFields : null;
     setHighest(visible?.has('qual_highest_qualification') ? '' : (jobForm.qual_highest_qualification ?? ''));
+    setHighestDocUrl(
+      visible?.has('qual_highest_qualification_doc_url') ? '' : (jobForm.qual_highest_qualification_doc_url ?? '')
+    );
     setEduUrl(visible?.has('qual_education_certificate_url') ? '' : (jobForm.qual_education_certificate_url ?? ''));
     setAdditionalUrls(visible?.has('qual_additional_certificates_url') ? [] : parseAdditionalCertificateUrls(jobForm));
+    setHighestDocError('');
     setEduError('');
     setAddError('');
     setError('');
+    setHighestDocRemoving(false);
+    setEduRemoving(false);
+    setAdditionalRemoving([]);
   }, [jobForm, correction]);
 
-  const shouldShow = (field) => !correction?.active || correction.visibleFields.has(field);
-  const isRequired = (field, fallbackRequired = false) =>
-    correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
+  const shouldShow = (field) => {
+    if (field === 'qual_education_certificate_url' && !requireQualificationCertificate) return false;
+    return !correction?.active || correction.visibleFields.has(field);
+  };
+  const isRequired = (field, fallbackRequired = false) => {
+    if (field === 'qual_education_certificate_url' && !requireQualificationCertificate) return false;
+    return correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
+  };
+  const highestSelected = String(highest).trim();
+  const effectiveHighestSelected = correction?.active
+    ? (highestSelected || String(jobForm.qual_highest_qualification ?? '').trim())
+    : highestSelected;
+  const shouldShowHighestDoc = shouldShow('qual_highest_qualification_doc_url') && Boolean(effectiveHighestSelected);
   const canNext = (
     (!isRequired('qual_highest_qualification', true) || Boolean(String(highest).trim())) &&
+    (!isRequired('qual_highest_qualification_doc_url', true) || Boolean(String(highestDocUrl).trim())) &&
     (!isRequired('qual_education_certificate_url', true) || Boolean(String(eduUrl).trim()))
   );
 
-  const uploadIfValid = async (file) => {
+  const uploadIfValid = async (file, kind) => {
     if (!isAllowedQualificationFile(file)) {
       throw new Error('Use an image, PDF, or Word document (.doc / .docx).');
     }
     if (file.size > QUALIFICATION_MAX_BYTES) {
       throw new Error('File must be 12 MB or smaller.');
     }
-    const { url } = await api.uploadQualificationCertificate({ mobile, employeeId, file });
+    const { url } = await api.uploadQualificationCertificate({ mobile, employeeId, file, kind });
     return url ?? '';
   };
 
@@ -364,12 +475,28 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
     setEduError('');
     setEduUploading(true);
     try {
-      const url = await uploadIfValid(file);
+      const url = await uploadIfValid(file, 'iti_diploma_doc');
       setEduUrl(url);
     } catch (err) {
       setEduError(err.message || 'Upload failed.');
     } finally {
       setEduUploading(false);
+    }
+  };
+
+  const handleHighestDocFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setHighestDocError('');
+    setHighestDocUploading(true);
+    try {
+      const url = await uploadIfValid(file, 'highest_qualification_doc');
+      setHighestDocUrl(url);
+    } catch (err) {
+      setHighestDocError(err.message || 'Upload failed.');
+    } finally {
+      setHighestDocUploading(false);
     }
   };
 
@@ -380,12 +507,70 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
     setAddError('');
     setAddUploading(true);
     try {
-      const url = await uploadIfValid(file);
+      const url = await uploadIfValid(file, 'additional_doc');
       setAdditionalUrls((prev) => [...prev, url]);
     } catch (err) {
       setAddError(err.message || 'Upload failed.');
     } finally {
       setAddUploading(false);
+    }
+  };
+
+  const handleRemoveEducationFile = async () => {
+    if (!eduUrl || eduRemoving) return;
+    setEduError('');
+    setEduRemoving(true);
+    try {
+      await api.deleteOnboardingDocument({
+        mobile,
+        employeeId,
+        field: 'qual_education_certificate_url',
+        url: eduUrl,
+      });
+      setEduUrl('');
+    } catch (err) {
+      setEduError(err.message || 'Could not remove file.');
+    } finally {
+      setEduRemoving(false);
+    }
+  };
+
+  const handleRemoveHighestDocFile = async () => {
+    if (!highestDocUrl || highestDocRemoving) return;
+    setHighestDocError('');
+    setHighestDocRemoving(true);
+    try {
+      await api.deleteOnboardingDocument({
+        mobile,
+        employeeId,
+        field: 'qual_highest_qualification_doc_url',
+        url: highestDocUrl,
+      });
+      setHighestDocUrl('');
+    } catch (err) {
+      setHighestDocError(err.message || 'Could not remove file.');
+    } finally {
+      setHighestDocRemoving(false);
+    }
+  };
+
+  const handleRemoveAdditionalFile = async (url, idx) => {
+    if (!url) return;
+    if (additionalRemoving.includes(url)) return;
+    setAddError('');
+    setAdditionalRemoving((prev) => [...prev, url]);
+    try {
+      await api.deleteOnboardingDocument({
+        mobile,
+        employeeId,
+        field: 'qual_additional_certificates_url',
+        url,
+      });
+      setAdditionalUrls((prev) => prev.filter((_, i) => i !== idx));
+    } catch (err) {
+      setAddError(err.message || 'Could not remove file.');
+    } finally {
+      setAdditionalRemoving((prev) => prev.filter((u) => u !== url));
     }
   };
 
@@ -399,7 +584,8 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
         employee_id: employeeId || null,
         patch_step: 'qualification',
         qual_highest_qualification: String(highest).trim(),
-        qual_education_certificate_url: String(eduUrl).trim(),
+        qual_highest_qualification_doc_url: String(highestDocUrl).trim(),
+        qual_education_certificate_url: requireQualificationCertificate ? String(eduUrl).trim() : null,
         qual_additional_certificates_url: additionalUrls,
       });
       onSaveSuccess?.(form);
@@ -428,7 +614,12 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
             id="qual-highest"
             className={fieldClass(false)}
             value={highest}
-            onChange={(e) => setHighest(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setHighest(next);
+              setHighestDocUrl('');
+              setHighestDocError('');
+            }}
           >
             <option value="">Select Highest Qualification</option>
             {HIGHEST_QUALIFICATION_OPTIONS.map((opt) => (
@@ -439,25 +630,37 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
           </select>
         </div>}
 
-        {shouldShow('qual_education_certificate_url') && <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="qual-edu-cert">
-            ITI/Diploma Education Certificate {isRequired('qual_education_certificate_url', true) && <span className="text-rose-500">*</span>}
-          </label>
-          <input
-            id="qual-edu-cert"
-            type="file"
+        {shouldShowHighestDoc && (
+          <DocUploadField
+            label={`Highest Qualification Certificate (${effectiveHighestSelected})`}
+            required={isRequired('qual_highest_qualification_doc_url', true)}
+            inputId="qual-highest-doc"
             accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            disabled={eduUploading}
-            onChange={handleEducationFile}
-            className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+            uploading={highestDocUploading}
+            error={highestDocError}
+            hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
+            url={highestDocUrl}
+            onRemove={handleRemoveHighestDocFile}
+            removing={highestDocRemoving}
+            onChange={handleHighestDocFile}
           />
-          <p className="mt-1.5 text-xs text-slate-500">
-            Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx
-          </p>
-          {eduUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-          {eduError && <p className="mt-2 text-sm text-rose-600">{eduError}</p>}
-          {eduUrl && !eduUploading && <UploadedFileBanner href={eduUrl} />}
-        </div>}
+        )}
+
+        {shouldShow('qual_education_certificate_url') && (
+          <DocUploadField
+            label="ITI/Diploma Education Certificate"
+            required={isRequired('qual_education_certificate_url', true)}
+            inputId="qual-edu-cert"
+            accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            uploading={eduUploading}
+            error={eduError}
+            hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
+            url={eduUrl}
+            onRemove={handleRemoveEducationFile}
+            removing={eduRemoving}
+            onChange={handleEducationFile}
+          />
+        )}
 
         {shouldShow('qual_additional_certificates_url') && <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-800">Additional Certificates (Optional)</label>
@@ -482,15 +685,12 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
                   className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
                 >
                   <div className="min-w-0 flex-1">
-                    <UploadedFileBanner href={u} />
+                    <UploadedFileBanner
+                      href={u}
+                      onRemove={() => handleRemoveAdditionalFile(u, idx)}
+                      removing={additionalRemoving.includes(u)}
+                    />
                   </div>
-                  <button
-                    type="button"
-                    className="shrink-0 self-end text-sm font-medium text-rose-600 hover:text-rose-800 sm:self-center"
-                    onClick={() => setAdditionalUrls((prev) => prev.filter((_, i) => i !== idx))}
-                  >
-                    Remove
-                  </button>
                 </li>
               ))}
             </ul>
@@ -621,6 +821,10 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   const [backUp, setBackUp] = useState(false);
   const [panCardUp, setPanCardUp] = useState(false);
   const [passUp, setPassUp] = useState(false);
+  const [frontRemoving, setFrontRemoving] = useState(false);
+  const [backRemoving, setBackRemoving] = useState(false);
+  const [panCardRemoving, setPanCardRemoving] = useState(false);
+  const [passRemoving, setPassRemoving] = useState(false);
   const [frontErr, setFrontErr] = useState('');
   const [backErr, setBackErr] = useState('');
   const [panCardErr, setPanCardErr] = useState('');
@@ -661,21 +865,39 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     const panLoaded = visible?.has('kyc_pan_number')
       ? ''
       : String(jobForm.kyc_pan_number ?? '').replace(/\s/g, '').toUpperCase();
-    setPanVerified(PAN_NUMBER_REGEX.test(panLoaded));
+    const panFlagLoaded = !visible?.has('kyc_pan_verified') && jobForm?.kyc_pan_verified === true;
+    setPanVerified(Boolean(panFlagLoaded || PAN_NUMBER_REGEX.test(panLoaded)));
     setPanVerifyMsg('');
 
     const hLoaded = visible?.has('kyc_account_holder_name') ? '' : String(jobForm.kyc_account_holder_name ?? '').trim();
     const acctLoaded = visible?.has('kyc_account_number') ? '' : String(jobForm.kyc_account_number ?? '').replace(/\s/g, '');
     const ifscLoaded = visible?.has('kyc_ifsc_code') ? '' : String(jobForm.kyc_ifsc_code ?? '').replace(/\s/g, '').toUpperCase();
+    const bankFlagLoaded = !visible?.has('kyc_bank_verified') && jobForm?.kyc_bank_verified === true;
+    const branchConfirmedLoaded = !visible?.has('kyc_bank_branch_confirmed') && jobForm?.kyc_bank_branch_confirmed === true;
     setBankVerified(
-      hLoaded.length >= 2 &&
-        ACCOUNT_NUMBER_REGEX.test(acctLoaded) &&
-        IFSC_CODE_REGEX.test(ifscLoaded)
+      Boolean(
+        bankFlagLoaded || (
+          hLoaded.length >= 2 &&
+          ACCOUNT_NUMBER_REGEX.test(acctLoaded) &&
+          IFSC_CODE_REGEX.test(ifscLoaded)
+        )
+      )
     );
+    setBankBranchConfirmed(Boolean(branchConfirmedLoaded || bankFlagLoaded));
     setBankVerifyMsg('');
-    setBankBranchSummary(null);
-    setBankBranchConfirmed(false);
+    const branchLoaded = !visible?.has('kyc_bank_ifsc_details')
+      ? String(jobForm?.kyc_bank_ifsc_details ?? '').trim()
+      : '';
+    setBankBranchSummary(branchLoaded ? {
+      bankName: '',
+      branch: branchLoaded,
+      state: ''
+    } : null);
     setError('');
+    setFrontRemoving(false);
+    setBackRemoving(false);
+    setPanCardRemoving(false);
+    setPassRemoving(false);
   }, [jobForm, correction]);
 
   const uploadKyc = async (kind, file) => {
@@ -703,8 +925,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       setFrontErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
-    if (file.size > KYC_MAX_BYTES) {
-      setFrontErr('File must be 12 MB or smaller.');
+    if (file.size > KYC_IMAGE_MAX_BYTES) {
+      setFrontErr('File must be 5 MB or smaller.');
       return;
     }
     setFrontErr('');
@@ -728,8 +950,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       setBackErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
-    if (file.size > KYC_MAX_BYTES) {
-      setBackErr('File must be 12 MB or smaller.');
+    if (file.size > KYC_IMAGE_MAX_BYTES) {
+      setBackErr('File must be 5 MB or smaller.');
       return;
     }
     setBackErr('');
@@ -757,8 +979,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       setPanCardErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
-    if (file.size > KYC_MAX_BYTES) {
-      setPanCardErr('File must be 12 MB or smaller.');
+    if (file.size > KYC_IMAGE_MAX_BYTES) {
+      setPanCardErr('File must be 5 MB or smaller.');
       return;
     }
     setPanCardErr('');
@@ -782,7 +1004,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       setPassErr('Upload an image or PDF.');
       return;
     }
-    if (file.size > KYC_MAX_BYTES) {
+    if (file.size > KYC_PASSBOOK_MAX_BYTES) {
       setPassErr('File must be 12 MB or smaller.');
       return;
     }
@@ -794,6 +1016,26 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       setPassErr(err.message || 'Upload failed.');
     } finally {
       setPassUp(false);
+    }
+  };
+
+  const handleRemoveKycDocument = async ({ field, url, setUrl, setErr, setRemoving, onRemoved }) => {
+    if (!url) return;
+    setErr?.('');
+    setRemoving(true);
+    try {
+      await api.deleteOnboardingDocument({
+        mobile,
+        employeeId,
+        field,
+        url,
+      });
+      setUrl('');
+      onRemoved?.();
+    } catch (err) {
+      setErr?.(err.message || 'Could not remove file.');
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -816,7 +1058,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       .then((result) => {
         setPanNumber((result.pan_number ?? p).toUpperCase());
         setPanVerified(true);
-        setPanVerifyMsg('PAN verified successfully.');
+        setPanVerifyMsg('');
       })
       .catch((err) => {
         setPanVerified(false);
@@ -869,9 +1111,9 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           branch: String(ifscDetails.branch ?? '').trim(),
           state: String(ifscDetails.state ?? '').trim()
         });
-        setBankBranchConfirmed(false);
+        setBankBranchConfirmed(true);
         setBankVerified(true);
-        setBankVerifyMsg('Bank details verified. Please confirm the branch below.');
+        setBankVerifyMsg('');
       })
       .catch((err) => {
         setBankVerified(false);
@@ -897,7 +1139,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     isRequired('kyc_account_holder_name', true) ||
     isRequired('kyc_account_number', true) ||
     isRequired('kyc_ifsc_code', true);
-  const bankOk = !bankRequired || (bankVerified && bankBranchConfirmed);
+  const bankOk = !bankRequired || bankVerified;
   const canNext = docsOk && panOk && bankOk;
 
   const handleNext = async () => {
@@ -919,6 +1161,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           .replace(/\s/g, '')
           .toUpperCase(),
         kyc_bank_passbook_url: String(passbookUrl).trim(),
+        kyc_bank_branch_confirmed: bankVerified ? true : false,
       });
       onSaveSuccess?.(form);
     } catch (err) {
@@ -948,50 +1191,62 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       <section className="space-y-5 rounded-xl border border-slate-200 bg-slate-50/60 p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Aadhaar card</h3>
         <div className="grid gap-5 sm:grid-cols-2">
-          {shouldShow('kyc_aadhar_front_url') && <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-aad-front">
-              Aadhaar front {isRequired('kyc_aadhar_front_url', true) && <span className="text-rose-500">*</span>}
-            </label>
-            <input
-              id="kyc-aad-front"
-              type="file"
+          {shouldShow('kyc_aadhar_front_url') && (
+            <DocUploadField
+              label="Aadhaar front"
+              required={isRequired('kyc_aadhar_front_url', true)}
+              inputId="kyc-aad-front"
               accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
-              disabled={frontUp}
+              uploading={frontUp}
+              error={frontErr}
+              hint="Only JPG, JPEG, PNG, WEBP allowed · max 5MB"
+              url={frontUrl}
+              onRemove={() => handleRemoveKycDocument({
+                field: 'kyc_aadhar_front_url',
+                url: frontUrl,
+                setUrl: setFrontUrl,
+                setErr: setFrontErr,
+                setRemoving: setFrontRemoving,
+                onRemoved: () => setFrontHint(null),
+              })}
+              removing={frontRemoving}
               onChange={handleAadhaarFront}
-              className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-            />
-            <p className="mt-1 text-xs text-slate-500">Only JPG, JPEG, PNG, WEBP allowed · max 12MB</p>
-            {frontUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-            {frontErr && <p className="mt-2 text-sm text-rose-600">{frontErr}</p>}
-            {frontHint && (
-              <p className={`mt-2 text-sm ${frontHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {frontHint.text}
-              </p>
-            )}
-            {frontUrl && !frontUp && <UploadedFileBanner href={frontUrl} />}
-          </div>}
-          {shouldShow('kyc_aadhar_back_url') && <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-aad-back">
-              Aadhaar back {isRequired('kyc_aadhar_back_url', true) && <span className="text-rose-500">*</span>}
-            </label>
-            <input
-              id="kyc-aad-back"
-              type="file"
+            >
+              {frontHint && (
+                <p className={`mt-2 text-sm ${frontHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {frontHint.text}
+                </p>
+              )}
+            </DocUploadField>
+          )}
+          {shouldShow('kyc_aadhar_back_url') && (
+            <DocUploadField
+              label="Aadhaar back"
+              required={isRequired('kyc_aadhar_back_url', true)}
+              inputId="kyc-aad-back"
               accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
-              disabled={backUp}
+              uploading={backUp}
+              error={backErr}
+              hint="Only JPG, JPEG, PNG, WEBP allowed · max 5MB"
+              url={backUrl}
+              onRemove={() => handleRemoveKycDocument({
+                field: 'kyc_aadhar_back_url',
+                url: backUrl,
+                setUrl: setBackUrl,
+                setErr: setBackErr,
+                setRemoving: setBackRemoving,
+                onRemoved: () => setBackHint(null),
+              })}
+              removing={backRemoving}
               onChange={handleAadhaarBack}
-              className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-            />
-            <p className="mt-1 text-xs text-slate-500">Only JPG, JPEG, PNG, WEBP allowed · max 12MB</p>
-            {backUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-            {backErr && <p className="mt-2 text-sm text-rose-600">{backErr}</p>}
-            {backHint && (
-              <p className={`mt-2 text-sm ${backHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {backHint.text}
-              </p>
-            )}
-            {backUrl && !backUp && <UploadedFileBanner href={backUrl} />}
-          </div>}
+            >
+              {backHint && (
+                <p className={`mt-2 text-sm ${backHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {backHint.text}
+                </p>
+              )}
+            </DocUploadField>
+          )}
         </div>
       </section>
       )}
@@ -1023,39 +1278,50 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           <button
             type="button"
             onClick={handleVerifyPan}
-            disabled={panVerifying}
-            className="shrink-0 rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
+            disabled={panVerifying || panVerified}
+            className={`shrink-0 rounded-lg px-4 py-3 text-sm font-semibold text-white ${
+              panVerified
+                ? 'cursor-not-allowed bg-emerald-600'
+                : 'bg-indigo-600 hover:bg-indigo-700'
+            }`}
           >
-            {panVerifying ? 'Verifying…' : 'Verify PAN'}
+            {panVerifying ? 'Verifying…' : panVerified ? 'Verified' : 'Verify PAN'}
           </button>
         </div>}
         {shouldShow('kyc_pan_number') && panVerifyMsg && (
           <p className={`text-sm ${panVerified ? 'text-emerald-700' : 'text-rose-600'}`}>{panVerifyMsg}</p>
         )}
-        {shouldShow('kyc_pan_card_url') && <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-pan-card">
-            PAN card image {isRequired('kyc_pan_card_url', true) && <span className="text-rose-500">*</span>}
-          </label>
-          <input
-            id="kyc-pan-card"
-            type="file"
+        {shouldShow('kyc_pan_card_url') && (
+          <DocUploadField
+            label="PAN card image"
+            required={isRequired('kyc_pan_card_url', true)}
+            inputId="kyc-pan-card"
             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
-            disabled={panCardUp || !panVerified}
-            onChange={handlePanCard}
-            className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-          />
-          <p className="mt-1 text-xs text-slate-500">
-            Only JPG, JPEG, PNG, WEBP allowed · max 12MB · verify PAN number first
-          </p>
-          {panCardUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-          {panCardErr && <p className="mt-2 text-sm text-rose-600">{panCardErr}</p>}
-          {panCardHint && (
-            <p className={`mt-2 text-sm ${panCardHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
-              {panCardHint.text}
-            </p>
-          )}
-          {panCardUrl && !panCardUp && <UploadedFileBanner href={panCardUrl} />}
-        </div>}
+            uploading={panCardUp}
+            error={panCardErr}
+            hint={panVerified ? 'Only JPG, JPEG, PNG, WEBP allowed · max 5MB' : 'Verify PAN number above before uploading'}
+            url={panCardUrl}
+            onRemove={() => handleRemoveKycDocument({
+              field: 'kyc_pan_card_url',
+              url: panCardUrl,
+              setUrl: setPanCardUrl,
+              setErr: setPanCardErr,
+              setRemoving: setPanCardRemoving,
+              onRemoved: () => setPanCardHint(null),
+            })}
+            removing={panCardRemoving}
+            onChange={!panVerified ? undefined : handlePanCard}
+          >
+            {!panVerified && !panCardUrl && (
+              <p className="mt-1.5 text-xs text-amber-700">Verify PAN number first to enable upload.</p>
+            )}
+            {panCardHint && (
+              <p className={`mt-2 text-sm ${panCardHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {panCardHint.text}
+              </p>
+            )}
+          </DocUploadField>
+        )}
       </section>
       )}
 
@@ -1128,10 +1394,14 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) && <button
           type="button"
           onClick={handleVerifyBank}
-          disabled={bankVerifying}
-          className="rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
+          disabled={bankVerifying || bankVerified}
+          className={`rounded-lg px-4 py-3 text-sm font-semibold text-white ${
+            bankVerified
+              ? 'cursor-not-allowed bg-emerald-600'
+              : 'bg-indigo-600 hover:bg-indigo-700'
+          }`}
         >
-          {bankVerifying ? 'Verifying…' : 'Verify bank'}
+          {bankVerifying ? 'Verifying…' : bankVerified ? 'Verified' : 'Verify bank'}
         </button>}
         {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) && (
           <p className="text-xs text-slate-500">
@@ -1143,11 +1413,13 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         )}
         {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) &&
           bankVerified &&
-          bankBranchSummary && (
+          (bankBranchSummary || bankBranchConfirmed) && (
             <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3">
-              <p className="text-sm font-medium text-sky-900">
-                {bankBranchSummary.bankName || '—'}, {bankBranchSummary.branch || '—'}, {bankBranchSummary.state || '—'}
-              </p>
+              {bankBranchSummary && (
+                <p className="text-sm font-medium text-sky-900">
+                  {bankBranchSummary.bankName || '—'}, {bankBranchSummary.branch || '—'}, {bankBranchSummary.state || '—'}
+                </p>
+              )}
               <label className="mt-2 inline-flex items-start gap-2 text-sm text-slate-800">
                 <input
                   type="checkbox"
@@ -1164,23 +1436,27 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
               )}
             </div>
           )}
-        {shouldShow('kyc_bank_passbook_url') && <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-passbook">
-            Bank passbook / statement {isRequired('kyc_bank_passbook_url', true) && <span className="text-rose-500">*</span>}
-          </label>
-          <input
-            id="kyc-passbook"
-            type="file"
+        {shouldShow('kyc_bank_passbook_url') && (
+          <DocUploadField
+            label="Bank passbook / statement"
+            required={isRequired('kyc_bank_passbook_url', true)}
+            inputId="kyc-passbook"
             accept="image/*,.pdf,application/pdf"
-            disabled={passUp}
+            uploading={passUp}
+            error={passErr}
+            hint="Image or PDF · max 12MB"
+            url={passbookUrl}
+            onRemove={() => handleRemoveKycDocument({
+              field: 'kyc_bank_passbook_url',
+              url: passbookUrl,
+              setUrl: setPassbookUrl,
+              setErr: setPassErr,
+              setRemoving: setPassRemoving,
+            })}
+            removing={passRemoving}
             onChange={handlePassbook}
-            className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
           />
-          <p className="mt-1 text-xs text-slate-500">Image or PDF · max 12MB</p>
-          {passUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-          {passErr && <p className="mt-2 text-sm text-rose-600">{passErr}</p>}
-          {passbookUrl && !passUp && <UploadedFileBanner href={passbookUrl} />}
-        </div>}
+        )}
       </section>
       )}
 
@@ -1217,6 +1493,8 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   const [policeUrl, setPoliceUrl] = useState(() => jobForm.bp_police_verification_url ?? '');
   const [photoUp, setPhotoUp] = useState(false);
   const [policeUp, setPoliceUp] = useState(false);
+  const [photoRemoving, setPhotoRemoving] = useState(false);
+  const [policeRemoving, setPoliceRemoving] = useState(false);
   const [photoErr, setPhotoErr] = useState('');
   const [policeErr, setPoliceErr] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1235,6 +1513,8 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     setPoliceUrl(visible?.has('bp_police_verification_url') ? '' : (jobForm.bp_police_verification_url ?? ''));
     setPhotoErr('');
     setPoliceErr('');
+    setPhotoRemoving(false);
+    setPoliceRemoving(false);
     setError('');
     if (!correction?.active && String(jobForm.submission_status ?? '').trim() === 'Submitted') {
       setSubmitted(true);
@@ -1288,6 +1568,25 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
       setPoliceErr(err.message || 'Upload failed.');
     } finally {
       setPoliceUp(false);
+    }
+  };
+
+  const handleRemoveBankPhotoDocument = async ({ field, currentUrl, setUrl, setErr, setRemoving }) => {
+    if (!currentUrl) return;
+    setErr?.('');
+    setRemoving(true);
+    try {
+      await api.deleteOnboardingDocument({
+        mobile,
+        employeeId,
+        field,
+        url: currentUrl,
+      });
+      setUrl('');
+    } catch (err) {
+      setErr?.(err.message || 'Could not remove file.');
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -1364,23 +1663,27 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
       </div>
 
       <div className="space-y-6">
-        {shouldShow('bp_passport_photo_url') && <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-passport-photo">
-            Passport Size Photo {isRequired('bp_passport_photo_url', true) && <span className="text-rose-500">*</span>}
-          </label>
-          <input
-            id="bp-passport-photo"
-            type="file"
+        {shouldShow('bp_passport_photo_url') && (
+          <DocUploadField
+            label="Passport Size Photo"
+            required={isRequired('bp_passport_photo_url', true)}
+            inputId="bp-passport-photo"
             accept="image/*"
-            disabled={photoUp}
+            uploading={photoUp}
+            error={photoErr}
+            hint="Max file size: 12MB. Supported: image/*"
+            url={photoUrl}
+            onRemove={() => handleRemoveBankPhotoDocument({
+              field: 'bp_passport_photo_url',
+              currentUrl: photoUrl,
+              setUrl: setPhotoUrl,
+              setErr: setPhotoErr,
+              setRemoving: setPhotoRemoving,
+            })}
+            removing={photoRemoving}
             onChange={handlePassportFile}
-            className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
           />
-          <p className="mt-1.5 text-xs text-slate-500">Max file size: 12MB. Supported: image/*</p>
-          {photoUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-          {photoErr && <p className="mt-2 text-sm text-rose-600">{photoErr}</p>}
-          {photoUrl && !photoUp && <UploadedFileBanner href={photoUrl} />}
-        </div>}
+        )}
 
         {(shouldShow('bp_esic_number') || shouldShow('bp_pf_uan_number') || shouldShow('bp_police_verification_url')) && (
         <div className="border-t border-slate-200 pt-6">
@@ -1462,26 +1765,27 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
               {hasPfUanError && <p className="mt-1.5 text-sm text-rose-600">{hasPfUanError}</p>}
               {pfUanError && <p className="mt-1.5 text-sm text-rose-600">{pfUanError}</p>}
             </div>}
-            {shouldShow('bp_police_verification_url') && <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-police">
-                Police Verification Document (Optional)
-              </label>
-              <input
-                id="bp-police"
-                type="file"
+            {shouldShow('bp_police_verification_url') && (
+              <DocUploadField
+                label="Police Verification Document (Optional)"
+                required={false}
+                inputId="bp-police"
                 accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                disabled={policeUp}
+                uploading={policeUp}
+                error={policeErr}
+                hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
+                url={policeUrl}
+                onRemove={() => handleRemoveBankPhotoDocument({
+                  field: 'bp_police_verification_url',
+                  currentUrl: policeUrl,
+                  setUrl: setPoliceUrl,
+                  setErr: setPoliceErr,
+                  setRemoving: setPoliceRemoving,
+                })}
+                removing={policeRemoving}
                 onChange={handlePoliceFile}
-                className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
               />
-              <p className="mt-1.5 text-xs text-slate-500">
-                Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx
-              </p>
-              <p className="mt-1 text-xs text-slate-500">Optional: Upload police verification document if available</p>
-              {policeUp && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-              {policeErr && <p className="mt-2 text-sm text-rose-600">{policeErr}</p>}
-              {policeUrl && !policeUp && <UploadedFileBanner href={policeUrl} />}
-            </div>}
+            )}
           </div>
         </div>
         )}
@@ -1530,9 +1834,11 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
 }
 
 function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, correction }) {
+  const requireLicenseUpload = clientRequiresLicenseUpload(jobForm);
   const [draft, setDraft] = useState(() => buildPersonalDraft(jobForm));
   const [licenseImageUrl, setLicenseImageUrl] = useState(() => jobForm.pd_driving_license_url ?? '');
   const [licenseUploading, setLicenseUploading] = useState(false);
+  const [licenseRemoving, setLicenseRemoving] = useState(false);
   const [licenseError, setLicenseError] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -1565,6 +1871,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       setLicenseImageUrl(jobForm.pd_driving_license_url ?? '');
     }
     setLicenseError('');
+    setLicenseRemoving(false);
   }, [jobForm, correction]);
 
   const dobIso = jobForm.aad_dob ? String(jobForm.aad_dob).slice(0, 10) : '';
@@ -1611,9 +1918,14 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       : sameAsAadhaarChoice === 'no'
         ? PINCODE_REGEX.test(currentPincodeValue)
         : false;
-  const shouldShow = (field) => !correction?.active || correction.visibleFields.has(field);
-  const isRequired = (field, fallbackRequired = false) =>
-    correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
+  const shouldShow = (field) => {
+    if ((field === 'pd_driving_license' || field === 'pd_driving_license_url') && !requireLicenseUpload) return false;
+    return !correction?.active || correction.visibleFields.has(field);
+  };
+  const isRequired = (field, fallbackRequired = false) => {
+    if ((field === 'pd_driving_license' || field === 'pd_driving_license_url') && !requireLicenseUpload) return false;
+    return correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
+  };
 
   const requiredOk =
     (!isRequired('email', true) || String(draft.email).trim()) &&
@@ -1653,6 +1965,25 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       setLicenseError(err.message || 'Upload failed.');
     } finally {
       setLicenseUploading(false);
+    }
+  };
+
+  const handleRemoveLicenseFile = async () => {
+    if (!licenseImageUrl || licenseRemoving) return;
+    setLicenseError('');
+    setLicenseRemoving(true);
+    try {
+      await api.deleteOnboardingDocument({
+        mobile,
+        employeeId,
+        field: 'pd_driving_license_url',
+        url: licenseImageUrl,
+      });
+      setLicenseImageUrl('');
+    } catch (err) {
+      setLicenseError(err.message || 'Could not remove file.');
+    } finally {
+      setLicenseRemoving(false);
     }
   };
 
@@ -1740,8 +2071,8 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         pd_current_city: currentCityPayload,
         pd_current_pincode: currentPincodePayload,
         pd_marital_status: String(draft.pd_marital_status).trim(),
-        pd_driving_license: dl,
-        pd_driving_license_url: needsLicenseImage ? String(licenseImageUrl).trim() : null,
+        pd_driving_license: requireLicenseUpload ? dl : null,
+        pd_driving_license_url: requireLicenseUpload && needsLicenseImage ? String(licenseImageUrl).trim() : null,
       });
       onSaveSuccess?.(form);
     } catch (err) {
@@ -1987,22 +2318,19 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             </div>
           )}
           {shouldShow('pd_driving_license_url') && needsLicenseImage && (
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="driving-license-file">
-                Upload Driving License Image {isRequired('pd_driving_license_url', true) && <span className="text-rose-500">*</span>}
-              </label>
-              <input
-                id="driving-license-file"
-                type="file"
-                accept="image/*"
-                disabled={licenseUploading}
-                onChange={handleLicenseFile}
-                className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              {licenseUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-              {licenseError && <p className="mt-2 text-sm text-rose-600">{licenseError}</p>}
-              {licenseImageUrl && !licenseUploading && <UploadedFileBanner href={licenseImageUrl} />}
-            </div>
+            <DocUploadField
+              label="Upload Driving License Image"
+              required={isRequired('pd_driving_license_url', true)}
+              inputId="driving-license-file"
+              accept="image/*"
+              uploading={licenseUploading}
+              error={licenseError}
+              hint="Max file size: 12MB. Supported: image/*"
+              url={licenseImageUrl}
+              onRemove={handleRemoveLicenseFile}
+              removing={licenseRemoving}
+              onChange={handleLicenseFile}
+            />
           )}
           {(shouldShow('pd_emergency_contact_name') ||
             shouldShow('pd_alternate_number') ||
@@ -2352,51 +2680,47 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               />
             </div>
           )}
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
-              Do you have a Driving License? <span className="text-rose-500">*</span>
-            </label>
-            <select
-              className={fieldClass(false)}
-              value={draft.pd_driving_license}
-              onChange={(e) => {
-                const v = e.target.value;
-                setDraft((d) => ({ ...d, pd_driving_license: v }));
-                if (v !== 'Yes') {
-                  setLicenseImageUrl('');
-                  setLicenseError('');
-                }
-              }}
-            >
-              <option value="">Select</option>
-              {DRIVING_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {needsLicenseImage && (
+          {shouldShow('pd_driving_license') && (
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="driving-license-file">
-                Upload Driving License Image <span className="text-rose-500">*</span>
+              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                Do you have a Driving License? <span className="text-rose-500">*</span>
               </label>
-              <input
-                id="driving-license-file"
-                type="file"
-                accept="image/*"
-                disabled={licenseUploading}
-                onChange={handleLicenseFile}
-                className="block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              <p className="mt-1.5 text-xs text-slate-500">
-                Max file size: 12MB. Supported: image/* (JPEG, PNG, WebP, GIF, HEIC, etc.)
-              </p>
-              {licenseUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
-              {licenseError && <p className="mt-2 text-sm text-rose-600">{licenseError}</p>}
-              {licenseImageUrl && !licenseUploading && <UploadedFileBanner href={licenseImageUrl} />}
+              <select
+                className={fieldClass(false)}
+                value={draft.pd_driving_license}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDraft((d) => ({ ...d, pd_driving_license: v }));
+                  if (v !== 'Yes') {
+                    setLicenseImageUrl('');
+                    setLicenseError('');
+                  }
+                }}
+              >
+                <option value="">Select</option>
+                {DRIVING_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
             </div>
+          )}
+
+          {shouldShow('pd_driving_license_url') && needsLicenseImage && (
+            <DocUploadField
+              label="Upload Driving License Image"
+              required
+              inputId="driving-license-file"
+              accept="image/*"
+              uploading={licenseUploading}
+              error={licenseError}
+              hint="Max file size: 12MB. Supported: image/* (JPEG, PNG, WebP, GIF, HEIC, etc.)"
+              url={licenseImageUrl}
+              onRemove={handleRemoveLicenseFile}
+              removing={licenseRemoving}
+              onChange={handleLicenseFile}
+            />
           )}
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
             <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Emergency Contact</h4>
@@ -2487,6 +2811,7 @@ export default function OnboardingForm() {
 
   const [aadhaarComplete, setAadhaarComplete] = useState(false);
   const [aadhaarKyc, setAadhaarKyc] = useState(null);
+  const [aadhaarResumeFlow, setAadhaarResumeFlow] = useState(false);
 
   const [formView, setFormView] = useState('onboarding');
   const [jobFormRow, setJobFormRow] = useState(null);
@@ -2598,6 +2923,28 @@ export default function OnboardingForm() {
   const hasValidAadhaar = TWELVE_DIGIT_REGEX.test(aadhaar);
   const hasValidOtp = SIX_DIGIT_REGEX.test(otp);
 
+  const setupAadhaarStepFromForm = (form) => {
+    const savedAadhaar = normalizeAadhaar(form?.aadhaar_number ?? '');
+    const savedKyc = aadhaarKycFromForm(form);
+    const canUseResumeFlow = form?.aadhaar_verified === true && TWELVE_DIGIT_REGEX.test(savedAadhaar);
+
+    setAadhaar(savedAadhaar);
+    setOtp('');
+    setAadhaarError('');
+    setAadhaarComplete(false);
+
+    if (canUseResumeFlow) {
+      setAadhaarResumeFlow(true);
+      setAadhaarPhase('resume_input');
+      setAadhaarKyc(savedKyc);
+      return;
+    }
+
+    setAadhaarResumeFlow(false);
+    setAadhaarKyc(null);
+    setAadhaarPhase('input');
+  };
+
   useEffect(() => {
     if (!employeeSpecificLink) {
       setPrefillLoading(false);
@@ -2615,9 +2962,26 @@ export default function OnboardingForm() {
           throw new Error('Could not load a valid mobile number for this onboarding link.');
         }
         if (cancelled) return;
+        const { form } = await api.getJobAppForm({ mobile: fetchedMobile, employeeId });
+        const reviewStatus = String(form?.review_status ?? '').trim();
+        const submitted = String(form?.submission_status ?? '').trim() === 'Submitted';
+        const isFinalized = reviewStatus === 'APPROVED' || reviewStatus === 'REJECTED';
+        const isWaitingForPm = submitted && reviewStatus !== 'CORRECTION_REQUESTED';
+        if (isFinalized || isWaitingForPm) {
+          navigateToStatus(fetchedMobile);
+          return;
+        }
         setMobile(fetchedMobile);
         setMobileVerified(true);
-        setAadhaarPhase('input');
+        if (resumeMode && reviewStatus === 'CORRECTION_REQUESTED') {
+          setAadhaarResumeFlow(false);
+          setAadhaarComplete(true);
+          setJobFormRow(form);
+          setFormView(resolveResumeFormView());
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          return;
+        }
+        setupAadhaarStepFromForm(form);
       } catch (err) {
         if (cancelled) return;
         setMobileError(err.message || 'Unable to validate this onboarding link right now.');
@@ -2654,6 +3018,7 @@ export default function OnboardingForm() {
       }
       if (resumeMode && reviewStatus === 'CORRECTION_REQUESTED') {
         setMobileVerified(true);
+        setAadhaarResumeFlow(false);
         setAadhaarComplete(true);
         setJobFormRow(form);
         setFormView(resolveResumeFormView());
@@ -2661,7 +3026,7 @@ export default function OnboardingForm() {
         return;
       }
       setMobileVerified(true);
-      setAadhaarPhase('input');
+      setupAadhaarStepFromForm(form);
     } catch (err) {
       setMobileError(err.message || 'Unable to verify mobile number right now.');
     } finally {
@@ -2684,13 +3049,41 @@ export default function OnboardingForm() {
     }
   };
 
+  const handleSendAadhaarResumeOtp = async () => {
+    if (aadhaarSubmitting || !mobileVerified) return;
+    setAadhaarSubmitting(true);
+    setAadhaarError('');
+    try {
+      await api.sendAadhaarResumeOtp({ mobile, employeeId });
+      setOtp('');
+      setAadhaarPhase('resume_otp');
+    } catch (err) {
+      setAadhaarError(err.message || 'Could not send OTP. Try again.');
+    } finally {
+      setAadhaarSubmitting(false);
+    }
+  };
+
   const handleVerifyOtp = async () => {
     if (!hasValidOtp || otpVerifying) return;
     setOtpVerifying(true);
     setAadhaarError('');
     try {
-      const result = await api.verifyAadhaarOtp({ mobile, employeeId, otp });
-      setAadhaarKyc(result.aadhaarDetails ?? null);
+      const result = aadhaarResumeFlow
+        ? await api.verifyAadhaarResumeOtp({ mobile, employeeId, otp })
+        : await api.verifyAadhaarOtp({ mobile, employeeId, otp });
+      if (result?.aadhaar_number) {
+        setAadhaar(normalizeAadhaar(result.aadhaar_number));
+      }
+      setAadhaarKyc(result.aadhaarDetails ?? aadhaarKyc ?? null);
+      // Read back persisted form immediately so the flow reflects saved DB state.
+      try {
+        const { form } = await api.getJobAppForm({ mobile, employeeId });
+        if (form?.aadhaar_number) setAadhaar(normalizeAadhaar(form.aadhaar_number));
+        setAadhaarKyc(aadhaarKycFromForm(form) ?? result.aadhaarDetails ?? aadhaarKyc ?? null);
+      } catch {
+        // Ignore refresh failures here; OTP verification already succeeded.
+      }
       setAadhaarComplete(true);
     } catch (err) {
       setAadhaarError(err.message || 'Verification failed.');
@@ -2818,7 +3211,9 @@ export default function OnboardingForm() {
                   ? 'Please enter your mobile number to begin your application'
                   : aadhaarComplete
                     ? 'Your Aadhaar has been verified. Review your details below.'
-                    : 'Verify your Aadhaar to continue your application'}
+                    : aadhaarResumeFlow
+                      ? 'Aadhaar already verified. Confirm with OTP to continue.'
+                      : 'Verify your Aadhaar to continue your application'}
               </p>
             </div>
 
@@ -2891,7 +3286,89 @@ export default function OnboardingForm() {
                     <h3 className="text-lg font-semibold">Aadhaar Verification</h3>
                   </div>
 
-                  {aadhaarPhase === 'input' && (
+                  {aadhaarResumeFlow && (aadhaarPhase === 'resume_input' || aadhaarPhase === 'resume_otp') && (
+                    <>
+                      <div className="cursor-not-allowed">
+                        <label
+                          htmlFor="onboarding-aadhaar-resume"
+                          className="mb-2 block cursor-inherit text-xl font-medium text-slate-800"
+                        >
+                          Aadhaar Number
+                        </label>
+                        <input
+                          id="onboarding-aadhaar-resume"
+                          type="text"
+                          value={aadhaar}
+                          readOnly
+                          className="w-full cursor-not-allowed select-none rounded-xl border border-slate-200 bg-sky-50 px-5 py-4 text-2xl tabular-nums tracking-widest text-slate-900"
+                        />
+                        <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900">
+                          <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                          <p className="text-sm font-medium">Aadhaar already verified</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-8 rounded-xl border border-indigo-100 bg-indigo-50 p-5">
+                        {aadhaarPhase === 'resume_input' ? (
+                          <>
+                            <p className="mb-4 text-sm text-indigo-900">
+                              To continue, we will send a one-time password to your registered mobile{' '}
+                              <span className="font-semibold tabular-nums">{mobile}</span>.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={handleSendAadhaarResumeOtp}
+                              disabled={aadhaarSubmitting}
+                              className="w-full rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-10"
+                            >
+                              {aadhaarSubmitting ? 'Sending OTP...' : 'Send OTP'}
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <p className="mb-4 text-sm text-indigo-900">
+                              OTP sent to your mobile{' '}
+                              <span className="font-semibold tabular-nums">{mobile}</span>. Enter it below.
+                            </p>
+                            <label htmlFor="onboarding-resume-otp" className="mb-2 block text-sm font-medium text-slate-800">
+                              Enter OTP <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              id="onboarding-resume-otp"
+                              type="text"
+                              value={otp}
+                              onChange={(e) => setOtp(normalizeOtp(e.target.value))}
+                              inputMode="numeric"
+                              maxLength={6}
+                              className="mb-4 w-full max-w-xs rounded-lg border border-slate-300 bg-white px-4 py-3 text-center text-xl tracking-[0.3em] text-slate-900 tabular-nums"
+                              placeholder="6-digit OTP"
+                              autoComplete="one-time-code"
+                            />
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                              <button
+                                type="button"
+                                onClick={handleVerifyOtp}
+                                disabled={!hasValidOtp || otpVerifying}
+                                className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {otpVerifying ? 'Verifying...' : 'Verify OTP'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSendAadhaarResumeOtp}
+                                disabled={aadhaarSubmitting}
+                                className="inline-flex items-center justify-center rounded-lg border border-indigo-400 bg-white px-6 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {aadhaarSubmitting ? 'Resending...' : 'Resend OTP'}
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {!aadhaarResumeFlow && aadhaarPhase === 'input' && (
                     <>
                       <p className="mb-4 text-sm text-slate-600">
                         Enter the 12-digit Aadhaar number linked to your mobile{' '}
@@ -2923,7 +3400,7 @@ export default function OnboardingForm() {
                     </>
                   )}
 
-                  {aadhaarPhase === 'otp' && (
+                  {!aadhaarResumeFlow && aadhaarPhase === 'otp' && (
                     <>
                       <div className="mb-5 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
                         OTP sent to your Aadhaar-registered mobile number.

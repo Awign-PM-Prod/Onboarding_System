@@ -30,6 +30,7 @@ const ORDERED_FIELDS = [
   'pd_city',
   'pd_age',
   'qual_highest_qualification',
+  'qual_highest_qualification_doc_url',
   'qual_education_certificate_url',
   'qual_additional_certificates_url',
   'kyc_aadhar_front_url',

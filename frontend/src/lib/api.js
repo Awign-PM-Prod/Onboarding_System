@@ -226,6 +226,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ mobile, employee_id: employeeId || null, otp })
     }),
+  sendAadhaarResumeOtp: ({ mobile, employeeId }) =>
+    request('/api/public/onboarding/aadhaar/resume/send-otp', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, employee_id: employeeId || null })
+    }),
+  verifyAadhaarResumeOtp: ({ mobile, employeeId, otp }) =>
+    request('/api/public/onboarding/aadhaar/resume/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, employee_id: employeeId || null, otp })
+    }),
   verifyPan: ({ mobile, employeeId, panNumber }) =>
     request('/api/public/onboarding/pan/verify', {
       method: 'POST',
@@ -277,12 +287,14 @@ export const api = {
     fd.append('file', file);
     return uploadRequest('/api/public/onboarding/driving-license-upload', fd);
   },
-  uploadQualificationCertificate: ({ mobile, employeeId, file }) => {
+  uploadQualificationCertificate: ({ mobile, employeeId, file, kind = 'iti_diploma_doc' }) => {
+    const q = new URLSearchParams();
+    q.set('kind', kind);
     const fd = new FormData();
     fd.append('mobile', mobile);
     if (employeeId) fd.append('employee_id', employeeId);
     fd.append('file', file);
-    return uploadRequest('/api/public/onboarding/qualification-certificate-upload', fd);
+    return uploadRequest(`/api/public/onboarding/qualification-certificate-upload?${q.toString()}`, fd);
   },
   uploadKycDocument: ({ mobile, employeeId, file, kind }) => {
     const q = new URLSearchParams();
@@ -313,5 +325,15 @@ export const api = {
     if (employeeId) fd.append('employee_id', employeeId);
     fd.append('file', file);
     return uploadRequest(`/api/public/onboarding/bp-document-upload?${q.toString()}`, fd);
-  }
+  },
+  deleteOnboardingDocument: ({ mobile, employeeId, field, url }) =>
+    request('/api/public/onboarding/delete-document', {
+      method: 'POST',
+      body: JSON.stringify({
+        mobile,
+        employee_id: employeeId || null,
+        field,
+        url: url || null,
+      })
+    })
 };
