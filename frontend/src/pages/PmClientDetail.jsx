@@ -101,6 +101,7 @@ export default function PmClientDetail() {
   const [responseModalError, setResponseModalError] = useState('');
   const [responseDecisionLoading, setResponseDecisionLoading] = useState(false);
   const [joiningBulkStatus, setJoiningBulkStatus] = useState('');
+  const [responsesExportLoading, setResponsesExportLoading] = useState(false);
   const [joiningBulkDate, setJoiningBulkDate] = useState('');
   const [joiningBulkLoading, setJoiningBulkLoading] = useState(false);
   const [joiningInlineEmployeeId, setJoiningInlineEmployeeId] = useState(null);
@@ -575,6 +576,33 @@ export default function PmClientDetail() {
       setResponseModalError(err.message || 'Could not submit review decision.');
     } finally {
       setResponseDecisionLoading(false);
+    }
+  };
+
+  const handleExportResponsesCsv = async () => {
+    if (selectedIds.size === 0) return;
+    setResponsesExportLoading(true);
+    setError(null);
+    try {
+      const blob = await api.exportJobAppFormsCsv({
+        clientId: id,
+        employeeIds: Array.from(selectedIds)
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const safeClient = String(client?.name ?? 'client').replace(/[^\w.-]+/g, '_').slice(0, 40);
+      a.download = `${safeClient}-onboarding-responses.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setToast(`Downloaded CSV for ${selectedIds.size} response${selectedIds.size === 1 ? '' : 's'}.`);
+      setTimeout(() => setToast(null), 3500);
+    } catch (err) {
+      setError(err.message || 'Could not export responses.');
+    } finally {
+      setResponsesExportLoading(false);
     }
   };
 
@@ -1294,6 +1322,24 @@ export default function PmClientDetail() {
           </div>
         )}
 
+        {activeTab === 'in_progress' && inProgressSubtab === 'responses' && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+            <p className="text-sm text-indigo-900">
+              Select submitted responses and download one CSV with all answers and document links (links download files when opened).
+            </p>
+            <button
+              type="button"
+              onClick={handleExportResponsesCsv}
+              disabled={selectedIds.size === 0 || responsesExportLoading}
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {responsesExportLoading
+                ? 'Preparing CSV...'
+                : `Download CSV${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
+            </button>
+          </div>
+        )}
+
         {activeTab === 'pl_reviewed' && (
           <div className="mb-4 flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50/80 p-1.5">
             <button
@@ -1332,6 +1378,7 @@ export default function PmClientDetail() {
           selectable={
             activeTab === 'pending' ||
             activeTab === 'role_assigned' ||
+            (activeTab === 'in_progress' && inProgressSubtab === 'responses') ||
             (activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') ||
             (activeTab === 'in_progress' && inProgressSubtab === 'rejected') ||
             (activeTab === 'pl_reviewed' && plReviewedSubtab === 'rejected')

@@ -175,6 +175,15 @@ export const api = {
     }),
   exportPayrollIdentityNumbersCsv: ({ clientId }) =>
     fileRequest(`/api/employees/identity-numbers/export?client_id=${encodeURIComponent(clientId)}`),
+  exportJobAppFormsCsv: ({ clientId, employeeIds }) =>
+    fileRequest('/api/employees/job-app-forms/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        employee_ids: employeeIds
+      })
+    }),
   importPayrollIdentityNumbersCsv: ({ clientId, file }) => {
     const fd = new FormData();
     fd.append('client_id', clientId);

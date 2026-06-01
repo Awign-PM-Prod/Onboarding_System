@@ -3,6 +3,7 @@ import multer from 'multer';
 import Papa from 'papaparse';
 import readXlsxFile, { parseExcelDate } from 'read-excel-file/node';
 import { supabaseAdmin } from '../supabase.js';
+import { buildJobAppFormExportCsv } from '../jobAppFormExport.js';
 
 const router = Router();
 
@@ -1390,6 +1391,62 @@ router.post('/:id/joining-status', async (req, res, next) => {
     if (upErr) throw upErr;
 
     return res.json({ employee: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/job-app-forms/export', async (req, res, next) => {
+  try {
+    const clientId = String(req.body?.client_id ?? '').trim();
+    const employeeIds = Array.isArray(req.body?.employee_ids)
+      ? [...new Set(req.body.employee_ids.map((id) => String(id ?? '').trim()).filter(Boolean))]
+      : [];
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'client_id is required.' });
+    }
+    if (employeeIds.length === 0) {
+      return res.status(400).json({ error: 'At least one employee_id is required.' });
+    }
+    if (employeeIds.length > 500) {
+      return res.status(400).json({ error: 'Cannot export more than 500 employees at once.' });
+    }
+
+    const owned = await fetchOwnedClient(req, clientId);
+    if (!owned) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const { data: employees, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, mobile, email, designation, date_of_joining, ctc_type, ctc_value')
+      .eq('client_id', clientId)
+      .in('id', employeeIds);
+    if (empErr) throw empErr;
+
+    const employeeRows = employees ?? [];
+    if (employeeRows.length === 0) {
+      return res.status(400).json({ error: 'No matching employees found for this client.' });
+    }
+
+    const foundIds = employeeRows.map((e) => e.id);
+    const { data: forms, error: formErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('*')
+      .in('employee_id', foundIds);
+    if (formErr) throw formErr;
+
+    const employeesById = new Map(employeeRows.map((e) => [e.id, e]));
+    const formsByEmployeeId = new Map((forms ?? []).map((f) => [f.employee_id, f]));
+    const order = employeeIds.filter((id) => employeesById.has(id));
+
+    const csv = buildJobAppFormExportCsv(employeesById, formsByEmployeeId, order);
+    const safeName = String(owned.id).slice(0, 8);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="onboarding-responses-${safeName}.csv"`
+    );
+    return res.send(csv);
   } catch (err) {
     next(err);
   }

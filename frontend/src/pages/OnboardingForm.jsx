@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 
@@ -12,7 +12,7 @@ const DRIVING_OPTIONS = ['Yes', 'No'];
 const DRIVING_LICENSE_MAX_BYTES = 12 * 1024 * 1024;
 const QUALIFICATION_MAX_BYTES = 12 * 1024 * 1024;
 const KYC_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
-const KYC_PASSBOOK_MAX_BYTES = 12 * 1024 * 1024;
+const KYC_IMAGE_HINT = 'Only JPG, JPEG, PNG, WEBP · max 5MB upload · stored optimized to ~150 KB';
 const BP_MAX_BYTES = 12 * 1024 * 1024;
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -140,8 +140,34 @@ function fieldClass(readOnly) {
     : 'w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900';
 }
 
-function UploadedFileBanner({ href, onRemove, removing = false }) {
+function fileNameFromStorageUrl(url) {
+  const raw = String(url ?? '').trim();
+  if (!raw) return '';
+  try {
+    const base = decodeURIComponent(new URL(raw).pathname.split('/').filter(Boolean).pop() || '');
+    return base || '';
+  } catch {
+    const path = raw.split('?')[0];
+    const base = path.split('/').filter(Boolean).pop() || '';
+    try {
+      return decodeURIComponent(base);
+    } catch {
+      return base;
+    }
+  }
+}
+
+function displayUploadedFileName(fileName, url) {
+  const fromClient = String(fileName ?? '').trim();
+  if (fromClient) return fromClient;
+  const fromUrl = fileNameFromStorageUrl(url);
+  if (fromUrl) return fromUrl;
+  return 'Uploaded document';
+}
+
+function UploadedFileBanner({ href, fileName = '', onRemove, removing = false }) {
   if (!href) return null;
+  const displayName = displayUploadedFileName(fileName, href);
   return (
     <div
       className="mt-3 flex items-center gap-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4"
@@ -151,12 +177,15 @@ function UploadedFileBanner({ href, onRemove, removing = false }) {
         <IconCheckCircle className="h-6 w-6 text-emerald-600" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-emerald-800">Document uploaded</p>
+        <p className="truncate text-sm font-semibold text-emerald-900" title={displayName}>
+          {displayName}
+        </p>
+        <p className="mt-0.5 text-xs text-emerald-700">Document uploaded</p>
         <a
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-0.5 block truncate text-xs font-medium text-indigo-600 underline underline-offset-2 hover:text-indigo-800"
+          className="mt-1 inline-block text-xs font-medium text-indigo-600 underline underline-offset-2 hover:text-indigo-800"
         >
           View uploaded document ↗
         </a>
@@ -188,6 +217,7 @@ function DocUploadField({
   error,
   hint,
   url,
+  uploadedFileName = '',
   onRemove,
   removing = false,
   onChange,
@@ -215,7 +245,12 @@ function DocUploadField({
       {uploading && <p className="mt-2 text-sm text-slate-600">{uploadingLabel}</p>}
       {error && <p className="mt-2 text-sm text-rose-600">{error}</p>}
       {url && !uploading && (
-        <UploadedFileBanner href={url} onRemove={onRemove} removing={removing} />
+        <UploadedFileBanner
+          href={url}
+          fileName={uploadedFileName}
+          onRemove={onRemove}
+          removing={removing}
+        />
       )}
     </div>
   );
@@ -408,8 +443,17 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
   const requireQualificationCertificate = clientRequiresQualificationCertificateUpload(jobForm);
   const [highest, setHighest] = useState(() => jobForm.qual_highest_qualification ?? '');
   const [highestDocUrl, setHighestDocUrl] = useState(() => jobForm.qual_highest_qualification_doc_url ?? '');
+  const [highestDocFileName, setHighestDocFileName] = useState(() =>
+    fileNameFromStorageUrl(jobForm.qual_highest_qualification_doc_url ?? '')
+  );
   const [eduUrl, setEduUrl] = useState(() => jobForm.qual_education_certificate_url ?? '');
+  const [eduFileName, setEduFileName] = useState(() =>
+    fileNameFromStorageUrl(jobForm.qual_education_certificate_url ?? '')
+  );
   const [additionalUrls, setAdditionalUrls] = useState(() => parseAdditionalCertificateUrls(jobForm));
+  const [additionalFileNames, setAdditionalFileNames] = useState(() =>
+    parseAdditionalCertificateUrls(jobForm).map((u) => fileNameFromStorageUrl(u) || 'Certificate')
+  );
   const [highestDocUploading, setHighestDocUploading] = useState(false);
   const [eduUploading, setEduUploading] = useState(false);
   const [addUploading, setAddUploading] = useState(false);
@@ -424,11 +468,21 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
   useEffect(() => {
     const visible = correction?.active ? correction.visibleFields : null;
     setHighest(visible?.has('qual_highest_qualification') ? '' : (jobForm.qual_highest_qualification ?? ''));
-    setHighestDocUrl(
-      visible?.has('qual_highest_qualification_doc_url') ? '' : (jobForm.qual_highest_qualification_doc_url ?? '')
+    const nextHighestUrl = visible?.has('qual_highest_qualification_doc_url')
+      ? ''
+      : (jobForm.qual_highest_qualification_doc_url ?? '');
+    setHighestDocUrl(nextHighestUrl);
+    setHighestDocFileName(visible?.has('qual_highest_qualification_doc_url') ? '' : fileNameFromStorageUrl(nextHighestUrl));
+    const nextEduUrl = visible?.has('qual_education_certificate_url') ? '' : (jobForm.qual_education_certificate_url ?? '');
+    setEduUrl(nextEduUrl);
+    setEduFileName(visible?.has('qual_education_certificate_url') ? '' : fileNameFromStorageUrl(nextEduUrl));
+    const nextAdditional = visible?.has('qual_additional_certificates_url') ? [] : parseAdditionalCertificateUrls(jobForm);
+    setAdditionalUrls(nextAdditional);
+    setAdditionalFileNames(
+      visible?.has('qual_additional_certificates_url')
+        ? []
+        : nextAdditional.map((u) => fileNameFromStorageUrl(u) || 'Certificate')
     );
-    setEduUrl(visible?.has('qual_education_certificate_url') ? '' : (jobForm.qual_education_certificate_url ?? ''));
-    setAdditionalUrls(visible?.has('qual_additional_certificates_url') ? [] : parseAdditionalCertificateUrls(jobForm));
     setHighestDocError('');
     setEduError('');
     setAddError('');
@@ -477,6 +531,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
     try {
       const url = await uploadIfValid(file, 'iti_diploma_doc');
       setEduUrl(url);
+      setEduFileName(file.name);
     } catch (err) {
       setEduError(err.message || 'Upload failed.');
     } finally {
@@ -493,6 +548,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
     try {
       const url = await uploadIfValid(file, 'highest_qualification_doc');
       setHighestDocUrl(url);
+      setHighestDocFileName(file.name);
     } catch (err) {
       setHighestDocError(err.message || 'Upload failed.');
     } finally {
@@ -509,6 +565,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
     try {
       const url = await uploadIfValid(file, 'additional_doc');
       setAdditionalUrls((prev) => [...prev, url]);
+      setAdditionalFileNames((prev) => [...prev, file.name]);
     } catch (err) {
       setAddError(err.message || 'Upload failed.');
     } finally {
@@ -528,6 +585,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
         url: eduUrl,
       });
       setEduUrl('');
+      setEduFileName('');
     } catch (err) {
       setEduError(err.message || 'Could not remove file.');
     } finally {
@@ -547,6 +605,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
         url: highestDocUrl,
       });
       setHighestDocUrl('');
+      setHighestDocFileName('');
     } catch (err) {
       setHighestDocError(err.message || 'Could not remove file.');
     } finally {
@@ -567,6 +626,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
         url,
       });
       setAdditionalUrls((prev) => prev.filter((_, i) => i !== idx));
+      setAdditionalFileNames((prev) => prev.filter((_, i) => i !== idx));
     } catch (err) {
       setAddError(err.message || 'Could not remove file.');
     } finally {
@@ -618,6 +678,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
               const next = e.target.value;
               setHighest(next);
               setHighestDocUrl('');
+              setHighestDocFileName('');
               setHighestDocError('');
             }}
           >
@@ -640,6 +701,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
             error={highestDocError}
             hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
             url={highestDocUrl}
+            uploadedFileName={highestDocFileName}
             onRemove={handleRemoveHighestDocFile}
             removing={highestDocRemoving}
             onChange={handleHighestDocFile}
@@ -656,6 +718,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
             error={eduError}
             hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
             url={eduUrl}
+            uploadedFileName={eduFileName}
             onRemove={handleRemoveEducationFile}
             removing={eduRemoving}
             onChange={handleEducationFile}
@@ -687,6 +750,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
                   <div className="min-w-0 flex-1">
                     <UploadedFileBanner
                       href={u}
+                      fileName={additionalFileNames[idx] ?? fileNameFromStorageUrl(u)}
                       onRemove={() => handleRemoveAdditionalFile(u, idx)}
                       removing={additionalRemoving.includes(u)}
                     />
@@ -720,11 +784,6 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
       <p className="text-center text-xs text-slate-500">Step 2 of 4 · Qualification</p>
     </div>
   );
-}
-
-function isAllowedKycPassbookFile(file) {
-  const m = String(file.type || '').toLowerCase();
-  return m.startsWith('image/') || m === 'application/pdf';
 }
 
 function isAllowedOcrImageFile(file) {
@@ -798,9 +857,13 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   );
 
   const [frontUrl, setFrontUrl] = useState(() => jobForm.kyc_aadhar_front_url ?? '');
+  const [frontFileName, setFrontFileName] = useState(() => fileNameFromStorageUrl(jobForm.kyc_aadhar_front_url ?? ''));
   const [backUrl, setBackUrl] = useState(() => jobForm.kyc_aadhar_back_url ?? '');
+  const [backFileName, setBackFileName] = useState(() => fileNameFromStorageUrl(jobForm.kyc_aadhar_back_url ?? ''));
   const [panCardUrl, setPanCardUrl] = useState(() => jobForm.kyc_pan_card_url ?? '');
+  const [panCardFileName, setPanCardFileName] = useState(() => fileNameFromStorageUrl(jobForm.kyc_pan_card_url ?? ''));
   const [passbookUrl, setPassbookUrl] = useState(() => jobForm.kyc_bank_passbook_url ?? '');
+  const [passbookFileName, setPassbookFileName] = useState(() => fileNameFromStorageUrl(jobForm.kyc_bank_passbook_url ?? ''));
 
   const [panNumber, setPanNumber] = useState(() =>
     String(jobForm.kyc_pan_number ?? '')
@@ -847,10 +910,18 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
 
   useEffect(() => {
     const visible = correction?.active ? correction.visibleFields : null;
-    setFrontUrl(visible?.has('kyc_aadhar_front_url') ? '' : (jobForm.kyc_aadhar_front_url ?? ''));
-    setBackUrl(visible?.has('kyc_aadhar_back_url') ? '' : (jobForm.kyc_aadhar_back_url ?? ''));
-    setPanCardUrl(visible?.has('kyc_pan_card_url') ? '' : (jobForm.kyc_pan_card_url ?? ''));
-    setPassbookUrl(visible?.has('kyc_bank_passbook_url') ? '' : (jobForm.kyc_bank_passbook_url ?? ''));
+    const nextFrontUrl = visible?.has('kyc_aadhar_front_url') ? '' : (jobForm.kyc_aadhar_front_url ?? '');
+    setFrontUrl(nextFrontUrl);
+    setFrontFileName(visible?.has('kyc_aadhar_front_url') ? '' : fileNameFromStorageUrl(nextFrontUrl));
+    const nextBackUrl = visible?.has('kyc_aadhar_back_url') ? '' : (jobForm.kyc_aadhar_back_url ?? '');
+    setBackUrl(nextBackUrl);
+    setBackFileName(visible?.has('kyc_aadhar_back_url') ? '' : fileNameFromStorageUrl(nextBackUrl));
+    const nextPanUrl = visible?.has('kyc_pan_card_url') ? '' : (jobForm.kyc_pan_card_url ?? '');
+    setPanCardUrl(nextPanUrl);
+    setPanCardFileName(visible?.has('kyc_pan_card_url') ? '' : fileNameFromStorageUrl(nextPanUrl));
+    const nextPassbookUrl = visible?.has('kyc_bank_passbook_url') ? '' : (jobForm.kyc_bank_passbook_url ?? '');
+    setPassbookUrl(nextPassbookUrl);
+    setPassbookFileName(visible?.has('kyc_bank_passbook_url') ? '' : fileNameFromStorageUrl(nextPassbookUrl));
     setPanNumber(visible?.has('kyc_pan_number') ? '' : String(jobForm.kyc_pan_number ?? '').replace(/\s/g, '').toUpperCase());
     setAccountHolder(visible?.has('kyc_account_holder_name') ? '' : (jobForm.kyc_account_holder_name ?? ''));
     setAccountNumber(visible?.has('kyc_account_number') ? '' : String(jobForm.kyc_account_number ?? '').replace(/\s/g, ''));
@@ -935,6 +1006,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     try {
       setFrontHint(await validateKyc('aadhaar_front', file));
       setFrontUrl(await uploadKyc('aadhaar_front', file));
+      setFrontFileName(file.name);
     } catch (err) {
       setFrontErr(err.message || 'Upload failed.');
     } finally {
@@ -960,6 +1032,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     try {
       setBackHint(await validateKyc('aadhaar_back', file));
       setBackUrl(await uploadKyc('aadhaar_back', file));
+      setBackFileName(file.name);
     } catch (err) {
       setBackErr(err.message || 'Upload failed.');
     } finally {
@@ -989,6 +1062,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     try {
       setPanCardHint(await validateKyc('pan_card', file));
       setPanCardUrl(await uploadKyc('pan_card', file));
+      setPanCardFileName(file.name);
     } catch (err) {
       setPanCardErr(err.message || 'Upload failed.');
     } finally {
@@ -1000,18 +1074,19 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!isAllowedKycPassbookFile(file)) {
-      setPassErr('Upload an image or PDF.');
+    if (!isAllowedOcrImageFile(file)) {
+      setPassErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
-    if (file.size > KYC_PASSBOOK_MAX_BYTES) {
-      setPassErr('File must be 12 MB or smaller.');
+    if (file.size > KYC_IMAGE_MAX_BYTES) {
+      setPassErr('File must be 5 MB or smaller.');
       return;
     }
     setPassErr('');
     setPassUp(true);
     try {
       setPassbookUrl(await uploadKyc('bank_passbook', file));
+      setPassbookFileName(file.name);
     } catch (err) {
       setPassErr(err.message || 'Upload failed.');
     } finally {
@@ -1019,7 +1094,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     }
   };
 
-  const handleRemoveKycDocument = async ({ field, url, setUrl, setErr, setRemoving, onRemoved }) => {
+  const handleRemoveKycDocument = async ({ field, url, setUrl, setFileName, setErr, setRemoving, onRemoved }) => {
     if (!url) return;
     setErr?.('');
     setRemoving(true);
@@ -1031,6 +1106,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         url,
       });
       setUrl('');
+      setFileName?.('');
       onRemoved?.();
     } catch (err) {
       setErr?.(err.message || 'Could not remove file.');
@@ -1199,12 +1275,14 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
               accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
               uploading={frontUp}
               error={frontErr}
-              hint="Only JPG, JPEG, PNG, WEBP allowed · max 5MB"
+              hint={KYC_IMAGE_HINT}
               url={frontUrl}
+              uploadedFileName={frontFileName}
               onRemove={() => handleRemoveKycDocument({
                 field: 'kyc_aadhar_front_url',
                 url: frontUrl,
                 setUrl: setFrontUrl,
+                setFileName: setFrontFileName,
                 setErr: setFrontErr,
                 setRemoving: setFrontRemoving,
                 onRemoved: () => setFrontHint(null),
@@ -1227,12 +1305,14 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
               accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
               uploading={backUp}
               error={backErr}
-              hint="Only JPG, JPEG, PNG, WEBP allowed · max 5MB"
+              hint={KYC_IMAGE_HINT}
               url={backUrl}
+              uploadedFileName={backFileName}
               onRemove={() => handleRemoveKycDocument({
                 field: 'kyc_aadhar_back_url',
                 url: backUrl,
                 setUrl: setBackUrl,
+                setFileName: setBackFileName,
                 setErr: setBackErr,
                 setRemoving: setBackRemoving,
                 onRemoved: () => setBackHint(null),
@@ -1299,12 +1379,14 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
             uploading={panCardUp}
             error={panCardErr}
-            hint={panVerified ? 'Only JPG, JPEG, PNG, WEBP allowed · max 5MB' : 'Verify PAN number above before uploading'}
+            hint={panVerified ? KYC_IMAGE_HINT : 'Verify PAN number above before uploading'}
             url={panCardUrl}
+            uploadedFileName={panCardFileName}
             onRemove={() => handleRemoveKycDocument({
               field: 'kyc_pan_card_url',
               url: panCardUrl,
               setUrl: setPanCardUrl,
+              setFileName: setPanCardFileName,
               setErr: setPanCardErr,
               setRemoving: setPanCardRemoving,
               onRemoved: () => setPanCardHint(null),
@@ -1441,15 +1523,17 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             label="Bank passbook / statement"
             required={isRequired('kyc_bank_passbook_url', true)}
             inputId="kyc-passbook"
-            accept="image/*,.pdf,application/pdf"
+            accept="image/jpeg,image/jpg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
             uploading={passUp}
             error={passErr}
-            hint="Image or PDF · max 12MB"
+            hint={KYC_IMAGE_HINT}
             url={passbookUrl}
+            uploadedFileName={passbookFileName}
             onRemove={() => handleRemoveKycDocument({
               field: 'kyc_bank_passbook_url',
               url: passbookUrl,
               setUrl: setPassbookUrl,
+              setFileName: setPassbookFileName,
               setErr: setPassErr,
               setRemoving: setPassRemoving,
             })}
@@ -1484,13 +1568,77 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   );
 }
 
+function VideoPlayerModal({ open, onClose, title, src }) {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, onClose]);
+
+  const handleClose = () => {
+    videoRef.current?.pause();
+    onClose();
+  };
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 px-4"
+      onClick={handleClose}
+      role="presentation"
+    >
+      <div
+        className="w-full max-w-3xl rounded-xl bg-white p-4 shadow-2xl sm:p-5"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+          <button
+            type="button"
+            onClick={handleClose}
+            className="shrink-0 rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+        <video
+          ref={videoRef}
+          src={src}
+          controls
+          playsInline
+          className="max-h-[70vh] w-full rounded-lg bg-black"
+        >
+          Your browser does not support video playback.
+        </video>
+      </div>
+    </div>
+  );
+}
+
 function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, onGoToStatus, correction }) {
   const PF_UAN_DEMO_VIDEO_URL = 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4';
+  const [pfUanVideoOpen, setPfUanVideoOpen] = useState(false);
   const [photoUrl, setPhotoUrl] = useState(() => jobForm.bp_passport_photo_url ?? '');
+  const [photoFileName, setPhotoFileName] = useState(() => fileNameFromStorageUrl(jobForm.bp_passport_photo_url ?? ''));
   const [esic, setEsic] = useState(() => jobForm.bp_esic_number ?? '');
   const [pfUan, setPfUan] = useState(() => String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, ''));
   const [hasPfUan, setHasPfUan] = useState(() => (String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, '').length === 12 ? 'yes' : ''));
   const [policeUrl, setPoliceUrl] = useState(() => jobForm.bp_police_verification_url ?? '');
+  const [policeFileName, setPoliceFileName] = useState(() => fileNameFromStorageUrl(jobForm.bp_police_verification_url ?? ''));
   const [photoUp, setPhotoUp] = useState(false);
   const [policeUp, setPoliceUp] = useState(false);
   const [photoRemoving, setPhotoRemoving] = useState(false);
@@ -1505,12 +1653,16 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
 
   useEffect(() => {
     const visible = correction?.active ? correction.visibleFields : null;
-    setPhotoUrl(visible?.has('bp_passport_photo_url') ? '' : (jobForm.bp_passport_photo_url ?? ''));
+    const nextPhotoUrl = visible?.has('bp_passport_photo_url') ? '' : (jobForm.bp_passport_photo_url ?? '');
+    setPhotoUrl(nextPhotoUrl);
+    setPhotoFileName(visible?.has('bp_passport_photo_url') ? '' : fileNameFromStorageUrl(nextPhotoUrl));
     setEsic(visible?.has('bp_esic_number') ? '' : (jobForm.bp_esic_number ?? ''));
     const nextPfUan = visible?.has('bp_pf_uan_number') ? '' : String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, '');
     setPfUan(nextPfUan);
     setHasPfUan(nextPfUan.length === 12 ? 'yes' : '');
-    setPoliceUrl(visible?.has('bp_police_verification_url') ? '' : (jobForm.bp_police_verification_url ?? ''));
+    const nextPoliceUrl = visible?.has('bp_police_verification_url') ? '' : (jobForm.bp_police_verification_url ?? '');
+    setPoliceUrl(nextPoliceUrl);
+    setPoliceFileName(visible?.has('bp_police_verification_url') ? '' : fileNameFromStorageUrl(nextPoliceUrl));
     setPhotoErr('');
     setPoliceErr('');
     setPhotoRemoving(false);
@@ -1540,6 +1692,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     try {
       const { url } = await api.uploadBpDocument({ mobile, employeeId, file, kind: 'passport_photo' });
       setPhotoUrl(url ?? '');
+      setPhotoFileName(file.name);
     } catch (err) {
       setPhotoErr(err.message || 'Upload failed.');
     } finally {
@@ -1564,6 +1717,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     try {
       const { url } = await api.uploadBpDocument({ mobile, employeeId, file, kind: 'police_verification' });
       setPoliceUrl(url ?? '');
+      setPoliceFileName(file.name);
     } catch (err) {
       setPoliceErr(err.message || 'Upload failed.');
     } finally {
@@ -1571,7 +1725,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     }
   };
 
-  const handleRemoveBankPhotoDocument = async ({ field, currentUrl, setUrl, setErr, setRemoving }) => {
+  const handleRemoveBankPhotoDocument = async ({ field, currentUrl, setUrl, setFileName, setErr, setRemoving }) => {
     if (!currentUrl) return;
     setErr?.('');
     setRemoving(true);
@@ -1583,6 +1737,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         url: currentUrl,
       });
       setUrl('');
+      setFileName?.('');
     } catch (err) {
       setErr?.(err.message || 'Could not remove file.');
     } finally {
@@ -1673,10 +1828,12 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
             error={photoErr}
             hint="Max file size: 12MB. Supported: image/*"
             url={photoUrl}
+            uploadedFileName={photoFileName}
             onRemove={() => handleRemoveBankPhotoDocument({
               field: 'bp_passport_photo_url',
               currentUrl: photoUrl,
               setUrl: setPhotoUrl,
+              setFileName: setPhotoFileName,
               setErr: setPhotoErr,
               setRemoving: setPhotoRemoving,
             })}
@@ -1752,14 +1909,13 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
               {hasPfUan === 'no' && (
                 <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   <p>Refer to the video and generate one PF UAN for yourself.</p>
-                  <a
-                    href={PF_UAN_DEMO_VIDEO_URL}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => setPfUanVideoOpen(true)}
                     className="mt-1 inline-flex items-center text-sm font-medium text-indigo-700 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-800"
                   >
                     Watch demo video
-                  </a>
+                  </button>
                 </div>
               )}
               {hasPfUanError && <p className="mt-1.5 text-sm text-rose-600">{hasPfUanError}</p>}
@@ -1775,10 +1931,12 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                 error={policeErr}
                 hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
                 url={policeUrl}
+                uploadedFileName={policeFileName}
                 onRemove={() => handleRemoveBankPhotoDocument({
                   field: 'bp_police_verification_url',
                   currentUrl: policeUrl,
                   setUrl: setPoliceUrl,
+                  setFileName: setPoliceFileName,
                   setErr: setPoliceErr,
                   setRemoving: setPoliceRemoving,
                 })}
@@ -1811,6 +1969,13 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
 
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
+      <VideoPlayerModal
+        open={pfUanVideoOpen}
+        onClose={() => setPfUanVideoOpen(false)}
+        title="How to generate PF UAN"
+        src={PF_UAN_DEMO_VIDEO_URL}
+      />
+
       <div className="flex flex-col gap-4 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
         <button
           type="button"
@@ -1837,6 +2002,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   const requireLicenseUpload = clientRequiresLicenseUpload(jobForm);
   const [draft, setDraft] = useState(() => buildPersonalDraft(jobForm));
   const [licenseImageUrl, setLicenseImageUrl] = useState(() => jobForm.pd_driving_license_url ?? '');
+  const [licenseFileName, setLicenseFileName] = useState(() => fileNameFromStorageUrl(jobForm.pd_driving_license_url ?? ''));
   const [licenseUploading, setLicenseUploading] = useState(false);
   const [licenseRemoving, setLicenseRemoving] = useState(false);
   const [licenseError, setLicenseError] = useState('');
@@ -1865,10 +2031,14 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         pd_marital_status: visible.has('pd_marital_status') ? '' : base.pd_marital_status,
         pd_driving_license: visible.has('pd_driving_license') ? '' : base.pd_driving_license
       });
-      setLicenseImageUrl(visible.has('pd_driving_license_url') ? '' : (jobForm.pd_driving_license_url ?? ''));
+      const nextLicenseUrl = visible.has('pd_driving_license_url') ? '' : (jobForm.pd_driving_license_url ?? '');
+      setLicenseImageUrl(nextLicenseUrl);
+      setLicenseFileName(visible.has('pd_driving_license_url') ? '' : fileNameFromStorageUrl(nextLicenseUrl));
     } else {
       setDraft(base);
-      setLicenseImageUrl(jobForm.pd_driving_license_url ?? '');
+      const nextLicenseUrl = jobForm.pd_driving_license_url ?? '';
+      setLicenseImageUrl(nextLicenseUrl);
+      setLicenseFileName(fileNameFromStorageUrl(nextLicenseUrl));
     }
     setLicenseError('');
     setLicenseRemoving(false);
@@ -1961,6 +2131,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
     try {
       const { url } = await api.uploadDrivingLicense({ mobile, employeeId, file });
       setLicenseImageUrl(url ?? '');
+      setLicenseFileName(file.name);
     } catch (err) {
       setLicenseError(err.message || 'Upload failed.');
     } finally {
@@ -1980,6 +2151,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         url: licenseImageUrl,
       });
       setLicenseImageUrl('');
+      setLicenseFileName('');
     } catch (err) {
       setLicenseError(err.message || 'Could not remove file.');
     } finally {
@@ -2304,6 +2476,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                   setDraft((d) => ({ ...d, pd_driving_license: v }));
                   if (v !== 'Yes') {
                     setLicenseImageUrl('');
+                    setLicenseFileName('');
                     setLicenseError('');
                   }
                 }}
@@ -2327,6 +2500,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               error={licenseError}
               hint="Max file size: 12MB. Supported: image/*"
               url={licenseImageUrl}
+              uploadedFileName={licenseFileName}
               onRemove={handleRemoveLicenseFile}
               removing={licenseRemoving}
               onChange={handleLicenseFile}
@@ -2693,6 +2867,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                   setDraft((d) => ({ ...d, pd_driving_license: v }));
                   if (v !== 'Yes') {
                     setLicenseImageUrl('');
+                    setLicenseFileName('');
                     setLicenseError('');
                   }
                 }}
@@ -2717,6 +2892,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               error={licenseError}
               hint="Max file size: 12MB. Supported: image/* (JPEG, PNG, WebP, GIF, HEIC, etc.)"
               url={licenseImageUrl}
+              uploadedFileName={licenseFileName}
               onRemove={handleRemoveLicenseFile}
               removing={licenseRemoving}
               onChange={handleLicenseFile}

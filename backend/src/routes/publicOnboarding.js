@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { supabaseAdmin } from '../supabase.js';
+import { compressKycImageBuffer } from '../utils/kycImageCompress.js';
 
 const router = Router();
 
@@ -23,7 +24,6 @@ const ONBOARDING_DOCUMENT_FIELD_CONFIG = {
 const MAX_DRIVING_LICENSE_BYTES = 12 * 1024 * 1024;
 const MAX_QUALIFICATION_BYTES = 12 * 1024 * 1024;
 const MAX_KYC_IMAGE_DOCUMENT_BYTES = 5 * 1024 * 1024;
-const MAX_KYC_BANK_PASSBOOK_BYTES = 12 * 1024 * 1024;
 const MAX_KYC_VALIDATE_BYTES = 5 * 1024 * 1024;
 const MAX_BANK_PHOTO_DOCUMENT_BYTES = 12 * 1024 * 1024;
 
@@ -142,38 +142,12 @@ const qualificationUpload = multer({
   },
 });
 
-function isAllowedKycBankPassbookMime(mime) {
-  const m = String(mime || '').toLowerCase();
-  return m.startsWith('image/') || m === 'application/pdf';
-}
-
-function extForKycBankFile(mime, originalname) {
-  const m = String(mime || '').toLowerCase();
-  if (m === 'application/pdf') return 'pdf';
-  const fromMime = extFromMime(mime);
-  if (fromMime !== 'img') return fromMime;
-  const match = /\.([a-z0-9]+)$/i.exec(String(originalname || ''));
-  return match ? match[1].toLowerCase().slice(0, 8) : 'bin';
-}
-
 const kycImageOnlyUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_KYC_IMAGE_DOCUMENT_BYTES },
   fileFilter: (_req, file, cb) => {
     if (!isAllowedOcrImageMime(file.mimetype)) {
       cb(new Error('Only JPG, JPEG, PNG, or WEBP images are allowed'));
-      return;
-    }
-    cb(null, true);
-  },
-});
-
-const kycBankPassbookUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_KYC_BANK_PASSBOOK_BYTES },
-  fileFilter: (_req, file, cb) => {
-    if (!isAllowedKycBankPassbookMime(file.mimetype)) {
-      cb(new Error('Bank passbook must be an image or PDF'));
       return;
     }
     cb(null, true);
@@ -1583,14 +1557,10 @@ router.post('/kyc-document-upload', (req, res, next) => {
       error: 'Invalid kind. Use ?kind=aadhaar_front, aadhaar_back, pan_card, or bank_passbook',
     });
   }
-  const multerMw = kind === 'bank_passbook' ? kycBankPassbookUpload : kycImageOnlyUpload;
-  multerMw.single('file')(req, res, (err) => {
+  kycImageOnlyUpload.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        const sizeMessage = kind === 'bank_passbook'
-          ? 'File must be 12 MB or smaller'
-          : 'File must be 5 MB or smaller';
-        return res.status(400).json({ error: sizeMessage });
+        return res.status(400).json({ error: 'File must be 5 MB or smaller' });
       }
       return res.status(400).json({ error: err.message || 'Invalid upload' });
     }
@@ -1641,16 +1611,21 @@ router.post('/kyc-document-upload', (req, res, next) => {
       }
     }
 
-    const ext =
-      kind === 'bank_passbook'
-        ? extForKycBankFile(req.file.mimetype, req.file.originalname)
-        : extFromMime(req.file.mimetype);
-    const objectPath = `onboarding/${emp.id}/${kind}/${Date.now()}.${ext}`;
+    let compressed;
+    try {
+      compressed = await compressKycImageBuffer(req.file.buffer);
+    } catch (compressErr) {
+      return res.status(400).json({
+        error: compressErr.message || 'Could not process image. Try a clearer photo.',
+      });
+    }
+
+    const objectPath = `onboarding/${emp.id}/${kind}/${Date.now()}.${compressed.ext}`;
 
     const { error: upErr } = await supabaseAdmin.storage
       .from(KYC_DOCUMENTS_BUCKET)
-      .upload(objectPath, req.file.buffer, {
-        contentType: req.file.mimetype,
+      .upload(objectPath, compressed.buffer, {
+        contentType: compressed.contentType,
         upsert: false,
       });
     if (upErr) throw upErr;
