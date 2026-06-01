@@ -44,6 +44,7 @@ const ORDERED_FIELDS = [
   'bp_passport_photo_url',
   'bp_esic_number',
   'bp_pf_uan_number',
+  'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url',
 ];
 

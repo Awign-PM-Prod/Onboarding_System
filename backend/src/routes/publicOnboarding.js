@@ -20,6 +20,7 @@ const ONBOARDING_DOCUMENT_FIELD_CONFIG = {
   kyc_bank_passbook_url: { bucket: KYC_DOCUMENTS_BUCKET, mode: 'single' },
   bp_passport_photo_url: { bucket: BANK_PHOTO_DOCUMENTS_BUCKET, mode: 'single' },
   bp_police_verification_url: { bucket: BANK_PHOTO_DOCUMENTS_BUCKET, mode: 'single' },
+  bp_pf_uan_face_auth_screenshot_url: { bucket: BANK_PHOTO_DOCUMENTS_BUCKET, mode: 'single' },
 };
 const MAX_DRIVING_LICENSE_BYTES = 12 * 1024 * 1024;
 const MAX_QUALIFICATION_BYTES = 12 * 1024 * 1024;
@@ -64,6 +65,7 @@ const CORRECTION_FIELD_SET = new Set([
   'bp_passport_photo_url',
   'bp_esic_number',
   'bp_pf_uan_number',
+  'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url'
 ]);
 const CORRECTION_OPTIONAL_FIELDS = new Set([
@@ -1659,13 +1661,13 @@ router.post('/kyc-document-upload', (req, res, next) => {
   }
 });
 
-const BP_UPLOAD_KINDS = new Set(['passport_photo', 'police_verification']);
+const BP_UPLOAD_KINDS = new Set(['passport_photo', 'police_verification', 'pf_uan_face_auth']);
 
 router.post('/bp-document-upload', (req, res, next) => {
   const kind = String(req.query?.kind || '').trim();
   if (!BP_UPLOAD_KINDS.has(kind)) {
     return res.status(400).json({
-      error: 'Invalid kind. Use ?kind=passport_photo or police_verification',
+      error: 'Invalid kind. Use ?kind=passport_photo, police_verification, or pf_uan_face_auth',
     });
   }
   const multerMw = kind === 'police_verification' ? bpPoliceVerificationUpload : bpPassportPhotoUpload;
@@ -1737,9 +1739,12 @@ router.post('/bp-document-upload', (req, res, next) => {
       return res.status(500).json({ error: 'Could not resolve file URL' });
     }
 
-    const field = kind === 'police_verification'
-      ? 'bp_police_verification_url'
-      : 'bp_passport_photo_url';
+    const field =
+      kind === 'police_verification'
+        ? 'bp_police_verification_url'
+        : kind === 'pf_uan_face_auth'
+          ? 'bp_pf_uan_face_auth_screenshot_url'
+          : 'bp_passport_photo_url';
     const { error: dbErr } = await supabaseAdmin
       .from('job_app_form')
       .update({
@@ -2031,6 +2036,13 @@ router.patch('/job-app-form', async (req, res, next) => {
       }
       const pfUan = pfUanRaw;
 
+      const pfUanFaceAuthUrl = String(body.bp_pf_uan_face_auth_screenshot_url ?? '').trim();
+      if (!pfUanFaceAuthUrl) {
+        return res.status(400).json({
+          error: 'PF UAN face authentication screenshot is required when you have a PF UAN number.',
+        });
+      }
+
       const policeRaw = String(body.bp_police_verification_url ?? '').trim();
       const policeUrl = policeRaw.length > 0 ? policeRaw : null;
 
@@ -2038,6 +2050,7 @@ router.patch('/job-app-form', async (req, res, next) => {
         bp_passport_photo_url: passportUrl,
         bp_esic_number: esic,
         bp_pf_uan_number: pfUan,
+        bp_pf_uan_face_auth_screenshot_url: pfUanFaceAuthUrl,
         bp_police_verification_url: policeUrl,
       };
       const correctionScopeErr = ensureCorrectionEditScope(bankPhotoUpdate);

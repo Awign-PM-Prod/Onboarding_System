@@ -47,6 +47,7 @@ export const JOB_APP_FORM_EXPORT_FIELDS = [
   'bp_passport_photo_url',
   'bp_esic_number',
   'bp_pf_uan_number',
+  'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url',
 ];
 
@@ -62,6 +63,7 @@ const DOWNLOAD_FILENAME_BY_FIELD = {
   kyc_bank_passbook_url: 'bank-passbook',
   bp_passport_photo_url: 'passport-photo',
   bp_police_verification_url: 'police-verification',
+  bp_pf_uan_face_auth_screenshot_url: 'pf-uan-face-auth',
 };
 
 function columnLabel(key) {

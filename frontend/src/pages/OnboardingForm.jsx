@@ -324,7 +324,13 @@ const STEP_ALL_FIELDS = {
     'kyc_ifsc_code',
     'kyc_bank_passbook_url'
   ],
-  photo: ['bp_passport_photo_url', 'bp_esic_number', 'bp_pf_uan_number', 'bp_police_verification_url']
+  photo: [
+    'bp_passport_photo_url',
+    'bp_esic_number',
+    'bp_pf_uan_number',
+    'bp_pf_uan_face_auth_screenshot_url',
+    'bp_police_verification_url',
+  ],
 };
 
 function isAllowedQualificationFile(file) {
@@ -1636,7 +1642,21 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   const [photoFileName, setPhotoFileName] = useState(() => fileNameFromStorageUrl(jobForm.bp_passport_photo_url ?? ''));
   const [esic, setEsic] = useState(() => jobForm.bp_esic_number ?? '');
   const [pfUan, setPfUan] = useState(() => String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, ''));
-  const [hasPfUan, setHasPfUan] = useState(() => (String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, '').length === 12 ? 'yes' : ''));
+  const [hasPfUan, setHasPfUan] = useState(() => {
+    const digits = String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, '');
+    if (digits.length === 12) return 'yes';
+    if (String(jobForm.bp_pf_uan_face_auth_screenshot_url ?? '').trim()) return 'yes';
+    return '';
+  });
+  const [pfUanScreenshotUrl, setPfUanScreenshotUrl] = useState(
+    () => jobForm.bp_pf_uan_face_auth_screenshot_url ?? ''
+  );
+  const [pfUanScreenshotFileName, setPfUanScreenshotFileName] = useState(() =>
+    fileNameFromStorageUrl(jobForm.bp_pf_uan_face_auth_screenshot_url ?? '')
+  );
+  const [pfUanScreenshotUp, setPfUanScreenshotUp] = useState(false);
+  const [pfUanScreenshotErr, setPfUanScreenshotErr] = useState('');
+  const [pfUanScreenshotRemoving, setPfUanScreenshotRemoving] = useState(false);
   const [policeUrl, setPoliceUrl] = useState(() => jobForm.bp_police_verification_url ?? '');
   const [policeFileName, setPoliceFileName] = useState(() => fileNameFromStorageUrl(jobForm.bp_police_verification_url ?? ''));
   const [photoUp, setPhotoUp] = useState(false);
@@ -1658,15 +1678,28 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     setPhotoFileName(visible?.has('bp_passport_photo_url') ? '' : fileNameFromStorageUrl(nextPhotoUrl));
     setEsic(visible?.has('bp_esic_number') ? '' : (jobForm.bp_esic_number ?? ''));
     const nextPfUan = visible?.has('bp_pf_uan_number') ? '' : String(jobForm.bp_pf_uan_number ?? '').replace(/\D/g, '');
+    const nextPfUanScreenshotUrl = visible?.has('bp_pf_uan_face_auth_screenshot_url')
+      ? ''
+      : (jobForm.bp_pf_uan_face_auth_screenshot_url ?? '');
     setPfUan(nextPfUan);
-    setHasPfUan(nextPfUan.length === 12 ? 'yes' : '');
+    setPfUanScreenshotUrl(nextPfUanScreenshotUrl);
+    setHasPfUan(
+      nextPfUan.length === 12 || String(nextPfUanScreenshotUrl).trim()
+        ? 'yes'
+        : ''
+    );
+    setPfUanScreenshotFileName(
+      visible?.has('bp_pf_uan_face_auth_screenshot_url') ? '' : fileNameFromStorageUrl(nextPfUanScreenshotUrl)
+    );
     const nextPoliceUrl = visible?.has('bp_police_verification_url') ? '' : (jobForm.bp_police_verification_url ?? '');
     setPoliceUrl(nextPoliceUrl);
     setPoliceFileName(visible?.has('bp_police_verification_url') ? '' : fileNameFromStorageUrl(nextPoliceUrl));
     setPhotoErr('');
     setPoliceErr('');
+    setPfUanScreenshotErr('');
     setPhotoRemoving(false);
     setPoliceRemoving(false);
+    setPfUanScreenshotRemoving(false);
     setError('');
     if (!correction?.active && String(jobForm.submission_status ?? '').trim() === 'Submitted') {
       setSubmitted(true);
@@ -1754,9 +1787,46 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     pfUanRequired && hasPfUan !== 'yes' ? 'PF UAN number is mandatory to submit the form.' : '';
   const pfUanError =
     hasPfUan === 'yes' && pfUan.length !== 12 ? 'PF UAN must be exactly 12 digits.' : '';
+  const showPfUanYesDetails =
+    hasPfUan === 'yes' ||
+    (correction?.active && correction.visibleFields.has('bp_pf_uan_face_auth_screenshot_url'));
+  const pfUanScreenshotError =
+    showPfUanYesDetails && !String(pfUanScreenshotUrl).trim()
+      ? 'Upload a screenshot showing completed PF UAN face authentication.'
+      : '';
+
+  const handlePfUanFaceAuthScreenshot = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setPfUanScreenshotErr('Only image screenshots are allowed (JPG, PNG, etc.).');
+      return;
+    }
+    if (file.size > BP_MAX_BYTES) {
+      setPfUanScreenshotErr('File must be 12 MB or smaller.');
+      return;
+    }
+    setPfUanScreenshotErr('');
+    setPfUanScreenshotUp(true);
+    try {
+      const { url } = await api.uploadBpDocument({
+        mobile,
+        employeeId,
+        file,
+        kind: 'pf_uan_face_auth',
+      });
+      setPfUanScreenshotUrl(url ?? '');
+      setPfUanScreenshotFileName(file.name);
+    } catch (err) {
+      setPfUanScreenshotErr(err.message || 'Upload failed.');
+    } finally {
+      setPfUanScreenshotUp(false);
+    }
+  };
 
   const handleSubmit = async () => {
-    if (!canSubmit || saving || hasPfUanError || pfUanError) return;
+    if (!canSubmit || saving || hasPfUanError || pfUanError || pfUanScreenshotError) return;
     setSaving(true);
     setError('');
     try {
@@ -1767,6 +1837,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         bp_passport_photo_url: String(photoUrl).trim(),
         bp_esic_number: String(esic).trim() || null,
         bp_pf_uan_number: pfUan,
+        bp_pf_uan_face_auth_screenshot_url: String(pfUanScreenshotUrl).trim(),
         bp_police_verification_url: String(policeUrl).trim() || null,
       });
       setSubmitted(true);
@@ -1887,24 +1958,63 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                     onChange={() => {
                       setHasPfUan('no');
                       setPfUan('');
+                      setPfUanScreenshotUrl('');
+                      setPfUanScreenshotFileName('');
+                      setPfUanScreenshotErr('');
                     }}
                     className="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500"
                   />
                   No
                 </label>
               </div>
-              {hasPfUan === 'yes' && (
-              <input
-                id="bp-pf-uan"
-                type="text"
-                inputMode="numeric"
-                maxLength={12}
-                value={pfUan}
-                onChange={(e) => setPfUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
-                className={`${fieldClass(false)} mt-2`}
-                placeholder="Enter your 12-digit PF UAN number"
-                autoComplete="off"
-              />
+              {showPfUanYesDetails && (
+              <div className="mt-3 space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-pf-uan">
+                    PF UAN number <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    id="bp-pf-uan"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={12}
+                    value={pfUan}
+                    onChange={(e) => setPfUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                    className={fieldClass(false)}
+                    placeholder="Enter your 12-digit PF UAN number"
+                    autoComplete="off"
+                  />
+                  {pfUanError && <p className="mt-1.5 text-sm text-rose-600">{pfUanError}</p>}
+                </div>
+                <DocUploadField
+                  label="PF UAN face authentication screenshot"
+                  required
+                  inputId="bp-pf-uan-face-auth"
+                  accept="image/*"
+                  uploading={pfUanScreenshotUp}
+                  error={pfUanScreenshotErr || pfUanScreenshotError}
+                  hint="Screenshot only · max 12MB · image (JPG, PNG, etc.)"
+                  url={pfUanScreenshotUrl}
+                  uploadedFileName={pfUanScreenshotFileName}
+                  onRemove={() => handleRemoveBankPhotoDocument({
+                    field: 'bp_pf_uan_face_auth_screenshot_url',
+                    currentUrl: pfUanScreenshotUrl,
+                    setUrl: setPfUanScreenshotUrl,
+                    setFileName: setPfUanScreenshotFileName,
+                    setErr: setPfUanScreenshotErr,
+                    setRemoving: setPfUanScreenshotRemoving,
+                  })}
+                  removing={pfUanScreenshotRemoving}
+                  onChange={handlePfUanFaceAuthScreenshot}
+                />
+                <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-950">
+                  <p className="font-medium">Face authentication required</p>
+                  <p className="mt-1 text-sky-900">
+                    Complete face authentication for your PF UAN on the UMANG app, then upload a screenshot that
+                    clearly shows successful verification.
+                  </p>
+                </div>
+              </div>
               )}
               {hasPfUan === 'no' && (
                 <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -1919,7 +2029,6 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                 </div>
               )}
               {hasPfUanError && <p className="mt-1.5 text-sm text-rose-600">{hasPfUanError}</p>}
-              {pfUanError && <p className="mt-1.5 text-sm text-rose-600">{pfUanError}</p>}
             </div>}
             {shouldShow('bp_police_verification_url') && (
               <DocUploadField
@@ -1986,7 +2095,13 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         </button>
         <button
           type="button"
-          disabled={!canSubmit || saving || Boolean(hasPfUanError) || Boolean(pfUanError)}
+          disabled={
+            !canSubmit ||
+            saving ||
+            Boolean(hasPfUanError) ||
+            Boolean(pfUanError) ||
+            Boolean(pfUanScreenshotError)
+          }
           onClick={handleSubmit}
           className="inline-flex items-center justify-center gap-1 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -3069,9 +3184,15 @@ export default function OnboardingForm() {
       }
     }
     if (step === 'photo') {
-      if (!TWELVE_DIGIT_REGEX.test(String(jobFormRow?.bp_pf_uan_number ?? ''))) {
+      const hasPfUanNumber = TWELVE_DIGIT_REGEX.test(String(jobFormRow?.bp_pf_uan_number ?? ''));
+      if (!hasPfUanNumber) {
         visibleFields.add('bp_pf_uan_number');
         requiredFields.add('bp_pf_uan_number');
+        visibleFields.add('bp_pf_uan_face_auth_screenshot_url');
+        requiredFields.add('bp_pf_uan_face_auth_screenshot_url');
+      } else if (!String(jobFormRow?.bp_pf_uan_face_auth_screenshot_url ?? '').trim()) {
+        visibleFields.add('bp_pf_uan_face_auth_screenshot_url');
+        requiredFields.add('bp_pf_uan_face_auth_screenshot_url');
       }
     }
     for (const optionalField of STEP_OPTIONAL_FIELDS[step] || []) {

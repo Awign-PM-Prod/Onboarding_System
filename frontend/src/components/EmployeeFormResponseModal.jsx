@@ -28,6 +28,7 @@ function prettifyKey(key) {
   if (key === 'pd_alternate_number') return 'Emergency Contact Number';
   if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
   if (key === 'pd_current_address') return 'Current Address';
+  if (key === 'bp_pf_uan_face_auth_screenshot_url') return 'PF UAN Face Authentication Screenshot';
   return stripFieldPrefix(key)
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -151,6 +152,7 @@ const ORDERED_FIELDS = [
   'bp_passport_photo_url',
   'bp_esic_number',
   'bp_pf_uan_number',
+  'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url'
 ];
 
@@ -165,6 +167,7 @@ const DOCUMENT_TAB_DEFINITIONS = [
   { key: 'kyc_pan_card_url', label: 'PAN Card' },
   { key: 'pd_driving_license_url', label: 'Driving Lic' },
   { key: 'bp_passport_photo_url', label: 'Photo' },
+  { key: 'bp_pf_uan_face_auth_screenshot_url', label: 'PF UAN Face Auth' },
   { key: 'bp_police_verification_url', label: 'Police Verification' }
 ];
 
@@ -194,6 +197,7 @@ const PM_MARKABLE_FIELDS = new Set([
   'bp_passport_photo_url',
   'bp_esic_number',
   'bp_pf_uan_number',
+  'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url'
 ]);
 

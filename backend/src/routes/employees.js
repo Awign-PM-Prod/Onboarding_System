@@ -234,6 +234,7 @@ const REVIEWABLE_JOB_FORM_FIELDS = [
   'bp_passport_photo_url',
   'bp_esic_number',
   'bp_pf_uan_number',
+  'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url'
 ];
 const CORRECTION_EDITABLE_FIELDS = new Set([
@@ -260,6 +261,7 @@ const CORRECTION_EDITABLE_FIELDS = new Set([
   'bp_passport_photo_url',
   'bp_esic_number',
   'bp_pf_uan_number',
+  'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url'
 ]);
 const REVIEW_DECISIONS = new Set(['APPROVED', 'REJECTED', 'CORRECTION_REQUESTED']);
@@ -339,6 +341,7 @@ function buildReinitiateFormResetPayload(nowIso) {
     bp_passport_photo_url: null,
     bp_esic_number: null,
     bp_pf_uan_number: null,
+    bp_pf_uan_face_auth_screenshot_url: null,
     bp_police_verification_url: null,
     submission_status: null,
     submission_attempt_count: 1,
