@@ -571,7 +571,7 @@ router.get('/', async (req, res, next) => {
     if (employeeIds.length > 0) {
       const { data: forms, error: formErr } = await supabaseAdmin
         .from('job_app_form')
-        .select('employee_id, submission_status, review_status, payroll_review_status, payroll_review_reason, reviewed_by, bp_pf_uan_number, bp_esic_number')
+        .select('employee_id, submission_status, review_status, review_reason, reviewed_at, payroll_review_status, payroll_review_reason, payroll_reviewed_at, reviewed_by, bp_pf_uan_number, bp_esic_number')
         .in('employee_id', employeeIds);
       if (formErr) throw formErr;
       formMap = new Map((forms ?? []).map((f) => [f.employee_id, f]));
@@ -593,8 +593,11 @@ router.get('/', async (req, res, next) => {
         ...r,
         form_submission_status: f?.submission_status ?? null,
         form_review_status: f?.review_status ?? null,
+        form_review_reason: f?.review_reason ?? null,
+        form_reviewed_at: f?.reviewed_at ?? null,
         form_payroll_review_status: f?.payroll_review_status ?? null,
         form_payroll_review_reason: f?.payroll_review_reason ?? null,
+        form_payroll_reviewed_at: f?.payroll_reviewed_at ?? null,
         form_pm_approver_name: f?.reviewed_by ? pmUserNameById.get(f.reviewed_by) ?? null : null,
         form_bp_pf_uan_number: f?.bp_pf_uan_number ?? null,
         form_bp_esic_number: f?.bp_esic_number ?? null

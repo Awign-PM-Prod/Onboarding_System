@@ -356,6 +356,20 @@ export default function PmLayout() {
             <span>Employee Directory</span>
             {cc && <span className={tabSeg === 'employee-directory' ? 'text-indigo-100' : 'text-slate-500'}>({cc.employee_directory})</span>}
           </NavLink>
+          <NavLink
+            to={pmClientTabUrl(c, 'testing')}
+            className={() =>
+              `flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                tabSeg === 'testing'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
+                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+              }`
+            }
+            onClick={() => setMobileNavOpen(false)}
+          >
+            <span>Testing</span>
+            {cc && <span className={tabSeg === 'testing' ? 'text-indigo-100' : 'text-slate-500'}>({cc.testing})</span>}
+          </NavLink>
         </nav>
 
         {sidebarFooter}

@@ -5,6 +5,7 @@ export const PM_CLIENT_TAB_SEGMENT = {
   in_progress: 'in-progress',
   pl_reviewed: 'pl-reviewed',
   employee_directory: 'employee-directory',
+  testing: 'testing',
   add_employee: 'add-employees'
 };
 
@@ -15,6 +16,7 @@ export const PM_TAB_SEGMENT_TO_KEY = {
   'in-progress': 'in_progress',
   'pl-reviewed': 'pl_reviewed',
   'employee-directory': 'employee_directory',
+  testing: 'testing',
   'add-employees': 'add_employee'
 };
 

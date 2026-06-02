@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { PM_TAB_SEGMENT_TO_KEY, pmClientTabUrl } from '../lib/pmClientRoutes';
 import EmployeeTable from '../components/EmployeeTable';
@@ -52,6 +52,21 @@ function buildOnboardingInitiateToast(prefix, result) {
   return `${base}. ${suffix.join(', ')}.`;
 }
 
+function formatReviewDateTime(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '-';
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return '-';
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(dt);
+}
+
 export default function PmClientDetail() {
   const { id, tab: tabSegment } = useParams();
   const navigate = useNavigate();
@@ -85,13 +100,20 @@ export default function PmClientDetail() {
     pl_reviewed_approved: 1,
     pl_reviewed_rejected: 1,
     employee_directory: 1,
+    testing_employees: 1,
+    testing_rejected: 1,
+    testing_add_employee: 1,
     add_employee: 1
   });
   /** Within Onboarding In Progress: form still open vs submitted applications */
   const [inProgressSubtab, setInProgressSubtab] = useState('form_sent');
   /** Within PL Reviewed: final approved vs final rejected by Payroll Lead */
   const [plReviewedSubtab, setPlReviewedSubtab] = useState('approved');
+  /** Within Testing: all records vs only rejected records */
+  const [testingSubtab, setTestingSubtab] = useState('employees');
   const [bulkRoleModalOpen, setBulkRoleModalOpen] = useState(false);
+  const [bulkRoleForceSendOnboarding, setBulkRoleForceSendOnboarding] = useState(false);
+  const [testingBulkMenuOpen, setTestingBulkMenuOpen] = useState(false);
   const [rowRoleModalEmployee, setRowRoleModalEmployee] = useState(null);
   const [responseModalOpen, setResponseModalOpen] = useState(false);
   const [responseModalEmployee, setResponseModalEmployee] = useState(null);
@@ -108,7 +130,6 @@ export default function PmClientDetail() {
   const [joiningInlineStatus, setJoiningInlineStatus] = useState('');
   const [joiningInlineDate, setJoiningInlineDate] = useState('');
   const [joiningInlineLoading, setJoiningInlineLoading] = useState(false);
-  const joiningInlineSelectRef = useRef(null);
   const [transferModalEmployee, setTransferModalEmployee] = useState(null);
   const [transferTargetClientId, setTransferTargetClientId] = useState('');
   const [transferReason, setTransferReason] = useState('');
@@ -235,6 +256,25 @@ export default function PmClientDetail() {
       }),
     [employees]
   );
+  const testingRejectedRows = useMemo(
+    () =>
+      employees
+        .filter((row) => {
+          const pmRejected = String(row.form_review_status ?? '').trim().toUpperCase() === 'REJECTED';
+          const plRejected = String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_REJECTED';
+          return pmRejected || plRejected;
+        })
+        .map((row) => {
+          const plRejected = String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_REJECTED';
+          return {
+            ...row,
+            testing_form_status: plRejected ? 'PL REJECTED' : 'PM REJECTED',
+            testing_rejected_at: plRejected ? row.form_payroll_reviewed_at : row.form_reviewed_at,
+            testing_rejected_remarks: plRejected ? row.form_payroll_review_reason : row.form_review_reason,
+          };
+        }),
+    [employees]
+  );
   const directoryStatusOptions = useMemo(() => {
     const fromRows = Array.from(
       new Set(
@@ -319,12 +359,26 @@ export default function PmClientDetail() {
         ? plReviewedSubtab === 'approved'
           ? 'pl_reviewed_approved'
           : 'pl_reviewed_rejected'
+      : activeTab === 'testing'
+        ? testingSubtab === 'add_employee'
+          ? 'testing_add_employee'
+          : testingSubtab === 'employees'
+          ? 'testing_employees'
+          : 'testing_rejected'
       : activeTab;
+  const showAddEmployeePanel =
+    activeTab === 'add_employee' || (activeTab === 'testing' && testingSubtab === 'add_employee');
   const visibleRows =
     activeTab === 'pending'
       ? filteredPending
       : activeTab === 'role_assigned'
         ? filteredRoleAssigned
+        : activeTab === 'testing'
+          ? testingSubtab === 'add_employee'
+            ? []
+            : testingSubtab === 'employees'
+            ? employees
+            : testingRejectedRows
         : activeTab === 'add_employee'
           ? []
           : activeTab === 'employee_directory'
@@ -356,7 +410,14 @@ export default function PmClientDetail() {
     setJoiningInlineEmployeeId(null);
     setJoiningInlineStatus('');
     setJoiningInlineDate('');
-  }, [activeTab, tabSegment, inProgressSubtab, plReviewedSubtab]);
+    setTestingBulkMenuOpen(false);
+    setBulkRoleForceSendOnboarding(false);
+  }, [activeTab, tabSegment, inProgressSubtab, plReviewedSubtab, testingSubtab]);
+
+  useEffect(() => {
+    if (activeTab !== 'testing') return;
+    setTestingSubtab('employees');
+  }, [activeTab]);
 
   useEffect(() => {
     if (!setClientSidebarMeta) return;
@@ -366,7 +427,8 @@ export default function PmClientDetail() {
         role_assigned: roleAssigned.length,
         in_progress: inProgressTotal,
         pl_reviewed: plReviewedTotal,
-        employee_directory: employees.length
+        employee_directory: employees.length,
+        testing: employees.length
       }
     });
   }, [
@@ -378,7 +440,7 @@ export default function PmClientDetail() {
     employees.length
   ]);
   useEffect(() => {
-    if (activeTab === 'add_employee') return;
+    if (showAddEmployeePanel) return;
     const pageKey =
       activeTab === 'in_progress'
         ? inProgressSubtab === 'form_sent'
@@ -394,11 +456,17 @@ export default function PmClientDetail() {
           ? plReviewedSubtab === 'approved'
             ? 'pl_reviewed_approved'
             : 'pl_reviewed_rejected'
+        : activeTab === 'testing'
+          ? testingSubtab === 'add_employee'
+            ? 'testing_add_employee'
+            : testingSubtab === 'employees'
+              ? 'testing_employees'
+              : 'testing_rejected'
         : activeTab;
     if (pageByTab[pageKey] > totalPages) {
       setPageByTab((prev) => ({ ...prev, [pageKey]: totalPages }));
     }
-  }, [activeTab, inProgressSubtab, plReviewedSubtab, pageByTab, totalPages]);
+  }, [activeTab, inProgressSubtab, plReviewedSubtab, testingSubtab, pageByTab, showAddEmployeePanel, totalPages]);
 
   const toggle = (empId) => {
     setSelectedIds(prev => {
@@ -517,6 +585,26 @@ export default function PmClientDetail() {
     } finally {
       setRoleDetailsLoading(false);
     }
+  };
+
+  const openBulkAssignRoleAndShareForm = () => {
+    setTestingBulkMenuOpen(false);
+    setBulkRoleForceSendOnboarding(true);
+    setBulkRoleModalOpen(true);
+  };
+
+  const handleBulkRoleModalClose = () => {
+    if (roleDetailsLoading) return;
+    setBulkRoleModalOpen(false);
+    setBulkRoleForceSendOnboarding(false);
+  };
+
+  const handleBulkRoleDetailsFromModal = async (payload, options = {}) => {
+    const effectiveOptions = bulkRoleForceSendOnboarding
+      ? { ...options, sendOnboardingNow: true }
+      : options;
+    await handleBulkRoleDetails(payload, effectiveOptions);
+    setBulkRoleForceSendOnboarding(false);
   };
 
   const closeResponseModal = () => {
@@ -679,8 +767,12 @@ export default function PmClientDetail() {
   };
 
   const handleInlineStatusChange = async (row, value) => {
+    const currentStatus = String(row.joining_status ?? '').trim().toUpperCase();
+    setJoiningInlineEmployeeId(row.id);
     setJoiningInlineStatus(value);
+    setJoiningInlineDate(value === 'JOINED_OTHER_DATE' ? String(row.joining_actual_date ?? '').trim() : '');
     if (!value) return;
+    if (value === currentStatus) return;
     if (value !== 'JOINED_OTHER_DATE') {
       setJoiningInlineDate('');
       setJoiningInlineLoading(true);
@@ -696,7 +788,9 @@ export default function PmClientDetail() {
         setToast(`Joining status updated for ${row.name}.`);
         setTimeout(() => setToast(null), 3000);
         await loadAll();
-        cancelInlineJoiningEdit();
+        setJoiningInlineEmployeeId(null);
+        setJoiningInlineStatus('');
+        setJoiningInlineDate('');
       } catch (err) {
         setError(err.message || 'Could not update joining status.');
       } finally {
@@ -756,9 +850,10 @@ export default function PmClientDetail() {
     const status = String(row.joining_status ?? '').trim().toUpperCase();
     const changeCount = Number(row.joining_status_change_count ?? 0);
     const canSecondStageAbscond = changeCount < 3 && status === 'JOINED_OTHER_DATE';
+    const inTestingEmployees = activeTab === 'testing' && testingSubtab === 'employees';
+    const isPayrollApprovedRow = String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED';
     const canInlineEdit =
-      activeTab === 'pl_reviewed' &&
-      plReviewedSubtab === 'approved' &&
+      ((activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') || (inTestingEmployees && isPayrollApprovedRow)) &&
       (
         !status ||
         (changeCount < 2 && (status === 'JOINED' || status === 'JOINED_OTHER_DATE' || status === 'NOT_JOINED')) ||
@@ -766,108 +861,91 @@ export default function PmClientDetail() {
       );
     if (!canInlineEdit) return defaultLabel(row);
 
-    const isEditing = joiningInlineEmployeeId === row.id;
-    if (!isEditing) {
-      return (
-        <div className="inline-flex items-center gap-1.5">
-          <span className="text-slate-700">{defaultLabel(row)}</span>
-          <button
-            type="button"
-            onClick={() => startInlineJoiningEdit(row)}
-            className="inline-flex shrink-0 items-center justify-center rounded p-1 text-slate-600 hover:bg-slate-100 hover:text-indigo-700"
-            title={status ? 'Update joining status' : 'Set joining status'}
-            aria-label={`${status ? 'Update' : 'Set'} joining status for ${row.name}`}
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.805.805-2.685a4.5 4.5 0 011.13-1.897L16.862 4.487z" />
-            </svg>
-          </button>
-        </div>
+    const currentValue = joiningInlineEmployeeId === row.id ? joiningInlineStatus : status;
+    const currentDate = joiningInlineEmployeeId === row.id
+      ? joiningInlineDate
+      : String(row.joining_actual_date ?? '').trim();
+    const persistedDate = String(row.joining_actual_date ?? '').trim();
+    const shouldShowJoinedOtherDateSave =
+      currentValue === 'JOINED_OTHER_DATE' &&
+      Boolean(currentDate) &&
+      (
+        status !== 'JOINED_OTHER_DATE' ||
+        currentDate !== persistedDate
       );
+    const allowedOptions = [];
+    if (!status) {
+      allowedOptions.push('JOINED', 'NOT_JOINED', 'JOINED_OTHER_DATE', 'JOINED_ABSCONDED');
+    } else {
+      allowedOptions.push(status);
+      if (status === 'NOT_JOINED' && changeCount < 2) allowedOptions.push('JOINED_OTHER_DATE');
+      if ((status === 'JOINED' || status === 'JOINED_OTHER_DATE') && changeCount < 2) {
+        allowedOptions.push('JOINED_ABSCONDED');
+      }
+      if (status === 'JOINED_OTHER_DATE' && changeCount >= 2 && changeCount < 3) {
+        allowedOptions.push('JOINED_ABSCONDED');
+      }
     }
+    const dedupedOptions = Array.from(new Set(allowedOptions));
+    const labelFor = (option) => {
+      if (option === 'JOINED') return 'Joined';
+      if (option === 'NOT_JOINED') return 'Not Joined';
+      if (option === 'JOINED_OTHER_DATE') return 'Joined on other date';
+      if (option === 'JOINED_ABSCONDED') return 'Joined and absconded';
+      return option;
+    };
 
     return (
       <div className="flex min-w-[220px] flex-col gap-1.5">
         <select
-          ref={joiningInlineSelectRef}
-          value={joiningInlineStatus}
+          value={currentValue}
+          onFocus={() => {
+            setJoiningInlineEmployeeId(row.id);
+            setJoiningInlineStatus(status);
+            setJoiningInlineDate(String(row.joining_actual_date ?? '').trim());
+          }}
           onChange={(e) => handleInlineStatusChange(row, e.target.value)}
-          className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          disabled={joiningInlineLoading}
         >
           <option value="">Select status</option>
-          {!status && (
-            <>
-              <option value="JOINED">Joined</option>
-              <option value="NOT_JOINED">Not Joined</option>
-              <option value="JOINED_OTHER_DATE">Joined on other date</option>
-              <option value="JOINED_ABSCONDED">Joined and absconded</option>
-            </>
-          )}
-          {status === 'NOT_JOINED' && changeCount < 2 && (
-            <option value="JOINED_OTHER_DATE">Joined on other date</option>
-          )}
-          {(status === 'JOINED' || status === 'JOINED_OTHER_DATE') && changeCount < 2 && (
-            <option value="JOINED_ABSCONDED">Joined and absconded</option>
-          )}
-          {status === 'JOINED_OTHER_DATE' && changeCount >= 2 && changeCount < 3 && (
-            <option value="JOINED_ABSCONDED">Joined and absconded</option>
-          )}
+          {dedupedOptions.map((option) => (
+            <option key={option} value={option}>
+              {labelFor(option)}
+            </option>
+          ))}
         </select>
-        {joiningInlineStatus === 'JOINED_OTHER_DATE' && (
-          <input
-            type="date"
-            value={joiningInlineDate}
-            onChange={(e) => setJoiningInlineDate(e.target.value)}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
-          />
+        {currentValue === 'JOINED_OTHER_DATE' && (
+          <>
+            <input
+              type="date"
+              value={currentDate}
+              onChange={(e) => {
+                setJoiningInlineEmployeeId(row.id);
+                setJoiningInlineStatus('JOINED_OTHER_DATE');
+                setJoiningInlineDate(e.target.value);
+              }}
+              className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
+            {shouldShowJoinedOtherDateSave && (
+              <button
+                type="button"
+                onClick={() => saveInlineJoiningEdit(row)}
+                disabled={joiningInlineLoading}
+                className="self-start rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {joiningInlineLoading ? 'Saving...' : 'Save'}
+              </button>
+            )}
+          </>
         )}
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => saveInlineJoiningEdit(row)}
-            disabled={
-              joiningInlineLoading ||
-              !joiningInlineStatus ||
-              (joiningInlineStatus === 'JOINED_OTHER_DATE' && !joiningInlineDate)
-            }
-            className="rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {joiningInlineLoading ? 'Saving...' : 'Save'}
-          </button>
-          <button
-            type="button"
-            onClick={cancelInlineJoiningEdit}
-            disabled={joiningInlineLoading}
-            className="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-50"
-          >
-            Cancel
-          </button>
-        </div>
       </div>
     );
   };
 
-  useEffect(() => {
-    if (!joiningInlineEmployeeId) return;
-    const selectEl = joiningInlineSelectRef.current;
-    if (!selectEl) return;
-    requestAnimationFrame(() => {
-      selectEl.focus();
-      if (typeof selectEl.showPicker === 'function') {
-        try {
-          selectEl.showPicker();
-          return;
-        } catch {
-          // fallback below
-        }
-      }
-      selectEl.click();
-    });
-  }, [joiningInlineEmployeeId]);
-
   if (loading && !client) {
     return (
-      <main className="mx-auto max-w-6xl px-6 py-8 text-slate-500">Loading...</main>
+      <main className="mx-auto w-[98%] px-6 py-8 text-slate-500">Loading...</main>
     );
   }
 
@@ -875,7 +953,7 @@ export default function PmClientDetail() {
     <main className="flex min-h-full flex-col">
         {client && (
           <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur-sm">
-            <div className="mx-auto max-w-6xl px-6 pb-4 pt-5">
+            <div className="mx-auto w-[98%] px-6 pb-4 pt-5">
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="min-w-0 text-2xl font-semibold tracking-tight text-slate-900">
                   {client.client_name}
@@ -927,7 +1005,7 @@ export default function PmClientDetail() {
         )}
 
         <div className="flex w-full min-h-0 flex-1 flex-col bg-white">
-          <div className="mx-auto w-full max-w-6xl flex-1 px-6 py-6">
+          <div className="mx-auto w-[98%] flex-1 px-6 py-6">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2 text-sm mb-4">
             {error}
@@ -945,7 +1023,10 @@ export default function PmClientDetail() {
             {activeTab === 'pending' && (
               <button
                 type="button"
-                onClick={() => setBulkRoleModalOpen(true)}
+                onClick={() => {
+                  setBulkRoleForceSendOnboarding(false);
+                  setBulkRoleModalOpen(true);
+                }}
                 disabled={selectedIds.size === 0}
                 className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -1027,7 +1108,82 @@ export default function PmClientDetail() {
           </div>
         )}
 
-        {activeTab === 'add_employee' && client && (
+        {activeTab === 'testing' && (
+          <div className="mb-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                <button
+                  type="button"
+                  onClick={() => setTestingSubtab('add_employee')}
+                  className={`rounded-md px-4 py-2 text-sm font-medium ${
+                    testingSubtab === 'add_employee'
+                      ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200/80'
+                      : 'text-slate-600 hover:bg-white/70'
+                  }`}
+                >
+                  Add Employee
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTestingSubtab('employees')}
+                  className={`rounded-md px-4 py-2 text-sm font-medium ${
+                    testingSubtab === 'employees'
+                      ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200/80'
+                      : 'text-slate-600 hover:bg-white/70'
+                  }`}
+                >
+                  Employees
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTestingSubtab('rejected')}
+                  className={`rounded-md px-4 py-2 text-sm font-medium ${
+                    testingSubtab === 'rejected'
+                      ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200/80'
+                      : 'text-slate-600 hover:bg-white/70'
+                  }`}
+                >
+                  Rejected
+                </button>
+              </div>
+              {testingSubtab === 'employees' && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setTestingBulkMenuOpen((v) => !v)}
+                    disabled={selectedIds.size === 0}
+                    className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Bulk Action
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                    </svg>
+                  </button>
+                  {testingBulkMenuOpen && (
+                    <div className="absolute right-0 z-20 mt-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                      <button
+                        type="button"
+                        onClick={openBulkAssignRoleAndShareForm}
+                        className="block w-full px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+                      >
+                        Assign Role &amp; Share Form
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="text-sm text-slate-700">
+              {testingSubtab === 'add_employee'
+                ? 'Add employees manually or upload them in bulk.'
+                : testingSubtab === 'employees'
+                  ? 'Showing all employee records from the employee table for this client.'
+                  : 'Showing employees rejected by either PM or Payroll Lead.'}
+            </div>
+          </div>
+        )}
+
+        {showAddEmployeePanel && client && (
           <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-100 bg-slate-50/80 px-6 py-4">
               <h2 className="text-lg font-semibold text-slate-900">Add employees</h2>
@@ -1369,7 +1525,7 @@ export default function PmClientDetail() {
           </div>
         )}
 
-        {activeTab !== 'add_employee' && (
+        {!showAddEmployeePanel && (
         <EmployeeTable
           rows={pagedRows}
           selectedIds={selectedIds}
@@ -1378,6 +1534,7 @@ export default function PmClientDetail() {
           selectable={
             activeTab === 'pending' ||
             activeTab === 'role_assigned' ||
+            (activeTab === 'testing' && testingSubtab === 'employees') ||
             (activeTab === 'in_progress' && inProgressSubtab === 'responses') ||
             (activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') ||
             (activeTab === 'in_progress' && inProgressSubtab === 'rejected') ||
@@ -1385,16 +1542,32 @@ export default function PmClientDetail() {
           }
           showJobColumns={activeTab !== 'pending'}
           showStatusColumn={activeTab !== 'pl_reviewed'}
-          showJoiningStatus={activeTab === 'pl_reviewed'}
+          statusColumnLabel={activeTab === 'testing' ? 'Form Status' : 'Status'}
+          showNotAssignedForMissingRoleDetails={activeTab === 'testing' && testingSubtab === 'employees'}
+          forceNotSentStatusForMissingRoleDetails={activeTab === 'testing' && testingSubtab === 'employees'}
+          showRespondedForSubmittedForms={activeTab === 'testing' && testingSubtab === 'employees'}
+          showApprovedForPmApproved={activeTab === 'testing' && testingSubtab === 'employees'}
+          showPlApprovedForPayrollApproved={activeTab === 'testing' && testingSubtab === 'employees'}
+          showRequestCorrectionForReview={activeTab === 'testing' && testingSubtab === 'employees'}
+          showJoiningStatus={activeTab === 'pl_reviewed' || (activeTab === 'testing' && testingSubtab === 'employees')}
           joiningStatusCellRenderer={renderJoiningStatusCell}
           showFormLink={activeTab === 'in_progress' && inProgressSubtab === 'form_sent'}
           formLinkForRow={
             activeTab === 'in_progress' && inProgressSubtab === 'form_sent' ? employeeOnboardingFormPath : null
           }
           showViewResponse={
-            activeTab === 'in_progress' && inProgressSubtab !== 'form_sent' && inProgressSubtab !== 'approved'
+            (activeTab === 'testing' && testingSubtab === 'employees') ||
+            (activeTab === 'in_progress' && inProgressSubtab !== 'form_sent' && inProgressSubtab !== 'approved')
           }
           onViewResponse={openResponseModal}
+          reviewColumnLabel={activeTab === 'testing' ? 'Review' : 'View'}
+          showReviewTextCta={activeTab === 'testing' && testingSubtab === 'employees'}
+          reviewCtaForSubmittedOnly={activeTab === 'testing' && testingSubtab === 'employees'}
+          statusForRow={activeTab === 'testing' && testingSubtab === 'rejected' ? (row) => row.testing_form_status : null}
+          showDateColumn={activeTab === 'testing' && testingSubtab === 'rejected'}
+          dateForRow={activeTab === 'testing' && testingSubtab === 'rejected' ? (row) => formatReviewDateTime(row.testing_rejected_at) : null}
+          showRemarksColumn={activeTab === 'testing' && testingSubtab === 'rejected'}
+          remarksForRow={activeTab === 'testing' && testingSubtab === 'rejected' ? (row) => String(row.testing_rejected_remarks ?? '').trim() || '-' : null}
           actionLabel={activeTab === 'pending' ? 'Set Details' : activeTab === 'employee_directory' ? 'Transfer' : null}
           onRowAction={
             activeTab === 'pending'
@@ -1406,7 +1579,7 @@ export default function PmClientDetail() {
         />
         )}
 
-        {activeTab !== 'add_employee' && visibleRows.length > 0 && !paginationDisabled && (
+        {!showAddEmployeePanel && visibleRows.length > 0 && !paginationDisabled && (
           <div className="flex items-center justify-between mt-3 text-sm text-slate-600">
             <div>
               Showing {(currentPage - 1) * effectivePageSize + 1}
@@ -1449,13 +1622,17 @@ export default function PmClientDetail() {
 
         {bulkRoleModalOpen && (
           <RoleDetailsModal
-            title="Set Role Details (Bulk)"
-            description={`Apply the same role details to ${selectedIds.size} selected available employee${selectedIds.size === 1 ? '' : 's'}.`}
+            title={bulkRoleForceSendOnboarding ? 'Assign Role & Share Form' : 'Set Role Details (Bulk)'}
+            description={
+              bulkRoleForceSendOnboarding
+                ? `Assign role details and share onboarding form for ${selectedIds.size} selected employee${selectedIds.size === 1 ? '' : 's'}.`
+                : `Apply the same role details to ${selectedIds.size} selected available employee${selectedIds.size === 1 ? '' : 's'}.`
+            }
             designations={client?.designations ?? []}
             submitting={roleDetailsLoading}
-            showSendOnboardingOption
-            onClose={() => setBulkRoleModalOpen(false)}
-            onSubmit={handleBulkRoleDetails}
+            showSendOnboardingOption={!bulkRoleForceSendOnboarding}
+            onClose={handleBulkRoleModalClose}
+            onSubmit={handleBulkRoleDetailsFromModal}
           />
         )}
         {rowRoleModalEmployee && (

@@ -31,11 +31,28 @@ export default function EmployeeTable({
   formLinkForRow = null,
   showViewResponse = false,
   onViewResponse = null,
+  reviewColumnLabel = 'View',
+  showReviewTextCta = false,
+  reviewCtaForSubmittedOnly = false,
   showPayrollReturnedActions = false,
   onSendBackToPayrollLead = null,
   showJoiningStatus = false,
   joiningStatusCellRenderer = null,
-  showStatusColumn = true
+  showStatusColumn = true,
+  statusColumnLabel = 'Status',
+  statusForRow = null,
+  showNotAssignedForMissingRoleDetails = false,
+  forceNotSentStatusForMissingRoleDetails = false,
+  showRespondedForSubmittedForms = false,
+  showApprovedForPmApproved = false,
+  showPlApprovedForPayrollApproved = false,
+  showRequestCorrectionForReview = false,
+  showDateColumn = false,
+  dateColumnLabel = 'Date',
+  dateForRow = null,
+  showRemarksColumn = false,
+  remarksColumnLabel = 'Remarks',
+  remarksForRow = null,
 }) {
   const joiningStatusLabel = (row) => {
     const status = String(row.joining_status ?? '').trim().toUpperCase();
@@ -62,8 +79,8 @@ export default function EmployeeTable({
   }
 
   return (
-    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-      <table className="min-w-full text-sm">
+    <div className="bg-white border border-slate-200 rounded-lg overflow-x-auto overflow-y-hidden">
+      <table className="min-w-[1200px] w-full text-sm">
         <thead className="bg-slate-50 text-slate-600">
           <tr>
             {selectable && (
@@ -82,20 +99,50 @@ export default function EmployeeTable({
             {showJobColumns && <th className="text-left px-4 py-2 font-medium">Designation</th>}
             {showJobColumns && <th className="text-left px-4 py-2 font-medium">DOJ</th>}
             {showJobColumns && <th className="text-left px-4 py-2 font-medium">CTC</th>}
-            {showStatusColumn && <th className="text-left px-4 py-2 font-medium">Status</th>}
-            {showJoiningStatus && <th className="text-left px-4 py-2 font-medium">Joining Status</th>}
+            {showStatusColumn && <th className="text-left px-4 py-2 font-medium">{statusColumnLabel}</th>}
+            {showDateColumn && <th className="text-left px-4 py-2 font-medium min-w-[180px] whitespace-nowrap">{dateColumnLabel}</th>}
+            {showRemarksColumn && <th className="text-left px-4 py-2 font-medium">{remarksColumnLabel}</th>}
             {showFormLink && <th className="text-left px-4 py-2 font-medium">Form Link</th>}
-            {showViewResponse && <th className="w-14 px-3 py-2 text-center font-medium">View</th>}
+            {showViewResponse && (
+              <th className={`px-3 py-2 font-medium ${showReviewTextCta ? 'text-left' : 'text-center w-14'}`}>
+                {reviewColumnLabel}
+              </th>
+            )}
             {showPayrollReturnedActions && (
               <th className="text-left px-4 py-2 font-medium">Payroll Lead note</th>
             )}
             {showPayrollReturnedActions && <th className="text-left px-4 py-2 font-medium">Action</th>}
             {actionLabel && <th className="text-left px-4 py-2 font-medium">Action</th>}
+            {showJoiningStatus && <th className="text-left px-4 py-2 font-medium">Joining Status</th>}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
           {rows.map(r => {
             const checked = selectedIds.has(r.id);
+            const missingRoleDetails =
+              showNotAssignedForMissingRoleDetails &&
+              (
+                !String(r.designation ?? '').trim() ||
+                !String(r.date_of_joining ?? '').trim() ||
+                !String(r.ctc_type ?? '').trim() ||
+                r.ctc_value === null ||
+                r.ctc_value === undefined ||
+                String(r.ctc_value).trim() === ''
+              );
+            const statusLabel =
+              forceNotSentStatusForMissingRoleDetails && missingRoleDetails
+                ? 'NOT_SENT'
+                : typeof statusForRow === 'function' && String(statusForRow(r) ?? '').trim()
+                  ? String(statusForRow(r) ?? '').trim()
+                : showPlApprovedForPayrollApproved && String(r.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED'
+                  ? 'PL APPROVED'
+                : showRequestCorrectionForReview && String(r.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED'
+                  ? 'REQUEST CORRECTION'
+                : showApprovedForPmApproved && String(r.form_review_status ?? '').trim().toUpperCase() === 'APPROVED'
+                  ? 'APPROVED'
+                : showRespondedForSubmittedForms && String(r.form_submission_status ?? '').trim() === 'Submitted'
+                  ? 'RESPONDED'
+                : r.onboarding_status;
             return (
               <tr key={r.id} className={checked ? 'bg-indigo-50/40' : ''}>
                 {selectable && (
@@ -111,23 +158,56 @@ export default function EmployeeTable({
                 <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
                 <td className="px-4 py-3 text-slate-700">{r.mobile}</td>
                 <td className="px-4 py-3 text-slate-700">{r.email}</td>
-                {showJobColumns && <td className="px-4 py-3 text-slate-700">{r.designation || '-'}</td>}
-                {showJobColumns && <td className="px-4 py-3 text-slate-700">{r.date_of_joining || '-'}</td>}
-                {showJobColumns && <td className="px-4 py-3 text-slate-700">{formatCtc(r.ctc_type, r.ctc_value)}</td>}
+                {showJobColumns && (
+                  <td className="px-4 py-3 text-slate-700">
+                    {missingRoleDetails ? (
+                      <span className="font-medium text-rose-600">Not Assigned</span>
+                    ) : (r.designation || '-')}
+                  </td>
+                )}
+                {showJobColumns && (
+                  <td className="px-4 py-3 text-slate-700">
+                    {r.date_of_joining || '-'}
+                  </td>
+                )}
+                {showJobColumns && (
+                  <td className="px-4 py-3 text-slate-700">
+                    {formatCtc(r.ctc_type, r.ctc_value)}
+                  </td>
+                )}
                 {showStatusColumn && (
                   <td className="px-4 py-3">
                     <span className={`text-xs rounded px-2 py-0.5 ${
-                      r.onboarding_initiated
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : 'bg-amber-50 text-amber-700'
+                      statusLabel === 'NOT_SENT'
+                        ? 'bg-[#F4F5F6] text-slate-700'
+                        : String(statusLabel).trim().toUpperCase() === 'FORM_SENT'
+                          ? 'bg-indigo-50 text-indigo-700'
+                        : statusLabel === 'RESPONDED'
+                          ? 'bg-[#EDF7FC] text-[#1891CD]'
+                        : statusLabel === 'REQUEST CORRECTION'
+                          ? 'bg-orange-50 text-orange-700'
+                        : statusLabel === 'PL APPROVED'
+                          ? 'bg-emerald-700 text-emerald-50'
+                        : statusLabel === 'PL REJECTED'
+                          ? 'bg-red-800 text-white'
+                          : statusLabel === 'PM REJECTED'
+                            ? 'bg-red-50 text-red-700'
+                        : r.onboarding_initiated
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-amber-50 text-amber-700'
                     }`}>
-                      {r.onboarding_status}
+                      {statusLabel}
                     </span>
                   </td>
                 )}
-                {showJoiningStatus && (
+                {showDateColumn && (
+                  <td className="px-4 py-3 text-slate-700 min-w-[180px] whitespace-nowrap">
+                    {typeof dateForRow === 'function' ? dateForRow(r) : '-'}
+                  </td>
+                )}
+                {showRemarksColumn && (
                   <td className="px-4 py-3 text-slate-700">
-                    {joiningStatusCellRenderer ? joiningStatusCellRenderer(r, joiningStatusLabel) : joiningStatusLabel(r)}
+                    {typeof remarksForRow === 'function' ? remarksForRow(r) : '-'}
                   </td>
                 )}
                 {showFormLink && (
@@ -145,16 +225,25 @@ export default function EmployeeTable({
                   </td>
                 )}
                 {showViewResponse && (
-                  <td className="px-2 py-3 text-center">
-                    <button
-                      type="button"
-                      onClick={() => onViewResponse?.(r)}
-                      className="inline-flex rounded-lg p-2 text-slate-600 hover:bg-indigo-50 hover:text-indigo-700"
-                      title="View application response"
-                      aria-label={`View application response for ${r.name}`}
-                    >
-                      <IconEye className="h-5 w-5" />
-                    </button>
+                  <td className={showReviewTextCta ? 'px-4 py-3 text-left' : 'px-2 py-3 text-center'}>
+                    {(!reviewCtaForSubmittedOnly || String(r.form_submission_status ?? '').trim() === 'Submitted') ? (
+                      <button
+                        type="button"
+                        onClick={() => onViewResponse?.(r)}
+                        className={
+                          showReviewTextCta
+                            ? 'inline-flex items-center gap-1.5 text-sm font-medium text-[#1891CD] hover:text-[#1273a5]'
+                            : 'inline-flex rounded-lg p-2 text-slate-600 hover:bg-indigo-50 hover:text-indigo-700'
+                        }
+                        title="View application response"
+                        aria-label={`View application response for ${r.name}`}
+                      >
+                        {showReviewTextCta && <span>Review</span>}
+                        <IconEye className={showReviewTextCta ? 'h-5 w-5' : 'h-5 w-5'} />
+                      </button>
+                    ) : (
+                      <span className="text-slate-400">-</span>
+                    )}
                   </td>
                 )}
                 {showPayrollReturnedActions && (
@@ -184,6 +273,11 @@ export default function EmployeeTable({
                     >
                       {actionLabel}
                     </button>
+                  </td>
+                )}
+                {showJoiningStatus && (
+                  <td className="px-4 py-3 text-slate-700">
+                    {joiningStatusCellRenderer ? joiningStatusCellRenderer(r, joiningStatusLabel) : joiningStatusLabel(r)}
                   </td>
                 )}
               </tr>
