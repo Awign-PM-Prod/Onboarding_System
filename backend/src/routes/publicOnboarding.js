@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { supabaseAdmin } from '../supabase.js';
 import { compressKycImageBuffer } from '../utils/kycImageCompress.js';
+import { namesLikelyMatch } from '../utils/nameMatch.js';
 
 const router = Router();
 
@@ -481,24 +482,6 @@ function photoDataUrlFromBase64(photo) {
   if (!v) return null;
   if (v.startsWith('data:image/')) return v;
   return `data:image/jpeg;base64,${v}`;
-}
-
-function normalizeForNameMatch(name) {
-  return String(name ?? '')
-    .toLowerCase()
-    .replace(/[^a-z\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function namesLikelyMatch(a, b) {
-  const x = normalizeForNameMatch(a);
-  const y = normalizeForNameMatch(b);
-  if (!x || !y) return false;
-  if (x === y) return true;
-  if (x.length >= 4 && y.includes(x)) return true;
-  if (y.length >= 4 && x.includes(y)) return true;
-  return false;
 }
 
 const EMPLOYEE_JOB_FORM_FIELDS =
