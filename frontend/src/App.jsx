@@ -23,7 +23,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 
 function PmClientDefaultRedirect() {
   const { id } = useParams();
-  return <Navigate to={`/pm-dashboard/client/${id}/pending`} replace />;
+  return <Navigate to={`/pm-dashboard/client/${id}/dashboard`} replace />;
 }
 
 function PayrollClientDefaultRedirect() {

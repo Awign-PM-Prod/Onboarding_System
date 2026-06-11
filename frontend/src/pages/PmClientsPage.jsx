@@ -53,7 +53,7 @@ export default function PmClientsPage() {
           {clients.map((c) => (
             <Link
               key={c.id}
-              to={`/pm-dashboard/client/${c.id}/pending`}
+              to={`/pm-dashboard/client/${c.id}/dashboard`}
               className="group rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-indigo-300 hover:shadow-md"
             >
               <div className="mb-2 flex items-start justify-between gap-2">

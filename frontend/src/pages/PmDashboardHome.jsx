@@ -120,7 +120,7 @@ export default function PmDashboardHome() {
                       <tr key={c.client_id}>
                         <td className="px-3 py-2">
                           <Link
-                            to={`/pm-dashboard/client/${c.client_id}/pending`}
+                            to={`/pm-dashboard/client/${c.client_id}/dashboard`}
                             className="font-medium text-indigo-700 hover:underline"
                           >
                             {c.client_name}

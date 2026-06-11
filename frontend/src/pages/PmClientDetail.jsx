@@ -1,15 +1,51 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { NavLink, useNavigate, useParams } from 'react-router-dom';
 import { PM_TAB_SEGMENT_TO_KEY, pmClientTabUrl } from '../lib/pmClientRoutes';
 import EmployeeTable from '../components/EmployeeTable';
 import EmployeeFormResponseModal from '../components/EmployeeFormResponseModal';
 import AddEmployeeModal from '../components/AddEmployeeModal';
 import BulkUploadModal from '../components/BulkUploadModal';
 import RoleDetailsModal from '../components/RoleDetailsModal';
+import PmClientDashboard from '../components/PmClientDashboard';
 import { api } from '../lib/api';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
 
 const PAGE_SIZE = 50;
+const TESTING_FORM_STATUS_OPTIONS = [
+  'NOT_SENT',
+  'AVAILABLE',
+  'PENDING',
+  'ROLE_ASSIGNED',
+  'FORM_SENT',
+  'RESPONDED',
+  'REQUEST CORRECTION',
+  'APPROVED',
+  'PL APPROVED',
+  'Form Submitted',
+];
+
+const TESTING_JOINING_STATUS_OPTIONS = [
+  { value: '__NONE__', label: 'Not set' },
+  { value: 'JOINED', label: 'Joined' },
+  { value: 'NOT_JOINED', label: 'Not Joined' },
+  { value: 'JOINED_OTHER_DATE', label: 'Joined on other date' },
+  { value: 'JOINED_ABSCONDED', label: 'Joined and absconded' },
+];
+
+const TESTING_REJECTED_BY_OPTIONS = [
+  { value: 'PM', label: 'PM' },
+  { value: 'PL', label: 'PL' },
+];
+
+/** Form statuses on Testing → Employees that have a submitted response to export. */
+const TESTING_FORM_CSV_EXPORT_STATUSES = new Set([
+  'RESPONDED',
+  'REQUEST CORRECTION',
+  'APPROVED',
+  'PL APPROVED',
+  'Form Submitted',
+]);
+
 const DIRECTORY_STATUS_OPTIONS = [
   'AVAILABLE',
   'PENDING',
@@ -67,16 +103,54 @@ function formatReviewDateTime(value) {
   }).format(dt);
 }
 
+function isMissingRoleDetails(row) {
+  return (
+    !String(row.designation ?? '').trim() ||
+    !String(row.date_of_joining ?? '').trim() ||
+    !String(row.ctc_type ?? '').trim() ||
+    row.ctc_value === null ||
+    row.ctc_value === undefined ||
+    String(row.ctc_value).trim() === ''
+  );
+}
+
+function getTestingFormStatusLabel(row) {
+  if (isMissingRoleDetails(row)) return 'NOT_SENT';
+  if (String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED') return 'PL APPROVED';
+  if (String(row.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED') return 'REQUEST CORRECTION';
+  if (String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED') return 'APPROVED';
+  if (String(row.form_submission_status ?? '').trim() === 'Submitted') return 'RESPONDED';
+  return String(row.onboarding_status ?? '').trim() || '-';
+}
+
+function getTestingJoiningStatusKey(row) {
+  const status = String(row.joining_status ?? '').trim().toUpperCase();
+  return status || '__NONE__';
+}
+
+function canExportTestingFormResponse(row) {
+  if (String(row.form_submission_status ?? '').trim() === 'Submitted') return true;
+  return TESTING_FORM_CSV_EXPORT_STATUSES.has(getTestingFormStatusLabel(row));
+}
+
+function canBulkSetInitialJoiningStatus(row) {
+  const payrollApproved =
+    String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED';
+  const pmApproved = String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED';
+  const joiningStatus = String(row.joining_status ?? '').trim();
+  const changeCount = Number(row.joining_status_change_count ?? 0);
+  return payrollApproved && pmApproved && !joiningStatus && changeCount === 0;
+}
+
 export default function PmClientDetail() {
   const { id, tab: tabSegment } = useParams();
   const navigate = useNavigate();
-  const { setClientSidebarMeta } = useOutletContext() ?? {};
   const [client, setClient] = useState(null);
   const [pmClients, setPmClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const activeTab = PM_TAB_SEGMENT_TO_KEY[tabSegment] ?? 'pending';
+  const activeTab = PM_TAB_SEGMENT_TO_KEY[tabSegment] ?? 'client_dashboard';
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [toast, setToast] = useState(null);
   const [ctaLoading, setCtaLoading] = useState(false);
@@ -114,6 +188,7 @@ export default function PmClientDetail() {
   const [bulkRoleModalOpen, setBulkRoleModalOpen] = useState(false);
   const [bulkRoleForceSendOnboarding, setBulkRoleForceSendOnboarding] = useState(false);
   const [testingBulkMenuOpen, setTestingBulkMenuOpen] = useState(false);
+  const [testingJoiningModalOpen, setTestingJoiningModalOpen] = useState(false);
   const [rowRoleModalEmployee, setRowRoleModalEmployee] = useState(null);
   const [responseModalOpen, setResponseModalOpen] = useState(false);
   const [responseModalEmployee, setResponseModalEmployee] = useState(null);
@@ -131,10 +206,14 @@ export default function PmClientDetail() {
   const [joiningInlineDate, setJoiningInlineDate] = useState('');
   const [joiningInlineLoading, setJoiningInlineLoading] = useState(false);
   const [transferModalEmployee, setTransferModalEmployee] = useState(null);
+  const [testingBulkTransferModalOpen, setTestingBulkTransferModalOpen] = useState(false);
   const [transferTargetClientId, setTransferTargetClientId] = useState('');
   const [transferReason, setTransferReason] = useState('');
   const [transferLoading, setTransferLoading] = useState(false);
   const [directoryStatusFilter, setDirectoryStatusFilter] = useState('');
+  const [testingFormStatusFilter, setTestingFormStatusFilter] = useState('');
+  const [testingJoiningStatusFilter, setTestingJoiningStatusFilter] = useState('');
+  const [testingRejectedByFilter, setTestingRejectedByFilter] = useState('');
 
   const loadAll = async () => {
     setLoading(true);
@@ -162,8 +241,12 @@ export default function PmClientDetail() {
   useEffect(() => { loadAll(); }, [id]);
 
   useEffect(() => {
+    if (tabSegment === 'testing') {
+      navigate(pmClientTabUrl(id, 'testing'), { replace: true });
+      return;
+    }
     if (tabSegment && !PM_TAB_SEGMENT_TO_KEY[tabSegment]) {
-      navigate(pmClientTabUrl(id, 'pending'), { replace: true });
+      navigate(pmClientTabUrl(id, 'client_dashboard'), { replace: true });
     }
   }, [tabSegment, id, navigate]);
 
@@ -269,11 +352,20 @@ export default function PmClientDetail() {
           return {
             ...row,
             testing_form_status: plRejected ? 'PL REJECTED' : 'PM REJECTED',
+            testing_rejected_by: plRejected ? 'PL' : 'PM',
             testing_rejected_at: plRejected ? row.form_payroll_reviewed_at : row.form_reviewed_at,
             testing_rejected_remarks: plRejected ? row.form_payroll_review_reason : row.form_review_reason,
           };
         }),
     [employees]
+  );
+  const filteredTestingRejectedRows = useMemo(
+    () =>
+      testingRejectedRows.filter((row) => {
+        if (!testingRejectedByFilter) return true;
+        return row.testing_rejected_by === testingRejectedByFilter;
+      }),
+    [testingRejectedRows, testingRejectedByFilter]
   );
   const directoryStatusOptions = useMemo(() => {
     const fromRows = Array.from(
@@ -293,6 +385,15 @@ export default function PmClientDetail() {
         return String(row.onboarding_status ?? '').trim() === directoryStatusFilter;
       }),
     [employeeDirectoryRows, directoryStatusFilter]
+  );
+  const filteredTestingEmployees = useMemo(
+    () =>
+      employees.filter((row) => {
+        if (testingFormStatusFilter && getTestingFormStatusLabel(row) !== testingFormStatusFilter) return false;
+        if (testingJoiningStatusFilter && getTestingJoiningStatusKey(row) !== testingJoiningStatusFilter) return false;
+        return true;
+      }),
+    [employees, testingFormStatusFilter, testingJoiningStatusFilter]
   );
   const inProgressTotal =
     formSentRows.length +
@@ -368,8 +469,11 @@ export default function PmClientDetail() {
       : activeTab;
   const showAddEmployeePanel =
     activeTab === 'add_employee' || (activeTab === 'testing' && testingSubtab === 'add_employee');
+  const showEmployeeTable = activeTab !== 'client_dashboard' && !showAddEmployeePanel;
   const visibleRows =
-    activeTab === 'pending'
+    activeTab === 'client_dashboard'
+      ? []
+      : activeTab === 'pending'
       ? filteredPending
       : activeTab === 'role_assigned'
         ? filteredRoleAssigned
@@ -377,8 +481,8 @@ export default function PmClientDetail() {
           ? testingSubtab === 'add_employee'
             ? []
             : testingSubtab === 'employees'
-            ? employees
-            : testingRejectedRows
+            ? filteredTestingEmployees
+            : filteredTestingRejectedRows
         : activeTab === 'add_employee'
           ? []
           : activeTab === 'employee_directory'
@@ -411,7 +515,14 @@ export default function PmClientDetail() {
     setJoiningInlineStatus('');
     setJoiningInlineDate('');
     setTestingBulkMenuOpen(false);
+    setTestingJoiningModalOpen(false);
+    setTestingBulkTransferModalOpen(false);
+    setJoiningBulkStatus('');
+    setJoiningBulkDate('');
     setBulkRoleForceSendOnboarding(false);
+    setTestingFormStatusFilter('');
+    setTestingJoiningStatusFilter('');
+    setTestingRejectedByFilter('');
   }, [activeTab, tabSegment, inProgressSubtab, plReviewedSubtab, testingSubtab]);
 
   useEffect(() => {
@@ -419,26 +530,6 @@ export default function PmClientDetail() {
     setTestingSubtab('employees');
   }, [activeTab]);
 
-  useEffect(() => {
-    if (!setClientSidebarMeta) return;
-    setClientSidebarMeta({
-      counts: {
-        pending: pending.length,
-        role_assigned: roleAssigned.length,
-        in_progress: inProgressTotal,
-        pl_reviewed: plReviewedTotal,
-        employee_directory: employees.length,
-        testing: employees.length
-      }
-    });
-  }, [
-    setClientSidebarMeta,
-    pending.length,
-    roleAssigned.length,
-    inProgressTotal,
-    plReviewedTotal,
-    employees.length
-  ]);
   useEffect(() => {
     if (showAddEmployeePanel) return;
     const pageKey =
@@ -532,33 +623,74 @@ export default function PmClientDetail() {
   const closeTransferModal = () => {
     if (transferLoading) return;
     setTransferModalEmployee(null);
+    setTestingBulkTransferModalOpen(false);
     setTransferTargetClientId('');
     setTransferReason('');
   };
 
-  const handleTransferEmployee = async () => {
-    if (!transferModalEmployee || !transferTargetClientId) return;
+  const openTestingBulkTransferModal = () => {
+    setTestingBulkMenuOpen(false);
+    setTransferTargetClientId('');
+    setTransferReason('');
+    setError(null);
+    setTestingBulkTransferModalOpen(true);
+  };
+
+  const transferEmployees = async (employeeIds, { stayOnTesting = false } = {}) => {
+    if (!transferTargetClientId || employeeIds.length === 0) return;
     setTransferLoading(true);
     setError(null);
+    const targetClientName =
+      pmClients.find((c) => c.id === transferTargetClientId)?.client_name || 'target project';
+    let succeeded = 0;
+    let failed = 0;
     try {
-      const res = await api.transferEmployeeProject({
-        clientId: id,
-        employeeId: transferModalEmployee.id,
-        targetClientId: transferTargetClientId,
-        reason: transferReason,
-      });
-      const targetClientName =
-        pmClients.find((c) => c.id === transferTargetClientId)?.client_name || 'target project';
-      setToast(`${res?.employee?.name ?? transferModalEmployee.name} transferred to ${targetClientName}.`);
+      for (const employeeId of employeeIds) {
+        try {
+          await api.transferEmployeeProject({
+            clientId: id,
+            employeeId,
+            targetClientId: transferTargetClientId,
+            reason: transferReason,
+          });
+          succeeded += 1;
+        } catch {
+          failed += 1;
+        }
+      }
       closeTransferModal();
+      setSelectedIds(new Set());
       await loadAll();
-      navigate(pmClientTabUrl(id, 'employee_directory'));
-      setTimeout(() => setToast(null), 3500);
+      if (failed > 0) {
+        setError(
+          `Transferred ${succeeded} employee${succeeded === 1 ? '' : 's'} to ${targetClientName}; ${failed} could not be transferred.`
+        );
+      } else if (employeeIds.length === 1) {
+        const employee = employees.find((row) => row.id === employeeIds[0]);
+        setToast(`${employee?.name ?? 'Employee'} transferred to ${targetClientName}.`);
+        setTimeout(() => setToast(null), 3500);
+      } else {
+        setToast(`Transferred ${succeeded} employees to ${targetClientName}.`);
+        setTimeout(() => setToast(null), 3500);
+      }
+      if (!stayOnTesting) {
+        navigate(pmClientTabUrl(id, 'employee_directory'));
+      }
     } catch (err) {
-      setError(err.message || 'Could not transfer employee.');
+      setError(err.message || 'Could not transfer employees.');
     } finally {
       setTransferLoading(false);
     }
+  };
+
+  const handleTransferEmployee = async () => {
+    if (!transferModalEmployee) return;
+    await transferEmployees([transferModalEmployee.id]);
+  };
+
+  const handleTestingBulkTransfer = async () => {
+    if (selectedIds.size === 0) return;
+    await transferEmployees(Array.from(selectedIds), { stayOnTesting: true });
   };
 
   const handleBulkRoleDetails = async (payload, options = {}) => {
@@ -667,25 +799,30 @@ export default function PmClientDetail() {
     }
   };
 
+  const downloadJobAppFormsCsv = async (employeeIds) => {
+    const blob = await api.exportJobAppFormsCsv({
+      clientId: id,
+      employeeIds,
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeClient = String(client?.name ?? 'client').replace(/[^\w.-]+/g, '_').slice(0, 40);
+    a.download = `${safeClient}-onboarding-responses.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const handleExportResponsesCsv = async () => {
     if (selectedIds.size === 0) return;
     setResponsesExportLoading(true);
     setError(null);
     try {
-      const blob = await api.exportJobAppFormsCsv({
-        clientId: id,
-        employeeIds: Array.from(selectedIds)
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const safeClient = String(client?.name ?? 'client').replace(/[^\w.-]+/g, '_').slice(0, 40);
-      a.download = `${safeClient}-onboarding-responses.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setToast(`Downloaded CSV for ${selectedIds.size} response${selectedIds.size === 1 ? '' : 's'}.`);
+      const employeeIds = Array.from(selectedIds);
+      await downloadJobAppFormsCsv(employeeIds);
+      setToast(`Downloaded CSV for ${employeeIds.length} response${employeeIds.length === 1 ? '' : 's'}.`);
       setTimeout(() => setToast(null), 3500);
     } catch (err) {
       setError(err.message || 'Could not export responses.');
@@ -694,8 +831,39 @@ export default function PmClientDetail() {
     }
   };
 
-  const handleBulkJoiningStatus = async () => {
-    if (selectedIds.size === 0 || !joiningBulkStatus) return;
+  const handleTestingBulkExportCsv = async () => {
+    setTestingBulkMenuOpen(false);
+    if (selectedIds.size === 0) return;
+
+    const selectedRows = employees.filter((row) => selectedIds.has(row.id));
+    const exportableRows = selectedRows.filter(canExportTestingFormResponse);
+    if (exportableRows.length === 0) {
+      setError('None of the selected employees have a submitted response to export (Responded or later).');
+      return;
+    }
+
+    setResponsesExportLoading(true);
+    setError(null);
+    try {
+      const employeeIds = exportableRows.map((row) => row.id);
+      await downloadJobAppFormsCsv(employeeIds);
+      const skipped = selectedRows.length - exportableRows.length;
+      const exported = exportableRows.length;
+      const skippedNote =
+        skipped > 0 ? ` (${skipped} skipped — no submitted response)` : '';
+      setToast(
+        `Downloaded CSV for ${exported} response${exported === 1 ? '' : 's'}${skippedNote}.`
+      );
+      setTimeout(() => setToast(null), 3500);
+    } catch (err) {
+      setError(err.message || 'Could not export responses.');
+    } finally {
+      setResponsesExportLoading(false);
+    }
+  };
+
+  const applyBulkJoiningStatus = async (employeeIds, { onSuccess, buildSuccessToast } = {}) => {
+    if (employeeIds.length === 0 || !joiningBulkStatus) return;
     if (joiningBulkStatus === 'JOINED_OTHER_DATE' && !joiningBulkDate) {
       setError('Please select a date for "Joined on other date".');
       return;
@@ -705,25 +873,74 @@ export default function PmClientDetail() {
     try {
       const res = await api.bulkSetJoiningStatus({
         clientId: id,
-        employeeIds: Array.from(selectedIds),
+        employeeIds,
         joiningStatus: joiningBulkStatus,
-        joiningActualDate: joiningBulkStatus === 'JOINED_OTHER_DATE' ? joiningBulkDate : null
+        joiningActualDate: joiningBulkStatus === 'JOINED_OTHER_DATE' ? joiningBulkDate : null,
       });
       const failedCount = Array.isArray(res.failed) ? res.failed.length : 0;
       if (failedCount > 0) {
         setError(`Updated ${res.updated} employees; ${failedCount} could not be updated due to transition/rule checks.`);
       } else {
-        setToast(`Joining status updated for ${res.updated} employee${res.updated === 1 ? '' : 's'}.`);
+        const toastMessage = buildSuccessToast
+          ? buildSuccessToast(res)
+          : `Joining status updated for ${res.updated} employee${res.updated === 1 ? '' : 's'}.`;
+        setToast(toastMessage);
         setTimeout(() => setToast(null), 3500);
       }
       setSelectedIds(new Set());
       await loadAll();
+      onSuccess?.(res);
     } catch (err) {
       setError(err.message || 'Could not update joining status.');
     } finally {
       setJoiningBulkLoading(false);
     }
   };
+
+  const handleBulkJoiningStatus = async () => {
+    if (selectedIds.size === 0) return;
+    await applyBulkJoiningStatus(Array.from(selectedIds));
+  };
+
+  const openTestingBulkJoiningModal = () => {
+    setTestingBulkMenuOpen(false);
+    setJoiningBulkStatus('');
+    setJoiningBulkDate('');
+    setError(null);
+    setTestingJoiningModalOpen(true);
+  };
+
+  const closeTestingBulkJoiningModal = () => {
+    if (joiningBulkLoading) return;
+    setTestingJoiningModalOpen(false);
+    setJoiningBulkStatus('');
+    setJoiningBulkDate('');
+  };
+
+  const handleTestingBulkJoiningStatus = async () => {
+    if (selectedIds.size === 0) return;
+    const selectedRows = employees.filter((row) => selectedIds.has(row.id));
+    const eligibleRows = selectedRows.filter(canBulkSetInitialJoiningStatus);
+    if (eligibleRows.length === 0) {
+      setError('None of the selected employees are PL Approved with joining status unset.');
+      return;
+    }
+    const skipped = selectedRows.length - eligibleRows.length;
+    await applyBulkJoiningStatus(eligibleRows.map((row) => row.id), {
+      buildSuccessToast: (res) => {
+        const base = `Joining status updated for ${res.updated} employee${res.updated === 1 ? '' : 's'}`;
+        return skipped > 0
+          ? `${base} (${skipped} skipped — not PL Approved or status already set).`
+          : base;
+      },
+      onSuccess: () => closeTestingBulkJoiningModal(),
+    });
+  };
+
+  const testingBulkJoiningEligibleCount = useMemo(() => {
+    if (!testingJoiningModalOpen) return 0;
+    return employees.filter((row) => selectedIds.has(row.id) && canBulkSetInitialJoiningStatus(row)).length;
+  }, [employees, selectedIds, testingJoiningModalOpen]);
 
   const startInlineJoiningEdit = (row) => {
     setJoiningInlineEmployeeId(row.id);
@@ -965,6 +1182,34 @@ export default function PmClientDetail() {
                 )}
               </div>
 
+              <nav className="mt-4 flex flex-wrap items-center gap-2" aria-label="Client views">
+                <NavLink
+                  to={pmClientTabUrl(id, 'client_dashboard')}
+                  className={({ isActive }) =>
+                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      isActive
+                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    }`
+                  }
+                >
+                  Dashboard
+                </NavLink>
+                <NavLink
+                  to={pmClientTabUrl(id, 'testing')}
+                  className={({ isActive }) =>
+                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      isActive
+                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    }`
+                  }
+                >
+                  Onboarding in Progress
+                  <span className="ml-1.5 tabular-nums font-medium text-slate-500">({employees.length})</span>
+                </NavLink>
+              </nav>
+
               <div className="mt-5 grid gap-5 border-t border-slate-100 pt-5 sm:grid-cols-2 lg:grid-cols-12 lg:items-start lg:gap-x-8">
                 <div className="lg:col-span-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contract code</p>
@@ -1016,6 +1261,10 @@ export default function PmClientDetail() {
           <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-3 py-2 text-sm mb-4">
             {toast}
           </div>
+        )}
+
+        {activeTab === 'client_dashboard' && (
+          <PmClientDashboard employees={employees} />
         )}
 
         {(activeTab === 'pending' || activeTab === 'role_assigned') && (
@@ -1146,12 +1395,12 @@ export default function PmClientDetail() {
                   Rejected
                 </button>
               </div>
-              {testingSubtab === 'employees' && (
+              {(testingSubtab === 'employees' || testingSubtab === 'rejected') && (
                 <div className="relative">
                   <button
                     type="button"
                     onClick={() => setTestingBulkMenuOpen((v) => !v)}
-                    disabled={selectedIds.size === 0}
+                    disabled={selectedIds.size === 0 || ctaLoading || transferLoading}
                     className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Bulk Action
@@ -1161,13 +1410,54 @@ export default function PmClientDetail() {
                   </button>
                   {testingBulkMenuOpen && (
                     <div className="absolute right-0 z-20 mt-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
-                      <button
-                        type="button"
-                        onClick={openBulkAssignRoleAndShareForm}
-                        className="block w-full px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
-                      >
-                        Assign Role &amp; Share Form
-                      </button>
+                      {testingSubtab === 'employees' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={openBulkAssignRoleAndShareForm}
+                            className="block w-full px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+                          >
+                            Assign Role &amp; Share Form
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleTestingBulkExportCsv}
+                            disabled={responsesExportLoading}
+                            className="block w-full border-t border-slate-100 px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {responsesExportLoading ? 'Preparing...' : 'Download Response'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={openTestingBulkJoiningModal}
+                            className="block w-full border-t border-slate-100 px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+                          >
+                            Update Joining Status
+                          </button>
+                        </>
+                      )}
+                      {testingSubtab === 'rejected' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTestingBulkMenuOpen(false);
+                            handleBulkReinitiate();
+                          }}
+                          disabled={ctaLoading}
+                          className="block w-full px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {ctaLoading ? 'Re-initiating...' : 'Re-initiate'}
+                        </button>
+                      )}
+                      {(testingSubtab === 'employees' || testingSubtab === 'rejected') && (
+                        <button
+                          type="button"
+                          onClick={openTestingBulkTransferModal}
+                          className="block w-full border-t border-slate-100 px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
+                        >
+                          Transfer
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1178,8 +1468,102 @@ export default function PmClientDetail() {
                 ? 'Add employees manually or upload them in bulk.'
                 : testingSubtab === 'employees'
                   ? 'Showing all employee records from the employee table for this client.'
-                  : 'Showing employees rejected by either PM or Payroll Lead.'}
+                  : 'Showing employees rejected by either PM or Payroll Lead. Select employees and use Bulk Action to re-initiate onboarding.'}
             </div>
+            {testingSubtab === 'rejected' && (
+              <>
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+                  Re-initiate lets rejected employees refill the onboarding form from the beginning.
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="min-w-[240px]">
+                      <label className="mb-1 block text-xs font-medium text-slate-600">Filter by rejected by</label>
+                      <select
+                        value={testingRejectedByFilter}
+                        onChange={(e) => {
+                          setTestingRejectedByFilter(e.target.value);
+                          setPageByTab((prev) => ({ ...prev, testing_rejected: 1 }));
+                        }}
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      >
+                        <option value="">All rejections</option>
+                        {TESTING_REJECTED_BY_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTestingRejectedByFilter('');
+                        setPageByTab((prev) => ({ ...prev, testing_rejected: 1 }));
+                      }}
+                      disabled={!testingRejectedByFilter}
+                      className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Clear filter
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+            {testingSubtab === 'employees' && (
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="min-w-[240px]">
+                    <label className="mb-1 block text-xs font-medium text-slate-600">Filter by form status</label>
+                    <select
+                      value={testingFormStatusFilter}
+                      onChange={(e) => {
+                        setTestingFormStatusFilter(e.target.value);
+                        setPageByTab((prev) => ({ ...prev, testing_employees: 1 }));
+                      }}
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    >
+                      <option value="">All form statuses</option>
+                      {TESTING_FORM_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="min-w-[240px]">
+                    <label className="mb-1 block text-xs font-medium text-slate-600">Filter by joining status</label>
+                    <select
+                      value={testingJoiningStatusFilter}
+                      onChange={(e) => {
+                        setTestingJoiningStatusFilter(e.target.value);
+                        setPageByTab((prev) => ({ ...prev, testing_employees: 1 }));
+                      }}
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    >
+                      <option value="">All joining statuses</option>
+                      {TESTING_JOINING_STATUS_OPTIONS.map((status) => (
+                        <option key={status.value} value={status.value}>
+                          {status.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTestingFormStatusFilter('');
+                      setTestingJoiningStatusFilter('');
+                      setPageByTab((prev) => ({ ...prev, testing_employees: 1 }));
+                    }}
+                    disabled={!testingFormStatusFilter && !testingJoiningStatusFilter}
+                    className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1490,8 +1874,8 @@ export default function PmClientDetail() {
               className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {responsesExportLoading
-                ? 'Preparing CSV...'
-                : `Download CSV${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
+                ? 'Preparing...'
+                : `Download Response${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
             </button>
           </div>
         )}
@@ -1525,7 +1909,7 @@ export default function PmClientDetail() {
           </div>
         )}
 
-        {!showAddEmployeePanel && (
+        {showEmployeeTable && (
         <EmployeeTable
           rows={pagedRows}
           selectedIds={selectedIds}
@@ -1535,6 +1919,7 @@ export default function PmClientDetail() {
             activeTab === 'pending' ||
             activeTab === 'role_assigned' ||
             (activeTab === 'testing' && testingSubtab === 'employees') ||
+            (activeTab === 'testing' && testingSubtab === 'rejected') ||
             (activeTab === 'in_progress' && inProgressSubtab === 'responses') ||
             (activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') ||
             (activeTab === 'in_progress' && inProgressSubtab === 'rejected') ||
@@ -1579,7 +1964,7 @@ export default function PmClientDetail() {
         />
         )}
 
-        {!showAddEmployeePanel && visibleRows.length > 0 && !paginationDisabled && (
+        {showEmployeeTable && visibleRows.length > 0 && !paginationDisabled && (
           <div className="flex items-center justify-between mt-3 text-sm text-slate-600">
             <div>
               Showing {(currentPage - 1) * effectivePageSize + 1}
@@ -1620,6 +2005,68 @@ export default function PmClientDetail() {
           </div>
         )}
 
+        {testingJoiningModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+            <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
+              <h3 className="text-lg font-semibold text-slate-900">Update Joining Status (Bulk)</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Applies to {testingBulkJoiningEligibleCount} selected employee
+                {testingBulkJoiningEligibleCount === 1 ? '' : 's'} at PL Approved stage with joining status unset.
+                Others in the selection will be skipped.
+              </p>
+              <div className="mt-4 flex flex-wrap items-end gap-3">
+                <div className="min-w-[220px] flex-1">
+                  <label className="mb-1 block text-xs font-medium text-slate-600">Joining status</label>
+                  <select
+                    value={joiningBulkStatus}
+                    onChange={(e) => setJoiningBulkStatus(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  >
+                    <option value="">Select status</option>
+                    <option value="JOINED">Joined</option>
+                    <option value="NOT_JOINED">Not Joined</option>
+                    <option value="JOINED_OTHER_DATE">Joined on other date</option>
+                    <option value="JOINED_ABSCONDED">Joined and absconded</option>
+                  </select>
+                </div>
+                {joiningBulkStatus === 'JOINED_OTHER_DATE' && (
+                  <div className="min-w-[180px] flex-1">
+                    <label className="mb-1 block text-xs font-medium text-slate-600">Joined date</label>
+                    <input
+                      type="date"
+                      value={joiningBulkDate}
+                      onChange={(e) => setJoiningBulkDate(e.target.value)}
+                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    />
+                  </div>
+                )}
+              </div>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeTestingBulkJoiningModal}
+                  disabled={joiningBulkLoading}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTestingBulkJoiningStatus}
+                  disabled={
+                    testingBulkJoiningEligibleCount === 0 ||
+                    !joiningBulkStatus ||
+                    joiningBulkLoading ||
+                    (joiningBulkStatus === 'JOINED_OTHER_DATE' && !joiningBulkDate)
+                  }
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {joiningBulkLoading ? 'Updating...' : 'Update joining status'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {bulkRoleModalOpen && (
           <RoleDetailsModal
             title={bulkRoleForceSendOnboarding ? 'Assign Role & Share Form' : 'Set Role Details (Bulk)'}
@@ -1645,13 +2092,24 @@ export default function PmClientDetail() {
             onSubmit={handleSingleRoleDetails}
           />
         )}
-        {transferModalEmployee && (
+        {(transferModalEmployee || testingBulkTransferModalOpen) && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
             <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
-              <h3 className="text-lg font-semibold text-slate-900">Transfer Employee</h3>
+              <h3 className="text-lg font-semibold text-slate-900">
+                {testingBulkTransferModalOpen ? 'Transfer Employees (Bulk)' : 'Transfer Employee'}
+              </h3>
               <p className="mt-1 text-sm text-slate-600">
-                Transfer <span className="font-medium text-slate-800">{transferModalEmployee.name}</span> to another project.
-                Current onboarding data will reset and status will move to Available.
+                {testingBulkTransferModalOpen ? (
+                  <>
+                    Transfer {selectedIds.size} selected employee{selectedIds.size === 1 ? '' : 's'} to another project.
+                    Current onboarding data will reset and status will move to Available.
+                  </>
+                ) : (
+                  <>
+                    Transfer <span className="font-medium text-slate-800">{transferModalEmployee.name}</span> to another project.
+                    Current onboarding data will reset and status will move to Available.
+                  </>
+                )}
               </p>
               <div className="mt-4 space-y-3">
                 <div>
@@ -1700,11 +2158,19 @@ export default function PmClientDetail() {
                 </button>
                 <button
                   type="button"
-                  onClick={handleTransferEmployee}
-                  disabled={!transferTargetClientId || transferLoading}
+                  onClick={testingBulkTransferModalOpen ? handleTestingBulkTransfer : handleTransferEmployee}
+                  disabled={
+                    !transferTargetClientId ||
+                    transferLoading ||
+                    (testingBulkTransferModalOpen && selectedIds.size === 0)
+                  }
                   className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {transferLoading ? 'Transferring...' : 'Transfer'}
+                  {transferLoading
+                    ? 'Transferring...'
+                    : testingBulkTransferModalOpen
+                      ? `Transfer${selectedIds.size ? ` (${selectedIds.size})` : ''}`
+                      : 'Transfer'}
                 </button>
               </div>
             </div>

@@ -9,6 +9,18 @@ const ROLE_LABEL = {
   PROGRAM_MANAGER: 'Program Manager'
 };
 
+function IconLogo({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 32 32" fill="none" aria-hidden>
+      <path
+        d="M6 8h9v9H6V8zm11 0h9v9h-9V8zM6 19h9v9H6v-9zm11 0h9v9h-9v-9z"
+        fill="currentColor"
+        opacity="0.95"
+      />
+    </svg>
+  );
+}
+
 function IconDashboard({ className }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
@@ -21,6 +33,38 @@ function IconClients({ className }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
       <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+    </svg>
+  );
+}
+
+function IconOnboarding({ className, filled = false }) {
+  if (filled) {
+    return (
+      <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+        <path d="M12 12a4 4 0 100-8 4 4 0 000 8zm-7 9a7 7 0 1114 0H5z" />
+      </svg>
+    );
+  }
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+    </svg>
+  );
+}
+
+function IconSettings({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
+
+function IconLogout({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 9V5.25A2.25 2.25 0 0110.5 3h9a2.25 2.25 0 012.25 2.25v13.5A2.25 2.25 0 0119.5 21h-9a2.25 2.25 0 01-2.25-2.25V15m-3 0l3-3m0 0l3 3m-3-3H3.75" />
     </svg>
   );
 }
@@ -41,20 +85,33 @@ function IconClose({ className }) {
   );
 }
 
-function IconArrowLeft({ className }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-    </svg>
-  );
-}
+function SidebarTile({ to, onClick, active, label, children, ariaLabel }) {
+  const className = `flex w-full max-w-full flex-col items-center justify-center gap-2 rounded-2xl px-1.5 py-3.5 text-center transition-colors ${
+    active
+      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
+      : 'bg-white/[0.06] text-slate-300 hover:bg-white/10 hover:text-white'
+  }`;
 
-function initialsFromName(name) {
-  if (!name || typeof name !== 'string') return '?';
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  const body = (
+    <>
+      <span className="flex h-7 w-7 items-center justify-center">{children}</span>
+      <span className="max-w-full break-words text-[10px] font-medium leading-tight tracking-wide">{label}</span>
+    </>
+  );
+
+  if (to) {
+    return (
+      <NavLink to={to} className={className} aria-label={ariaLabel ?? label} onClick={onClick}>
+        {body}
+      </NavLink>
+    );
+  }
+
+  return (
+    <button type="button" className={className} onClick={onClick} aria-label={ariaLabel ?? label}>
+      {body}
+    </button>
+  );
 }
 
 function JoiningStatusReminderModal({ title, rows, onClose, onNext }) {
@@ -108,13 +165,44 @@ function JoiningStatusReminderModal({ title, rows, onClose, onNext }) {
   );
 }
 
+function SidebarShell({ children, footer, profileOpen, profile, user, onCloseMobile }) {
+  return (
+    <div className="flex h-full flex-col overflow-x-hidden bg-[#0c0f14]">
+      <div className="flex shrink-0 justify-center px-3 pb-2 pt-5">
+        <NavLink
+          to="/pm-dashboard/clients"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-white transition-opacity hover:opacity-80"
+          aria-label="Onboarding System home"
+          onClick={onCloseMobile}
+        >
+          <IconLogo className="h-8 w-8" />
+        </NavLink>
+      </div>
+
+      <nav className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-x-hidden overflow-y-auto px-2 py-4" aria-label="Modules">
+        {children}
+      </nav>
+
+      <div className="relative shrink-0 overflow-x-hidden px-2 pb-5 pt-2">
+        {profileOpen && (
+          <div className="absolute bottom-full left-2 right-2 mb-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-xs text-slate-300 shadow-xl">
+            <p className="truncate font-medium text-white">{profile?.name}</p>
+            <p className="mt-0.5 truncate text-slate-400">{user?.email}</p>
+            <p className="mt-1 text-slate-500">{ROLE_LABEL[profile?.role] ?? profile?.role ?? ''}</p>
+          </div>
+        )}
+        <div className="flex w-full flex-col items-stretch gap-3">{footer}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function PmLayout() {
   const { profile, user, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [clientSidebarMeta, setClientSidebarMeta] = useState(null);
   const [joiningReminderToday, setJoiningReminderToday] = useState([]);
   const [joiningReminderOverdue, setJoiningReminderOverdue] = useState([]);
   const [joiningReminderStep, setJoiningReminderStep] = useState('');
@@ -126,14 +214,14 @@ export default function PmLayout() {
     pathname === '/pm-dashboard/clients' || pathname.startsWith('/pm-dashboard/client/');
   const dashboardNavActive = pathname === '/pm-dashboard/dashboard';
 
-  useEffect(() => {
-    if (!isClientDetail) setClientSidebarMeta(null);
-  }, [isClientDetail]);
+  const c = clientRoute?.clientId;
+  const clientTabSeg = clientRoute?.tabSegment;
+  const isClientOnboardingModule =
+    clientTabSeg === 'dashboard' || clientTabSeg === 'in-progress';
 
   useEffect(() => {
-    // Close drawer on in-app or browser history navigation
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync UI to external route
     setMobileNavOpen(false);
+    setProfileOpen(false);
   }, [pathname]);
 
   useEffect(() => {
@@ -158,229 +246,86 @@ export default function PmLayout() {
     };
   }, []);
 
-  const initials = useMemo(
-    () => initialsFromName(profile?.name ?? user?.email ?? ''),
-    [profile?.name, user?.email]
-  );
-
   const handleSignOut = async () => {
     await signOut();
     navigate('/login', { replace: true });
   };
 
-  const c = clientRoute?.clientId;
-  const tabSeg = clientRoute?.tabSegment;
-  const cc = clientSidebarMeta?.counts;
+  const closeMobile = () => setMobileNavOpen(false);
 
   const sidebarFooter = (
-    <div className="shrink-0 border-t border-slate-700/80 p-4 space-y-3">
-      <div>
-        <button
-          type="button"
-          onClick={() => setProfileOpen((v) => !v)}
-          className="flex w-full items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-2 text-left text-slate-200 transition-colors hover:border-slate-600 hover:bg-slate-800"
-          aria-expanded={profileOpen}
-          aria-label="Profile"
-        >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white">
-            {initials}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium text-white">{profile?.name ?? 'Profile'}</span>
-            <span className="block truncate text-xs text-slate-400">
-              {ROLE_LABEL[profile?.role] ?? profile?.role ?? ''}
-            </span>
-          </span>
-        </button>
-        {profileOpen && (
-          <div className="mt-2 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs text-slate-300">
-            <p className="truncate font-medium text-white">{profile?.name}</p>
-            <p className="mt-0.5 truncate text-slate-400">{user?.email}</p>
-          </div>
-        )}
-      </div>
-      <button
-        type="button"
-        onClick={handleSignOut}
-        className="w-full rounded-lg border border-slate-600 bg-transparent px-3 py-2 text-sm font-medium text-slate-200 transition-colors hover:border-red-500/50 hover:bg-red-950/40 hover:text-red-100"
+    <>
+      <SidebarTile
+        active={profileOpen}
+        label="Settings"
+        ariaLabel="Settings and profile"
+        onClick={() => setProfileOpen((v) => !v)}
       >
-        Log out
-      </button>
-    </div>
+        <IconSettings className="h-6 w-6" />
+      </SidebarTile>
+      <SidebarTile label="Logout" ariaLabel="Log out" onClick={handleSignOut}>
+        <IconLogout className="h-6 w-6" />
+      </SidebarTile>
+    </>
   );
 
   const defaultSidebarContent = (
-    <>
-      <div className="shrink-0 border-b border-slate-700/80 px-5 py-6">
-        <NavLink
-          to="/pm-dashboard/clients"
-          className="block text-lg font-semibold tracking-tight text-white transition-colors hover:text-indigo-200"
-          onClick={() => setMobileNavOpen(false)}
-        >
-          Onboarding System
-        </NavLink>
-        <p className="mt-1 text-xs text-slate-400">Program Manager portal</p>
-      </div>
-
-      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-y-contain px-3 py-4" aria-label="Main">
-        <NavLink
-          to="/pm-dashboard/dashboard"
-          className={() =>
-            `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-              dashboardNavActive
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-            }`
-          }
-          onClick={() => setMobileNavOpen(false)}
-        >
-          <IconDashboard className="h-5 w-5 shrink-0 opacity-90" />
-          Dashboard
-        </NavLink>
-        <NavLink
-          to="/pm-dashboard/clients"
-          className={() =>
-            `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-              clientsNavActive
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-            }`
-          }
-          onClick={() => setMobileNavOpen(false)}
-        >
-          <IconClients className="h-5 w-5 shrink-0 opacity-90" />
-          Clients
-        </NavLink>
-      </nav>
-
-      {sidebarFooter}
-    </>
+    <SidebarShell
+      profileOpen={profileOpen}
+      profile={profile}
+      user={user}
+      onCloseMobile={closeMobile}
+      footer={sidebarFooter}
+    >
+      <SidebarTile
+        to="/pm-dashboard/dashboard"
+        active={dashboardNavActive}
+        label="Dashboard"
+        onClick={closeMobile}
+      >
+        <IconDashboard className="h-6 w-6" />
+      </SidebarTile>
+      <SidebarTile
+        to="/pm-dashboard/clients"
+        active={clientsNavActive && !isClientDetail}
+        label="Clients"
+        onClick={closeMobile}
+      >
+        <IconClients className="h-6 w-6" />
+      </SidebarTile>
+    </SidebarShell>
   );
 
   const clientSidebarContent =
     c &&
     (
-      <>
-        <div className="shrink-0 space-y-4 border-b border-slate-700/80 px-4 py-5">
-          <NavLink
-            to="/pm-dashboard/clients"
-            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-indigo-200 transition-colors hover:bg-slate-800 hover:text-white"
-            onClick={() => setMobileNavOpen(false)}
-          >
-            <IconArrowLeft className="h-4 w-4 shrink-0" />
-            Back to clients
-          </NavLink>
-        </div>
-
-        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-y-contain px-3 py-4" aria-label="Client sections">
-          <NavLink
-            to={pmClientTabUrl(c, 'add_employee')}
-            className={() =>
-              `flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                tabSeg === 'add-employees'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-            onClick={() => setMobileNavOpen(false)}
-          >
-            Add Employee
-          </NavLink>
-          <NavLink
-            to={pmClientTabUrl(c, 'pending')}
-            className={() =>
-              `flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                tabSeg === 'pending'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-            onClick={() => setMobileNavOpen(false)}
-          >
-            <span>Available Employees</span>
-            {cc && <span className={tabSeg === 'pending' ? 'text-indigo-100' : 'text-slate-500'}>({cc.pending})</span>}
-          </NavLink>
-          <NavLink
-            to={pmClientTabUrl(c, 'role_assigned')}
-            className={() =>
-              `flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                tabSeg === 'role-assigned'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-            onClick={() => setMobileNavOpen(false)}
-          >
-            <span>Role Assigned</span>
-            {cc && <span className={tabSeg === 'role-assigned' ? 'text-indigo-100' : 'text-slate-500'}>({cc.role_assigned})</span>}
-          </NavLink>
-          <NavLink
-            to={pmClientTabUrl(c, 'in_progress')}
-            className={() =>
-              `flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                tabSeg === 'in-progress'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-            onClick={() => setMobileNavOpen(false)}
-          >
-            <span>Onboarding In Progress</span>
-            {cc && <span className={tabSeg === 'in-progress' ? 'text-indigo-100' : 'text-slate-500'}>({cc.in_progress})</span>}
-          </NavLink>
-          <NavLink
-            to={pmClientTabUrl(c, 'pl_reviewed')}
-            className={() =>
-              `flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                tabSeg === 'pl-reviewed'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-            onClick={() => setMobileNavOpen(false)}
-          >
-            <span>PL Reviewed</span>
-            {cc && <span className={tabSeg === 'pl-reviewed' ? 'text-indigo-100' : 'text-slate-500'}>({cc.pl_reviewed})</span>}
-          </NavLink>
-          <NavLink
-            to={pmClientTabUrl(c, 'employee_directory')}
-            className={() =>
-              `flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                tabSeg === 'employee-directory'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-            onClick={() => setMobileNavOpen(false)}
-          >
-            <span>Employee Directory</span>
-            {cc && <span className={tabSeg === 'employee-directory' ? 'text-indigo-100' : 'text-slate-500'}>({cc.employee_directory})</span>}
-          </NavLink>
-          <NavLink
-            to={pmClientTabUrl(c, 'testing')}
-            className={() =>
-              `flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                tabSeg === 'testing'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-            onClick={() => setMobileNavOpen(false)}
-          >
-            <span>Testing</span>
-            {cc && <span className={tabSeg === 'testing' ? 'text-indigo-100' : 'text-slate-500'}>({cc.testing})</span>}
-          </NavLink>
-        </nav>
-
-        {sidebarFooter}
-      </>
+      <SidebarShell
+        profileOpen={profileOpen}
+        profile={profile}
+        user={user}
+        onCloseMobile={closeMobile}
+        footer={sidebarFooter}
+      >
+        <SidebarTile
+          to={pmClientTabUrl(c, 'client_dashboard')}
+          active={isClientOnboardingModule}
+          label="Onboarding"
+          onClick={closeMobile}
+        >
+          <IconOnboarding className="h-6 w-6" filled={isClientOnboardingModule} />
+        </SidebarTile>
+      </SidebarShell>
     );
 
   const sidebarContent = isClientDetail && clientSidebarContent ? clientSidebarContent : defaultSidebarContent;
 
+  const sidebarWidthClass = 'w-[5.75rem]';
+
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-slate-100">
-      <aside className="relative z-30 hidden h-full max-h-screen w-64 shrink-0 flex-col overflow-hidden border-r border-slate-800 bg-slate-900 lg:flex">
+      <aside
+        className={`relative z-30 hidden h-full max-h-screen ${sidebarWidthClass} shrink-0 flex-col overflow-x-hidden overflow-y-hidden border-r border-slate-800/80 lg:flex`}
+      >
         {sidebarContent}
       </aside>
 
@@ -394,7 +339,7 @@ export default function PmLayout() {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex h-screen max-h-screen w-[min(18rem,88vw)] flex-col overflow-hidden border-r border-slate-800 bg-slate-900 shadow-2xl transition-transform duration-200 ease-out lg:hidden ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-screen max-h-screen ${sidebarWidthClass} flex-col overflow-x-hidden overflow-y-hidden border-r border-slate-800/80 shadow-2xl transition-transform duration-200 ease-out lg:hidden ${
           mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -416,7 +361,7 @@ export default function PmLayout() {
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
-          <Outlet context={{ setClientSidebarMeta }} />
+          <Outlet />
         </div>
       </div>
       {joiningReminderStep === 'today' && joiningReminderToday.length > 0 && (
