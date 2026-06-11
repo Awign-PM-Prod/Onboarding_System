@@ -275,36 +275,22 @@ function previewKindForUrl(url) {
   return 'other';
 }
 
-function IconCross({ className }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}
-
 function FieldIncorrectToggle({ fieldLabel, mark, onToggle }) {
   const isIncorrect = mark === 'incorrect';
   return (
-    <div className="flex shrink-0 items-center gap-2" role="group" aria-label={`Verify ${fieldLabel}`}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-pressed={isIncorrect}
-        aria-label={isIncorrect ? `Unmark ${fieldLabel} as incorrect` : `Mark ${fieldLabel} as incorrect`}
-        title={isIncorrect ? 'Marked incorrect' : 'Mark as incorrect'}
-        className={`group relative inline-flex items-center justify-center rounded-lg border p-2 transition-colors ${
-          isIncorrect
-            ? 'border-rose-300 bg-rose-100 text-rose-800'
-            : 'border-slate-300 bg-white text-slate-600 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700'
-        }`}
-      >
-        <IconCross className="h-3.5 w-3.5" />
-        <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-medium text-white shadow-md group-hover:block">
-          Mark as wrong
-        </span>
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={isIncorrect}
+      aria-label={isIncorrect ? `Unmark ${fieldLabel} as incorrect` : `Mark ${fieldLabel} as incorrect`}
+      className={`shrink-0 rounded-lg border px-3 py-1 text-xs font-medium transition-colors ${
+        isIncorrect
+          ? 'border-rose-300 bg-rose-100 text-rose-700'
+          : 'border-slate-300 bg-white text-slate-600 hover:border-rose-200 hover:text-rose-700'
+      }`}
+    >
+      Incorrect
+    </button>
   );
 }
 
@@ -325,7 +311,6 @@ export default function EmployeeFormResponseModal({
   const [fieldMarks, setFieldMarks] = useState({});
   const [decisionReason, setDecisionReason] = useState('');
   const [decisionError, setDecisionError] = useState('');
-  const [activeDecision, setActiveDecision] = useState(null);
   const [activeDocumentTabId, setActiveDocumentTabId] = useState('');
 
   useEffect(() => {
@@ -339,7 +324,6 @@ export default function EmployeeFormResponseModal({
       }
       setDecisionReason('');
       setDecisionError('');
-      setActiveDecision(null);
     }
   }, [open, form, previousCorrectionRejectedFields, isPayrollMode]);
 
@@ -406,13 +390,19 @@ export default function EmployeeFormResponseModal({
   const reviewableKeys = keys.filter((k) => PM_MARKABLE_FIELDS.has(k) && hasProvidedValue(k, form?.[k]));
   const incorrectFieldKeys = reviewableKeys.filter((k) => fieldMarks[k] === 'incorrect');
   const incorrectFieldLabels = incorrectFieldKeys.map((k) => prettifyKey(k));
+  const hasIncorrectMarks = incorrectFieldKeys.length > 0;
+
+  useEffect(() => {
+    if (!open) return;
+    if (hasIncorrectMarks) {
+      setDecisionReason(`Incorrect Data : ${incorrectFieldLabels.join(', ')}`);
+    } else {
+      setDecisionReason('');
+    }
+  }, [open, hasIncorrectMarks, incorrectFieldLabels.join('|')]);
 
   const submitDecision = async (decisionStatus) => {
     if (!onDecision || deciding) return;
-    if (decisionStatus === 'APPROVED' && incorrectFieldLabels.length > 0) {
-      setDecisionError(`Please verify this field first: ${incorrectFieldLabels.join(', ')}`);
-      return;
-    }
     if ((decisionStatus === 'REJECTED' || decisionStatus === 'CORRECTION_REQUESTED') && !decisionReason.trim()) {
       setDecisionError('Please add a reason before continuing.');
       return;
@@ -422,7 +412,7 @@ export default function EmployeeFormResponseModal({
       return;
     }
     if (decisionStatus === 'CORRECTION_REQUESTED' && incorrectFieldKeys.length === 0) {
-      setDecisionError('Please cross at least one field to request correction.');
+      setDecisionError('Please mark at least one field as incorrect to request correction.');
       return;
     }
     const completeFieldMarks = Object.fromEntries(
@@ -435,18 +425,6 @@ export default function EmployeeFormResponseModal({
       rejected_fields: decisionStatus === 'CORRECTION_REQUESTED' ? incorrectFieldKeys : [],
       field_marks: completeFieldMarks
     });
-  };
-
-  const chooseDecision = (decisionStatus) => {
-    if (deciding) return;
-    setDecisionError('');
-    setActiveDecision(decisionStatus);
-    if (!isPayrollMode && decisionStatus !== 'REJECTED' && decisionStatus !== 'CORRECTION_REQUESTED') {
-      setDecisionReason('');
-    }
-    if (isPayrollMode && decisionStatus !== 'REJECTED') {
-      setDecisionReason('');
-    }
   };
 
   if (!open) return null;
@@ -506,8 +484,8 @@ export default function EmployeeFormResponseModal({
             <p className="text-sm text-slate-600">No saved field data on this application.</p>
           )}
           {!loading && !error && form && keys.length > 0 && (
-            <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-              <div className="max-h-[min(58vh,560px)] space-y-5 overflow-y-auto pr-1">
+            <div className="grid items-start gap-5 lg:grid-cols-2">
+              <div className="min-w-0 max-h-[min(58vh,560px)] space-y-5 overflow-y-auto pr-1">
                 {grouped.map((group) => (
                   <section key={group.title} className="rounded-xl border border-slate-200 bg-slate-50/60">
                     <div className="border-b border-slate-200 px-4 py-2.5">
@@ -539,7 +517,7 @@ export default function EmployeeFormResponseModal({
                 ))}
               </div>
 
-              <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
                 <div className="overflow-x-auto border-b border-slate-200 bg-slate-50">
                   <div className="flex min-w-max items-center px-2">
                     {documentTabs.length === 0 && (
@@ -635,97 +613,62 @@ export default function EmployeeFormResponseModal({
           )}
         </div>
         <div className="shrink-0 border-t border-slate-100 bg-white px-5 py-4 sm:px-6">
-          <div className="mb-3 space-y-2">
-            {decisionError && <p className="text-sm text-rose-700">{decisionError}</p>}
-            {!decisionError && incorrectFieldLabels.length > 0 && (
-              <p className="text-xs text-rose-700">
-                Marked incorrect: {incorrectFieldLabels.slice(0, 3).join(', ')}
-                {incorrectFieldLabels.length > 3 ? ` +${incorrectFieldLabels.length - 3} more` : ''}
-              </p>
+          {decisionError && <p className="mb-3 text-sm text-rose-700">{decisionError}</p>}
+          <div
+            className={`flex flex-col gap-4 ${hasIncorrectMarks ? 'sm:flex-row sm:items-end sm:justify-between' : ''}`}
+          >
+            {hasIncorrectMarks && (
+              <div className="min-w-0 flex-1">
+                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600" htmlFor="review-reason">
+                  Reason
+                </label>
+                <textarea
+                  id="review-reason"
+                  value={decisionReason}
+                  onChange={(e) => {
+                    setDecisionReason(e.target.value);
+                    setDecisionError('');
+                  }}
+                  rows={2}
+                  placeholder="Enter reason here..."
+                  className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+              </div>
             )}
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {!activeDecision && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => chooseDecision('REJECTED')}
-                  disabled={deciding}
-                  className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100"
-                >
-                  Rejected
-                </button>
-                {!isPayrollMode && (
-                  <button
-                    type="button"
-                    onClick={() => chooseDecision('CORRECTION_REQUESTED')}
-                    disabled={deciding}
-                    className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
-                  >
-                    Request Correction
-                  </button>
-                )}
+            <div className={`flex flex-wrap items-center gap-2 ${hasIncorrectMarks ? 'shrink-0 sm:justify-end' : 'justify-end'}`}>
+              {!hasIncorrectMarks ? (
                 <button
                   type="button"
                   onClick={() => submitDecision('APPROVED')}
                   disabled={deciding}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                  className="rounded-lg bg-emerald-700 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
                 >
                   {deciding ? 'Submitting...' : 'Approve'}
                 </button>
-              </>
-            )}
-          </div>
-          {(activeDecision === 'REJECTED' || (!isPayrollMode && activeDecision === 'CORRECTION_REQUESTED')) && (
-            <div className="mt-3 space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600" htmlFor="review-reason">
-                Reason
-              </label>
-              <textarea
-                id="review-reason"
-                value={decisionReason}
-                onChange={(e) => {
-                  setDecisionReason(e.target.value);
-                  setDecisionError('');
-                }}
-                rows={2}
-                placeholder="Enter reason here..."
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-300"
-              />
-              <div className="flex items-center justify-end">
-                <div className="flex items-center gap-2">
+              ) : (
+                <>
+                  {!isPayrollMode && (
+                    <button
+                      type="button"
+                      onClick={() => submitDecision('CORRECTION_REQUESTED')}
+                      disabled={deciding}
+                      className="rounded-lg border border-rose-300 bg-white px-4 py-2.5 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                    >
+                      {deciding ? 'Submitting...' : 'Send for correction'}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => {
-                      if (deciding) return;
-                      setActiveDecision(null);
-                      setDecisionError('');
-                    }}
+                    onClick={() => submitDecision('REJECTED')}
                     disabled={deciding}
-                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    className="rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
                   >
-                    Back
+                    {deciding ? 'Submitting...' : 'Reject'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => submitDecision(activeDecision)}
-                    disabled={deciding}
-                    className={
-                      activeDecision === 'REJECTED'
-                        ? 'rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100'
-                        : 'rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100'
-                    }
-                  >
-                    {deciding
-                      ? 'Submitting...'
-                      : activeDecision === 'REJECTED'
-                        ? 'Submit rejection'
-                        : 'Request Correction'}
-                  </button>
-                </div>
-              </div>
+                </>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>

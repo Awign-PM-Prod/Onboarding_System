@@ -582,7 +582,6 @@ export default function PmClientDetail() {
       setToast(buildOnboardingInitiateToast('Onboarding initiated', res));
       setSelectedIds(new Set());
       await loadAll();
-      navigate(pmClientTabUrl(id, 'in_progress'));
       setTimeout(() => setToast(null), 3500);
     } catch (err) {
       setError(err.message);
@@ -604,7 +603,6 @@ export default function PmClientDetail() {
       );
       setSelectedIds(new Set());
       await loadAll();
-      navigate(pmClientTabUrl(id, 'in_progress'));
       setTimeout(() => setToast(null), 3500);
     } catch (err) {
       setError(err.message || 'Could not re-initiate selected employees.');
@@ -636,7 +634,7 @@ export default function PmClientDetail() {
     setTestingBulkTransferModalOpen(true);
   };
 
-  const transferEmployees = async (employeeIds, { stayOnTesting = false } = {}) => {
+  const transferEmployees = async (employeeIds) => {
     if (!transferTargetClientId || employeeIds.length === 0) return;
     setTransferLoading(true);
     setError(null);
@@ -673,9 +671,6 @@ export default function PmClientDetail() {
         setToast(`Transferred ${succeeded} employees to ${targetClientName}.`);
         setTimeout(() => setToast(null), 3500);
       }
-      if (!stayOnTesting) {
-        navigate(pmClientTabUrl(id, 'employee_directory'));
-      }
     } catch (err) {
       setError(err.message || 'Could not transfer employees.');
     } finally {
@@ -690,7 +685,7 @@ export default function PmClientDetail() {
 
   const handleTestingBulkTransfer = async () => {
     if (selectedIds.size === 0) return;
-    await transferEmployees(Array.from(selectedIds), { stayOnTesting: true });
+    await transferEmployees(Array.from(selectedIds));
   };
 
   const handleBulkRoleDetails = async (payload, options = {}) => {
@@ -703,10 +698,8 @@ export default function PmClientDetail() {
       if (options.sendOnboardingNow && (res.employee_ids?.length ?? 0) > 0) {
         const initiateRes = await api.initiateOnboarding(res.employee_ids);
         setToast(buildOnboardingInitiateToast('Role details set and onboarding initiated', initiateRes));
-        navigate(pmClientTabUrl(id, 'in_progress'));
       } else {
         setToast(`Role details set for ${res.updated} employee${res.updated === 1 ? '' : 's'}`);
-        navigate(pmClientTabUrl(id, 'role_assigned'));
       }
       setBulkRoleModalOpen(false);
       setSelectedIds(new Set());
@@ -1026,7 +1019,6 @@ export default function PmClientDetail() {
       setRowRoleModalEmployee(null);
       setSelectedIds(new Set());
       await loadAll();
-      navigate(pmClientTabUrl(id, 'role_assigned'));
       setTimeout(() => setToast(null), 3500);
     } catch (err) {
       setError(err.message);
@@ -1607,7 +1599,6 @@ export default function PmClientDetail() {
                     onCreated={async () => {
                       await loadAll();
                       setToast('Employee added.');
-                      navigate(pmClientTabUrl(id, 'pending'));
                       setTimeout(() => setToast(null), 3500);
                     }}
                   />

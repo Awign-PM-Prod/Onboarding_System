@@ -85,6 +85,14 @@ function IconClose({ className }) {
   );
 }
 
+function IconChevronLeft({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+    </svg>
+  );
+}
+
 function SidebarTile({ to, onClick, active, label, children, ariaLabel }) {
   const className = `flex w-full max-w-full flex-col items-center justify-center gap-2 rounded-2xl px-1.5 py-3.5 text-center transition-colors ${
     active
@@ -111,6 +119,24 @@ function SidebarTile({ to, onClick, active, label, children, ariaLabel }) {
     <button type="button" className={className} onClick={onClick} aria-label={ariaLabel ?? label}>
       {body}
     </button>
+  );
+}
+
+function SidebarBackLink({ to, label = 'Back', ariaLabel, onClick }) {
+  return (
+    <NavLink
+      to={to}
+      className="group flex w-full max-w-full flex-col items-center justify-center gap-1.5 rounded-xl px-1 py-2 text-center transition-colors"
+      aria-label={ariaLabel ?? label}
+      onClick={onClick}
+    >
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 bg-white/[0.04] text-slate-300 transition-colors group-hover:border-white/25 group-hover:bg-white/[0.08] group-hover:text-white">
+        <IconChevronLeft className="h-5 w-5" />
+      </span>
+      <span className="max-w-full break-words text-[10px] font-medium leading-tight tracking-wide text-slate-400 transition-colors group-hover:text-slate-200">
+        {label}
+      </span>
+    </NavLink>
   );
 }
 
@@ -306,6 +332,13 @@ export default function PmLayout() {
         onCloseMobile={closeMobile}
         footer={sidebarFooter}
       >
+        <SidebarBackLink
+          to="/pm-dashboard/clients"
+          label="Back"
+          ariaLabel="Back to clients"
+          onClick={closeMobile}
+        />
+        <div className="mx-1 border-t border-white/10" aria-hidden />
         <SidebarTile
           to={pmClientTabUrl(c, 'client_dashboard')}
           active={isClientOnboardingModule}
