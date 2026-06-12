@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import UanWorkflowGuide from '../components/UanWorkflowGuide';
 import { api } from '../lib/api';
 
 const MOBILE_DIGITS_REGEX = /\D/g;
@@ -1574,70 +1575,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   );
 }
 
-function VideoPlayerModal({ open, onClose, title, src }) {
-  const videoRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open, onClose]);
-
-  const handleClose = () => {
-    videoRef.current?.pause();
-    onClose();
-  };
-
-  if (!open) return null;
-
-  return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 px-4"
-      onClick={handleClose}
-      role="presentation"
-    >
-      <div
-        className="w-full max-w-3xl rounded-xl bg-white p-4 shadow-2xl sm:p-5"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h3 className="text-base font-semibold text-slate-900">{title}</h3>
-          <button
-            type="button"
-            onClick={handleClose}
-            className="shrink-0 rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-          >
-            Close
-          </button>
-        </div>
-        <video
-          ref={videoRef}
-          src={src}
-          controls
-          playsInline
-          className="max-h-[70vh] w-full rounded-lg bg-black"
-        >
-          Your browser does not support video playback.
-        </video>
-      </div>
-    </div>
-  );
-}
-
 function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, onGoToStatus, correction }) {
-  const PF_UAN_DEMO_VIDEO_URL = 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4';
-  const [pfUanVideoOpen, setPfUanVideoOpen] = useState(false);
   const [photoUrl, setPhotoUrl] = useState(() => jobForm.bp_passport_photo_url ?? '');
   const [photoFileName, setPhotoFileName] = useState(() => fileNameFromStorageUrl(jobForm.bp_passport_photo_url ?? ''));
   const [esic, setEsic] = useState(() => jobForm.bp_esic_number ?? '');
@@ -1783,15 +1721,18 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
   const canSubmit = !isRequired('bp_passport_photo_url', true) || Boolean(String(photoUrl).trim());
   const pfUanRequired = isRequired('bp_pf_uan_number', true);
-  const hasPfUanError =
-    pfUanRequired && hasPfUan !== 'yes' ? 'PF UAN number is mandatory to submit the form.' : '';
-  const pfUanError =
-    hasPfUan === 'yes' && pfUan.length !== 12 ? 'PF UAN must be exactly 12 digits.' : '';
-  const showPfUanYesDetails =
+  const showPfUanWorkflow =
     hasPfUan === 'yes' ||
-    (correction?.active && correction.visibleFields.has('bp_pf_uan_face_auth_screenshot_url'));
+    hasPfUan === 'no' ||
+    (correction?.active &&
+      (correction.visibleFields.has('bp_pf_uan_number') ||
+        correction.visibleFields.has('bp_pf_uan_face_auth_screenshot_url')));
+  const hasPfUanChoiceError =
+    pfUanRequired && !hasPfUan ? 'Please select whether you already have a PF UAN number.' : '';
+  const pfUanError =
+    showPfUanWorkflow && pfUan.length !== 12 ? 'PF UAN must be exactly 12 digits.' : '';
   const pfUanScreenshotError =
-    showPfUanYesDetails && !String(pfUanScreenshotUrl).trim()
+    showPfUanWorkflow && !String(pfUanScreenshotUrl).trim()
       ? 'Upload a screenshot showing completed PF UAN face authentication.'
       : '';
 
@@ -1826,7 +1767,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   };
 
   const handleSubmit = async () => {
-    if (!canSubmit || saving || hasPfUanError || pfUanError || pfUanScreenshotError) return;
+    if (!canSubmit || saving || hasPfUanChoiceError || pfUanError || pfUanScreenshotError) return;
     setSaving(true);
     setError('');
     try {
@@ -1932,8 +1873,8 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
               />
             </div>}
             {shouldShow('bp_pf_uan_number') && <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-pf-uan">
-                Do you have PF UAN number? <span className="text-rose-500">*</span>
+              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                Do you already have a PF UAN number? <span className="text-rose-500">*</span>
               </label>
               <div className="flex flex-wrap items-center gap-5">
                 <label className="inline-flex items-center gap-2 text-sm text-slate-800" htmlFor="bp-pf-uan-yes">
@@ -1946,7 +1887,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                     onChange={() => setHasPfUan('yes')}
                     className="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500"
                   />
-                  Yes
+                  Yes, I have a UAN
                 </label>
                 <label className="inline-flex items-center gap-2 text-sm text-slate-800" htmlFor="bp-pf-uan-no">
                   <input
@@ -1964,71 +1905,61 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                     }}
                     className="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500"
                   />
-                  No
+                  No, I need to create one
                 </label>
               </div>
-              {showPfUanYesDetails && (
-              <div className="mt-3 space-y-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-pf-uan">
-                    PF UAN number <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    id="bp-pf-uan"
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={12}
-                    value={pfUan}
-                    onChange={(e) => setPfUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
-                    className={fieldClass(false)}
-                    placeholder="Enter your 12-digit PF UAN number"
-                    autoComplete="off"
+              {hasPfUanChoiceError && <p className="mt-1.5 text-sm text-rose-600">{hasPfUanChoiceError}</p>}
+              {showPfUanWorkflow && (
+                <div className="mt-4">
+                  <UanWorkflowGuide
+                    path={
+                      hasPfUan === 'no' || (hasPfUan !== 'yes' && pfUan.length < 12) ? 'no' : 'yes'
+                    }
+                    uanNumberField={
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-pf-uan">
+                          PF UAN number <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="bp-pf-uan"
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={12}
+                          value={pfUan}
+                          onChange={(e) => setPfUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                          className={fieldClass(false)}
+                          placeholder="Enter your 12-digit PF UAN number"
+                          autoComplete="off"
+                        />
+                        {pfUanError && <p className="mt-1.5 text-sm text-rose-600">{pfUanError}</p>}
+                      </div>
+                    }
+                    screenshotField={
+                      <DocUploadField
+                        label="PF UAN face authentication screenshot"
+                        required
+                        inputId="bp-pf-uan-face-auth"
+                        accept="image/*"
+                        uploading={pfUanScreenshotUp}
+                        error={pfUanScreenshotErr || pfUanScreenshotError}
+                        hint="Screenshot only · max 12MB · image (JPG, PNG, etc.)"
+                        url={pfUanScreenshotUrl}
+                        uploadedFileName={pfUanScreenshotFileName}
+                        onRemove={() => handleRemoveBankPhotoDocument({
+                          field: 'bp_pf_uan_face_auth_screenshot_url',
+                          currentUrl: pfUanScreenshotUrl,
+                          setUrl: setPfUanScreenshotUrl,
+                          setFileName: setPfUanScreenshotFileName,
+                          setErr: setPfUanScreenshotErr,
+                          setRemoving: setPfUanScreenshotRemoving,
+                        })}
+                        removing={pfUanScreenshotRemoving}
+                        onChange={handlePfUanFaceAuthScreenshot}
+                      />
+                    }
                   />
-                  {pfUanError && <p className="mt-1.5 text-sm text-rose-600">{pfUanError}</p>}
-                </div>
-                <DocUploadField
-                  label="PF UAN face authentication screenshot"
-                  required
-                  inputId="bp-pf-uan-face-auth"
-                  accept="image/*"
-                  uploading={pfUanScreenshotUp}
-                  error={pfUanScreenshotErr || pfUanScreenshotError}
-                  hint="Screenshot only · max 12MB · image (JPG, PNG, etc.)"
-                  url={pfUanScreenshotUrl}
-                  uploadedFileName={pfUanScreenshotFileName}
-                  onRemove={() => handleRemoveBankPhotoDocument({
-                    field: 'bp_pf_uan_face_auth_screenshot_url',
-                    currentUrl: pfUanScreenshotUrl,
-                    setUrl: setPfUanScreenshotUrl,
-                    setFileName: setPfUanScreenshotFileName,
-                    setErr: setPfUanScreenshotErr,
-                    setRemoving: setPfUanScreenshotRemoving,
-                  })}
-                  removing={pfUanScreenshotRemoving}
-                  onChange={handlePfUanFaceAuthScreenshot}
-                />
-                <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-950">
-                  <p className="font-medium">Face authentication required</p>
-                  <p className="mt-1 text-sky-900">
-                    Complete face authentication for your PF UAN on the UMANG app, then upload a screenshot that
-                    clearly shows successful verification.
-                  </p>
-                </div>
-              </div>
-              )}
-              {hasPfUan === 'no' && (
-                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  <p>Refer to the video and generate one PF UAN for yourself.</p>
-                  <button
-                    type="button"
-                    onClick={() => setPfUanVideoOpen(true)}
-                    className="mt-1 inline-flex items-center text-sm font-medium text-indigo-700 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-800"
-                  >
-                    Watch demo video
-                  </button>
                 </div>
               )}
-              {hasPfUanError && <p className="mt-1.5 text-sm text-rose-600">{hasPfUanError}</p>}
             </div>}
             {shouldShow('bp_police_verification_url') && (
               <DocUploadField
@@ -2078,13 +2009,6 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
 
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
-      <VideoPlayerModal
-        open={pfUanVideoOpen}
-        onClose={() => setPfUanVideoOpen(false)}
-        title="How to generate PF UAN"
-        src={PF_UAN_DEMO_VIDEO_URL}
-      />
-
       <div className="flex flex-col gap-4 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
         <button
           type="button"
@@ -2098,7 +2022,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
           disabled={
             !canSubmit ||
             saving ||
-            Boolean(hasPfUanError) ||
+            Boolean(hasPfUanChoiceError) ||
             Boolean(pfUanError) ||
             Boolean(pfUanScreenshotError)
           }
