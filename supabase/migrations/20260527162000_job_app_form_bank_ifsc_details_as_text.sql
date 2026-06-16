@@ -16,3 +16,4 @@ begin
       using nullif(trim(both '"' from kyc_bank_ifsc_details::text), '');
   end if;
 end $$;
+  
