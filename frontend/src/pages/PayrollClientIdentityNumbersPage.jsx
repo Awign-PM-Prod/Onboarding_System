@@ -1,23 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
-
-function effectiveUan(row) {
-  return String(row.form_bp_pf_uan_number ?? '').trim() || String(row.payroll_pf_uan_number ?? '').trim() || '';
-}
-
-function effectiveEsic(row) {
-  return String(row.form_bp_esic_number ?? '').trim() || String(row.payroll_esic_number ?? '').trim() || '';
-}
 
 export default function PayrollClientIdentityNumbersPage() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const [employees, setEmployees] = useState([]);
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [savingId, setSavingId] = useState(null);
+  const [savingAll, setSavingAll] = useState(false);
   const [toast, setToast] = useState(null);
   const [draftById, setDraftById] = useState({});
   const [importing, setImporting] = useState(false);
@@ -65,20 +56,39 @@ export default function PayrollClientIdentityNumbersPage() {
         const needEsic = !formEsic;
         const key = row.id;
         const draft = draftById[key] || {};
+        const draftUan = draft.uan !== undefined ? draft.uan : assignedUan;
+        const draftEsic = draft.esic !== undefined ? draft.esic : assignedEsic;
+        const dirtyUan = needUan && String(draftUan ?? '').trim() !== assignedUan;
+        const dirtyEsic = needEsic && String(draftEsic ?? '').trim() !== assignedEsic;
+        const hasUnsavedEdits = dirtyUan || dirtyEsic;
+        const requiredFieldsFilled =
+          (!needUan || String(draftUan ?? '').trim()) && (!needEsic || String(draftEsic ?? '').trim());
+        const readyToSave = hasUnsavedEdits && requiredFieldsFilled;
+
         return {
           ...row,
           need_uan: needUan,
           need_esic: needEsic,
+          assigned_uan: assignedUan,
+          assigned_esic: assignedEsic,
           effective_uan: formUan || assignedUan || '',
           effective_esic: formEsic || assignedEsic || '',
-          draft_uan: draft.uan ?? assignedUan,
-          draft_esic: draft.esic ?? assignedEsic
+          draft_uan: draftUan,
+          draft_esic: draftEsic,
+          has_unsaved_edits: hasUnsavedEdits,
+          ready_to_save: readyToSave
         };
       }),
     [joinedRows, draftById]
   );
 
-  const pendingCount = rowsWithNeeds.filter((r) => (r.need_uan && !r.effective_uan) || (r.need_esic && !r.effective_esic)).length;
+  const pendingAssignmentCount = rowsWithNeeds.filter(
+    (r) => (r.need_uan && !r.effective_uan) || (r.need_esic && !r.effective_esic)
+  ).length;
+
+  const unsavedCount = rowsWithNeeds.filter((r) => r.has_unsaved_edits).length;
+  const saveableRows = rowsWithNeeds.filter((r) => r.ready_to_save);
+  const saveAllCount = saveableRows.length;
 
   const setDraft = (idValue, field, value) => {
     setDraftById((prev) => ({
@@ -90,33 +100,61 @@ export default function PayrollClientIdentityNumbersPage() {
     }));
   };
 
-  const saveRow = async (row) => {
-    const uan = String(row.draft_uan ?? '').trim();
-    const esic = String(row.draft_esic ?? '').trim();
-    if (row.need_uan && !uan) {
-      setError(`UAN is required for ${row.name}.`);
+  const saveAllChanges = async () => {
+    if (saveableRows.length === 0) return;
+
+    const incomplete = rowsWithNeeds.filter(
+      (r) =>
+        r.has_unsaved_edits &&
+        ((r.need_uan && !String(r.draft_uan ?? '').trim()) ||
+          (r.need_esic && !String(r.draft_esic ?? '').trim()))
+    );
+    if (incomplete.length > 0) {
+      setError(
+        `Fill required UAN/ESIC for: ${incomplete
+          .slice(0, 3)
+          .map((r) => r.name)
+          .join(', ')}${incomplete.length > 3 ? ` (+${incomplete.length - 3} more)` : ''}.`
+      );
       return;
     }
-    if (row.need_esic && !esic) {
-      setError(`ESIC is required for ${row.name}.`);
-      return;
-    }
-    setSavingId(row.id);
+
+    setSavingAll(true);
     setError('');
+    let saved = 0;
+    const failures = [];
+
     try {
-      await api.setPayrollIdentityNumbers({
-        clientId: id,
-        employeeId: row.id,
-        payrollPfUanNumber: row.need_uan ? uan : null,
-        payrollEsicNumber: row.need_esic ? esic : null
-      });
-      setToast(`Identity numbers updated for ${row.name}.`);
-      setTimeout(() => setToast(null), 2500);
+      for (const row of saveableRows) {
+        try {
+          await api.setPayrollIdentityNumbers({
+            clientId: id,
+            employeeId: row.id,
+            payrollPfUanNumber: row.need_uan ? String(row.draft_uan ?? '').trim() : null,
+            payrollEsicNumber: row.need_esic ? String(row.draft_esic ?? '').trim() : null
+          });
+          saved += 1;
+        } catch (err) {
+          failures.push(`${row.name}: ${err.message || 'failed'}`);
+        }
+      }
+
+      setDraftById({});
       await loadAll();
+
+      if (failures.length > 0) {
+        setError(
+          `Saved ${saved} row${saved === 1 ? '' : 's'}, but ${failures.length} failed. ${failures.slice(0, 2).join('; ')}`
+        );
+      }
+      if (saved > 0) {
+        setToast(`Saved ${saved} change${saved === 1 ? '' : 's'} successfully.`);
+        setTimeout(() => setToast(null), 3000);
+      }
     } catch (err) {
-      setError(err.message || 'Could not update identity numbers.');
+      setError(err.message || 'Could not save identity number changes.');
     } finally {
-      setSavingId(null);
+      setSavingAll(false);
     }
   };
 
@@ -152,6 +190,7 @@ export default function PayrollClientIdentityNumbersPage() {
     try {
       const result = await api.importPayrollIdentityNumbersCsv({ clientId: id, file });
       setImportSummary(result);
+      setDraftById({});
       setToast(`Imported CSV: ${result.updated} row${result.updated === 1 ? '' : 's'} updated.`);
       setTimeout(() => setToast(null), 3000);
       await loadAll();
@@ -163,7 +202,7 @@ export default function PayrollClientIdentityNumbersPage() {
   };
 
   return (
-    <main className="mx-auto max-w-7xl px-6 py-8">
+    <main className="mx-auto max-w-7xl px-6 pb-8 pt-4">
       {toast && (
         <div className="fixed bottom-6 left-1/2 z-[110] -translate-x-1/2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-lg">
           {toast}
@@ -199,28 +238,19 @@ export default function PayrollClientIdentityNumbersPage() {
           >
             {importing ? 'Importing...' : 'Import CSV'}
           </button>
-          <button
-            type="button"
-            onClick={() => navigate('/dashboard')}
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
-          >
-            Back to Clients
-          </button>
         </div>
       </div>
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Joined Employees</p>
-          <p className="mt-1 text-2xl font-semibold text-slate-900">{joinedRows.length}</p>
-        </div>
+      <div className="mb-4 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Pending Assignment</p>
-          <p className="mt-1 text-2xl font-semibold text-amber-700">{pendingCount}</p>
+          <p className="mt-1 text-2xl font-semibold text-amber-700">{pendingAssignmentCount}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Ready</p>
-          <p className="mt-1 text-2xl font-semibold text-emerald-700">{Math.max(joinedRows.length - pendingCount, 0)}</p>
+          <p className="mt-1 text-2xl font-semibold text-emerald-700">
+            {Math.max(joinedRows.length - pendingAssignmentCount, 0)}
+          </p>
         </div>
       </div>
 
@@ -236,7 +266,9 @@ export default function PayrollClientIdentityNumbersPage() {
           <p className="mt-1">
             Total rows: <span className="font-semibold">{importSummary.total_rows ?? 0}</span>, Updated:{' '}
             <span className="font-semibold text-emerald-700">{importSummary.updated ?? 0}</span>, Failed:{' '}
-            <span className="font-semibold text-rose-700">{Array.isArray(importSummary.failed) ? importSummary.failed.length : 0}</span>
+            <span className="font-semibold text-rose-700">
+              {Array.isArray(importSummary.failed) ? importSummary.failed.length : 0}
+            </span>
           </p>
           {Array.isArray(importSummary.failed) && importSummary.failed.length > 0 && (
             <div className="mt-3 max-h-44 overflow-auto rounded-md border border-rose-100 bg-rose-50 p-3">
@@ -246,9 +278,7 @@ export default function PayrollClientIdentityNumbersPage() {
                     Row {f.row ?? '-'} {f.employee_id ? `(${f.employee_id})` : ''}: {f.error}
                   </li>
                 ))}
-                {importSummary.failed.length > 40 && (
-                  <li>...and {importSummary.failed.length - 40} more</li>
-                )}
+                {importSummary.failed.length > 40 && <li>...and {importSummary.failed.length - 40} more</li>}
               </ul>
             </div>
           )}
@@ -260,73 +290,96 @@ export default function PayrollClientIdentityNumbersPage() {
         </div>
       )}
 
-      {!loading && !error && rowsWithNeeds.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr>
-                <th className="px-4 py-2 text-left font-medium">Employee</th>
-                <th className="px-4 py-2 text-left font-medium">Joining Status</th>
-                <th className="px-4 py-2 text-left font-medium">UAN (Employee Form)</th>
-                <th className="px-4 py-2 text-left font-medium">ESIC (Employee Form)</th>
-                <th className="px-4 py-2 text-left font-medium">Payroll UAN</th>
-                <th className="px-4 py-2 text-left font-medium">Payroll ESIC</th>
-                <th className="px-4 py-2 text-left font-medium">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {rowsWithNeeds.map((row) => {
-                const statusLabel =
-                  row.joining_status === 'JOINED_OTHER_DATE'
-                    ? `Joined on other date (${row.joining_actual_date || '-'})`
-                    : row.joining_status === 'JOINED'
-                      ? 'Joined'
-                      : row.joining_status || '-';
-                const lockUan = !row.need_uan;
-                const lockEsic = !row.need_esic;
-                const canSave = (!row.need_uan || row.draft_uan) && (!row.need_esic || row.draft_esic);
-                return (
-                  <tr key={row.id}>
-                    <td className="px-4 py-3 text-slate-900">{row.name}</td>
-                    <td className="px-4 py-3 text-slate-700">{statusLabel}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.form_bp_pf_uan_number || '-'}</td>
-                    <td className="px-4 py-3 text-slate-700">{row.form_bp_esic_number || '-'}</td>
-                    <td className="px-4 py-3">
-                      <input
-                        type="text"
-                        value={row.draft_uan || ''}
-                        onChange={(e) => setDraft(row.id, 'uan', e.target.value.replace(/\D/g, '').slice(0, 12))}
-                        disabled={lockUan}
-                        placeholder={lockUan ? 'Using employee value' : 'Enter 12-digit UAN'}
-                        className="w-full min-w-[160px] rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <input
-                        type="text"
-                        value={row.draft_esic || ''}
-                        onChange={(e) => setDraft(row.id, 'esic', e.target.value.replace(/\D/g, '').slice(0, 10))}
-                        disabled={lockEsic}
-                        placeholder={lockEsic ? 'Using employee value' : 'Enter 10-digit ESIC'}
-                        className="w-full min-w-[160px] rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => saveRow(row)}
-                        disabled={savingId === row.id || !canSave}
-                        className="rounded-md bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {savingId === row.id ? 'Saving...' : 'Save'}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      {!loading && rowsWithNeeds.length > 0 && (
+        <>
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="px-4 py-2 text-left font-medium">Employee</th>
+                  <th className="px-4 py-2 text-left font-medium">Joining Status</th>
+                  <th className="px-4 py-2 text-left font-medium">UAN (Employee Form)</th>
+                  <th className="px-4 py-2 text-left font-medium">ESIC (Employee Form)</th>
+                  <th className="px-4 py-2 text-left font-medium">Payroll UAN</th>
+                  <th className="px-4 py-2 text-left font-medium">Payroll ESIC</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rowsWithNeeds.map((row) => {
+                  const statusLabel =
+                    row.joining_status === 'JOINED_OTHER_DATE'
+                      ? `Joined on other date (${row.joining_actual_date || '-'})`
+                      : row.joining_status === 'JOINED'
+                        ? 'Joined'
+                        : row.joining_status || '-';
+                  const lockUan = !row.need_uan;
+                  const lockEsic = !row.need_esic;
+                  return (
+                    <tr key={row.id} className={row.has_unsaved_edits ? 'bg-amber-50/40' : ''}>
+                      <td className="px-4 py-3 text-slate-900">
+                        <div className="flex items-center gap-2">
+                          <span>{row.name}</span>
+                          {row.has_unsaved_edits && (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                              Unsaved
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{statusLabel}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.form_bp_pf_uan_number || '-'}</td>
+                      <td className="px-4 py-3 text-slate-700">{row.form_bp_esic_number || '-'}</td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="text"
+                          value={row.draft_uan || ''}
+                          onChange={(e) => setDraft(row.id, 'uan', e.target.value.replace(/\D/g, '').slice(0, 12))}
+                          disabled={lockUan || savingAll}
+                          placeholder={lockUan ? 'Employee value' : 'Enter 12-digit UAN'}
+                          className="w-full min-w-[160px] rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="text"
+                          value={row.draft_esic || ''}
+                          onChange={(e) => setDraft(row.id, 'esic', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                          disabled={lockEsic || savingAll}
+                          placeholder={lockEsic ? 'Employee value' : 'Enter 10-digit ESIC'}
+                          className="w-full min-w-[160px] rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-slate-600">
+              {unsavedCount === 0
+                ? 'No unsaved changes.'
+                : `${unsavedCount} unsaved change${unsavedCount === 1 ? '' : 's'}${
+                    saveAllCount < unsavedCount
+                      ? ` (${unsavedCount - saveAllCount} incomplete)`
+                      : ''
+                  }.`}
+            </p>
+            <button
+              type="button"
+              onClick={saveAllChanges}
+              disabled={savingAll || saveAllCount === 0}
+              className="rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {savingAll
+                ? 'Saving...'
+                : saveAllCount > 0
+                  ? `Save All (${saveAllCount})`
+                  : 'Save All'}
+            </button>
+          </div>
+        </>
       )}
     </main>
   );

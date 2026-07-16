@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import {
+  employeeStatusBadgeClass,
+  resolveEmployeeStatusLabel,
+} from '../lib/employeeStatusBadge';
 
 function joiningStatusLabel(row) {
   const status = String(row?.joining_status ?? '').trim().toUpperCase();
@@ -18,7 +22,6 @@ function joiningStatusLabel(row) {
 
 export default function PayrollClientFinalApprovedEmployeesPage() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const [employees, setEmployees] = useState([]);
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -56,21 +59,14 @@ export default function PayrollClientFinalApprovedEmployeesPage() {
   );
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-8">
-      <div className="mb-6 flex items-center justify-between gap-3">
+    <main className="mx-auto max-w-6xl px-6 pb-8 pt-4">
+      <div className="mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Approved Employees</h1>
           <p className="mt-1 text-sm text-slate-500">
             {client?.client_name || 'Client'}: employees finally approved by Payroll Lead.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => navigate('/dashboard')}
-          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
-        >
-          Back to Clients
-        </button>
       </div>
 
       {loading && (
@@ -97,21 +93,28 @@ export default function PayrollClientFinalApprovedEmployeesPage() {
                 <th className="px-4 py-2 text-left font-medium">Mobile</th>
                 <th className="px-4 py-2 text-left font-medium">Email</th>
                 <th className="px-4 py-2 text-left font-medium">Designation</th>
-                <th className="px-4 py-2 text-left font-medium">Onboarding Status</th>
+                <th className="px-4 py-2 text-left font-medium">PL Status</th>
                 <th className="px-4 py-2 text-left font-medium">Joining Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {approvedRows.map((row) => (
+              {approvedRows.map((row) => {
+                const statusLabel = resolveEmployeeStatusLabel(row);
+                return (
                 <tr key={row.id}>
                   <td className="px-4 py-3 text-slate-900">{row.name}</td>
                   <td className="px-4 py-3 text-slate-700">{row.mobile}</td>
                   <td className="px-4 py-3 text-slate-700">{row.email || '-'}</td>
                   <td className="px-4 py-3 text-slate-700">{row.designation || '-'}</td>
-                  <td className="px-4 py-3 text-slate-700">{row.onboarding_status || '-'}</td>
+                  <td className="px-4 py-3">
+                    <span className={employeeStatusBadgeClass(statusLabel)}>
+                      {statusLabel}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-slate-700">{joiningStatusLabel(row)}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

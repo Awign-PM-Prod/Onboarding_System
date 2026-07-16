@@ -9,6 +9,7 @@ import RoleDetailsModal from '../components/RoleDetailsModal';
 import PmClientDashboard from '../components/PmClientDashboard';
 import { api } from '../lib/api';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
+import BackToClientsLink from '../components/BackToClientsLink';
 
 const PAGE_SIZE = 50;
 const TESTING_FORM_STATUS_OPTIONS = [
@@ -19,7 +20,7 @@ const TESTING_FORM_STATUS_OPTIONS = [
   'FORM_SENT',
   'RESPONDED',
   'REQUEST CORRECTION',
-  'APPROVED',
+  'PM APPROVED',
   'PL APPROVED',
   'Form Submitted',
 ];
@@ -41,6 +42,7 @@ const TESTING_REJECTED_BY_OPTIONS = [
 const TESTING_FORM_CSV_EXPORT_STATUSES = new Set([
   'RESPONDED',
   'REQUEST CORRECTION',
+  'PM APPROVED',
   'APPROVED',
   'PL APPROVED',
   'Form Submitted',
@@ -57,6 +59,7 @@ const DIRECTORY_STATUS_OPTIONS = [
   'CORRECTION_REQUESTED',
   'Correction Requested',
   'APPROVED',
+  'PM APPROVED',
   'REJECTED',
   'PM Approved',
   'PM Rejected',
@@ -66,6 +69,7 @@ const DIRECTORY_STATUS_OPTIONS = [
   'PAYROLL_REJECTED',
   'Payroll Approved',
   'Payroll Rejected',
+  'PL APPROVED',
   'JOINED',
   'Joined',
   'NOT_JOINED',
@@ -118,7 +122,7 @@ function getTestingFormStatusLabel(row) {
   if (isMissingRoleDetails(row)) return 'NOT_SENT';
   if (String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED') return 'PL APPROVED';
   if (String(row.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED') return 'REQUEST CORRECTION';
-  if (String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED') return 'APPROVED';
+  if (String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED') return 'PM APPROVED';
   if (String(row.form_submission_status ?? '').trim() === 'Submitted') return 'RESPONDED';
   return String(row.onboarding_status ?? '').trim() || '-';
 }
@@ -330,7 +334,7 @@ export default function PmClientDetail() {
         else if (payrollReviewStatus === 'PAYROLL_APPROVED') latestStatus = 'Payroll Approved';
         else if (payrollReviewStatus === 'PAYROLL_REJECTED') latestStatus = 'Payroll Rejected';
         else if (payrollReviewStatus === 'PENDING_PAYROLL_LEAD') latestStatus = 'Pending Payroll Review';
-        else if (formReviewStatus === 'APPROVED') latestStatus = 'PM Approved';
+        else if (formReviewStatus === 'APPROVED') latestStatus = 'PM APPROVED';
         else if (formReviewStatus === 'REJECTED') latestStatus = 'PM Rejected';
         else if (formReviewStatus === 'CORRECTION_REQUESTED') latestStatus = 'Correction Requested';
         else if (formSubmissionStatus === 'Submitted') latestStatus = 'Form Submitted';
@@ -1163,6 +1167,7 @@ export default function PmClientDetail() {
         {client && (
           <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur-sm">
             <div className="mx-auto w-[98%] px-6 pb-4 pt-5">
+              <BackToClientsLink to="/pm-dashboard/clients" className="mb-3" />
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="min-w-0 text-2xl font-semibold tracking-tight text-slate-900">
                   {client.client_name}
@@ -1250,7 +1255,11 @@ export default function PmClientDetail() {
         )}
 
         {toast && (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded px-3 py-2 text-sm mb-4">
+          <div
+            role="status"
+            aria-live="polite"
+            className="fixed bottom-6 left-1/2 z-[110] max-w-md -translate-x-1/2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 shadow-lg"
+          >
             {toast}
           </div>
         )}
@@ -1582,7 +1591,7 @@ export default function PmClientDetail() {
                     onClose={() => {}}
                     onDone={async () => {
                       await loadAll();
-                      setToast('Employees imported from file.');
+                      setToast('Employees imported successfully.');
                       setTimeout(() => setToast(null), 3500);
                     }}
                   />
@@ -1596,9 +1605,14 @@ export default function PmClientDetail() {
                     embedded
                     clientId={id}
                     onClose={() => {}}
-                    onCreated={async () => {
+                    onCreated={async (created) => {
                       await loadAll();
-                      setToast('Employee added.');
+                      const name = String(created?.name ?? '').trim();
+                      setToast(
+                        name
+                          ? `${name} was added successfully.`
+                          : 'Employee was added successfully.'
+                      );
                       setTimeout(() => setToast(null), 3500);
                     }}
                   />
@@ -1917,13 +1931,19 @@ export default function PmClientDetail() {
             (activeTab === 'pl_reviewed' && plReviewedSubtab === 'rejected')
           }
           showJobColumns={activeTab !== 'pending'}
-          showStatusColumn={activeTab !== 'pl_reviewed'}
-          statusColumnLabel={activeTab === 'testing' ? 'Form Status' : 'Status'}
+          showStatusColumn={activeTab !== 'pl_reviewed' || plReviewedSubtab === 'approved'}
+          statusColumnLabel={
+            activeTab === 'testing'
+              ? 'Form Status'
+              : activeTab === 'pl_reviewed'
+                ? 'PL Status'
+                : 'Status'
+          }
           showNotAssignedForMissingRoleDetails={activeTab === 'testing' && testingSubtab === 'employees'}
           forceNotSentStatusForMissingRoleDetails={activeTab === 'testing' && testingSubtab === 'employees'}
           showRespondedForSubmittedForms={activeTab === 'testing' && testingSubtab === 'employees'}
-          showApprovedForPmApproved={activeTab === 'testing' && testingSubtab === 'employees'}
-          showPlApprovedForPayrollApproved={activeTab === 'testing' && testingSubtab === 'employees'}
+          showApprovedForPmApproved
+          showPlApprovedForPayrollApproved
           showRequestCorrectionForReview={activeTab === 'testing' && testingSubtab === 'employees'}
           showJoiningStatus={activeTab === 'pl_reviewed' || (activeTab === 'testing' && testingSubtab === 'employees')}
           joiningStatusCellRenderer={renderJoiningStatusCell}

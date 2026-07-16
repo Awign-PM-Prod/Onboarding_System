@@ -1,3 +1,8 @@
+import {
+  employeeStatusBadgeClass,
+  resolveEmployeeStatusLabel,
+} from '../lib/employeeStatusBadge';
+
 function formatCtc(type, value) {
   if (!type || value === null || value === undefined || value === '') return '-';
   const v = Number(value ?? 0);
@@ -44,8 +49,8 @@ export default function EmployeeTable({
   showNotAssignedForMissingRoleDetails = false,
   forceNotSentStatusForMissingRoleDetails = false,
   showRespondedForSubmittedForms = false,
-  showApprovedForPmApproved = false,
-  showPlApprovedForPayrollApproved = false,
+  showApprovedForPmApproved = true,
+  showPlApprovedForPayrollApproved = true,
   showRequestCorrectionForReview = false,
   showDateColumn = false,
   dateColumnLabel = 'Date',
@@ -68,81 +73,84 @@ export default function EmployeeTable({
     return status;
   };
 
-  const allSelected = selectable && rows.length > 0 && rows.every(r => selectedIds.has(r.id));
+  const allSelected = selectable && rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
 
   if (rows.length === 0) {
     return (
-      <div className="bg-white border border-slate-200 rounded-lg p-10 text-center text-sm text-slate-500">
+      <div className="rounded-lg border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
         No employees in this category.
       </div>
     );
   }
 
   return (
-    <div className="bg-white border border-slate-200 rounded-lg overflow-x-auto overflow-y-hidden">
+    <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-200 bg-white">
       <table className="min-w-[1200px] w-full text-sm">
         <thead className="bg-slate-50 text-slate-600">
           <tr>
             {selectable && (
-              <th className="px-3 py-2 text-left w-8">
+              <th className="w-8 px-3 py-2 text-left">
                 <input
                   type="checkbox"
                   checked={allSelected}
-                  onChange={e => onToggleAll(e.target.checked)}
+                  onChange={(e) => onToggleAll(e.target.checked)}
                   aria-label="Select all"
                 />
               </th>
             )}
-            <th className="text-left px-4 py-2 font-medium">Name</th>
-            <th className="text-left px-4 py-2 font-medium">Mobile</th>
-            <th className="text-left px-4 py-2 font-medium">Email</th>
-            {showJobColumns && <th className="text-left px-4 py-2 font-medium">Designation</th>}
-            {showJobColumns && <th className="text-left px-4 py-2 font-medium">DOJ</th>}
-            {showJobColumns && <th className="text-left px-4 py-2 font-medium">CTC</th>}
-            {showStatusColumn && <th className="text-left px-4 py-2 font-medium">{statusColumnLabel}</th>}
-            {showDateColumn && <th className="text-left px-4 py-2 font-medium min-w-[180px] whitespace-nowrap">{dateColumnLabel}</th>}
-            {showRemarksColumn && <th className="text-left px-4 py-2 font-medium">{remarksColumnLabel}</th>}
-            {showFormLink && <th className="text-left px-4 py-2 font-medium">Form Link</th>}
+            <th className="px-4 py-2 text-left font-medium">Name</th>
+            <th className="px-4 py-2 text-left font-medium">Mobile</th>
+            <th className="px-4 py-2 text-left font-medium">Email</th>
+            {showJobColumns && <th className="px-4 py-2 text-left font-medium">Designation</th>}
+            {showJobColumns && <th className="px-4 py-2 text-left font-medium">DOJ</th>}
+            {showJobColumns && <th className="px-4 py-2 text-left font-medium">CTC</th>}
+            {showStatusColumn && <th className="px-4 py-2 text-left font-medium">{statusColumnLabel}</th>}
+            {showDateColumn && (
+              <th className="min-w-[180px] whitespace-nowrap px-4 py-2 text-left font-medium">{dateColumnLabel}</th>
+            )}
+            {showRemarksColumn && <th className="px-4 py-2 text-left font-medium">{remarksColumnLabel}</th>}
+            {showFormLink && <th className="px-4 py-2 text-left font-medium">Form Link</th>}
             {showViewResponse && (
-              <th className={`px-3 py-2 font-medium ${showReviewTextCta ? 'text-left' : 'text-center w-14'}`}>
+              <th className={`px-3 py-2 font-medium ${showReviewTextCta ? 'text-left' : 'w-14 text-center'}`}>
                 {reviewColumnLabel}
               </th>
             )}
             {showPayrollReturnedActions && (
-              <th className="text-left px-4 py-2 font-medium">Payroll Lead note</th>
+              <th className="px-4 py-2 text-left font-medium">Payroll Lead note</th>
             )}
-            {showPayrollReturnedActions && <th className="text-left px-4 py-2 font-medium">Action</th>}
-            {actionLabel && <th className="text-left px-4 py-2 font-medium">Action</th>}
-            {showJoiningStatus && <th className="text-left px-4 py-2 font-medium">Joining Status</th>}
+            {showPayrollReturnedActions && <th className="px-4 py-2 text-left font-medium">Action</th>}
+            {actionLabel && <th className="px-4 py-2 text-left font-medium">Action</th>}
+            {showJoiningStatus && <th className="px-4 py-2 text-left font-medium">Joining Status</th>}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {rows.map(r => {
+          {rows.map((r) => {
             const checked = selectedIds.has(r.id);
             const missingRoleDetails =
               showNotAssignedForMissingRoleDetails &&
-              (
-                !String(r.designation ?? '').trim() ||
+              (!String(r.designation ?? '').trim() ||
                 !String(r.date_of_joining ?? '').trim() ||
                 !String(r.ctc_type ?? '').trim() ||
                 r.ctc_value === null ||
                 r.ctc_value === undefined ||
-                String(r.ctc_value).trim() === ''
-              );
-            const statusLabel =
-              forceNotSentStatusForMissingRoleDetails && missingRoleDetails
-                ? 'NOT_SENT'
-                : typeof statusForRow === 'function' && String(statusForRow(r) ?? '').trim()
-                  ? String(statusForRow(r) ?? '').trim()
-                : showPlApprovedForPayrollApproved && String(r.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED'
-                  ? 'PL APPROVED'
-                : showRequestCorrectionForReview && String(r.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED'
-                  ? 'REQUEST CORRECTION'
-                : showApprovedForPmApproved && String(r.form_review_status ?? '').trim().toUpperCase() === 'APPROVED'
-                  ? 'APPROVED'
-                : showRespondedForSubmittedForms && String(r.form_submission_status ?? '').trim() === 'Submitted'
-                  ? 'RESPONDED'
-                : r.onboarding_status;
+                String(r.ctc_value).trim() === '');
+
+            let statusLabel = resolveEmployeeStatusLabel(r, {
+              forceNotSent: forceNotSentStatusForMissingRoleDetails,
+              missingRoleDetails,
+              showRespondedForSubmittedForms,
+              showRequestCorrectionForReview,
+              statusForRow,
+            });
+
+            // Legacy optional flags — default true so PM/PL approved show everywhere.
+            if (!showPlApprovedForPayrollApproved && statusLabel === 'PL APPROVED') {
+              statusLabel = isPmApprovedOnlyFallback(r);
+            }
+            if (!showApprovedForPmApproved && statusLabel === 'PM APPROVED') {
+              statusLabel = String(r.onboarding_status ?? '').trim() || '-';
+            }
+
             return (
               <tr key={r.id} className={checked ? 'bg-indigo-50/40' : ''}>
                 {selectable && (
@@ -162,46 +170,28 @@ export default function EmployeeTable({
                   <td className="px-4 py-3 text-slate-700">
                     {missingRoleDetails ? (
                       <span className="font-medium text-rose-600">Not Assigned</span>
-                    ) : (r.designation || '-')}
+                    ) : (
+                      r.designation || '-'
+                    )}
                   </td>
                 )}
+                {showJobColumns && <td className="px-4 py-3 text-slate-700">{r.date_of_joining || '-'}</td>}
                 {showJobColumns && (
-                  <td className="px-4 py-3 text-slate-700">
-                    {r.date_of_joining || '-'}
-                  </td>
-                )}
-                {showJobColumns && (
-                  <td className="px-4 py-3 text-slate-700">
-                    {formatCtc(r.ctc_type, r.ctc_value)}
-                  </td>
+                  <td className="px-4 py-3 text-slate-700">{formatCtc(r.ctc_type, r.ctc_value)}</td>
                 )}
                 {showStatusColumn && (
                   <td className="px-4 py-3">
-                    <span className={`text-xs rounded px-2 py-0.5 ${
-                      statusLabel === 'NOT_SENT'
-                        ? 'bg-[#F4F5F6] text-slate-700'
-                        : String(statusLabel).trim().toUpperCase() === 'FORM_SENT'
-                          ? 'bg-indigo-50 text-indigo-700'
-                        : statusLabel === 'RESPONDED'
-                          ? 'bg-[#EDF7FC] text-[#1891CD]'
-                        : statusLabel === 'REQUEST CORRECTION'
-                          ? 'bg-orange-50 text-orange-700'
-                        : statusLabel === 'PL APPROVED'
-                          ? 'bg-emerald-700 text-emerald-50'
-                        : statusLabel === 'PL REJECTED'
-                          ? 'bg-red-800 text-white'
-                          : statusLabel === 'PM REJECTED'
-                            ? 'bg-red-50 text-red-700'
-                        : r.onboarding_initiated
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : 'bg-amber-50 text-amber-700'
-                    }`}>
+                    <span
+                      className={employeeStatusBadgeClass(statusLabel, {
+                        onboardingInitiated: r.onboarding_initiated,
+                      })}
+                    >
                       {statusLabel}
                     </span>
                   </td>
                 )}
                 {showDateColumn && (
-                  <td className="px-4 py-3 text-slate-700 min-w-[180px] whitespace-nowrap">
+                  <td className="min-w-[180px] whitespace-nowrap px-4 py-3 text-slate-700">
                     {typeof dateForRow === 'function' ? dateForRow(r) : '-'}
                   </td>
                 )}
@@ -217,16 +207,19 @@ export default function EmployeeTable({
                         href={formLinkForRow(r)}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-xs text-indigo-600 hover:text-indigo-800 underline underline-offset-2 break-all"
+                        className="break-all text-xs text-indigo-600 underline underline-offset-2 hover:text-indigo-800"
                       >
                         Open form
                       </a>
-                    ) : '-'}
+                    ) : (
+                      '-'
+                    )}
                   </td>
                 )}
                 {showViewResponse && (
                   <td className={showReviewTextCta ? 'px-4 py-3 text-left' : 'px-2 py-3 text-center'}>
-                    {(!reviewCtaForSubmittedOnly || String(r.form_submission_status ?? '').trim() === 'Submitted') ? (
+                    {!reviewCtaForSubmittedOnly ||
+                    String(r.form_submission_status ?? '').trim() === 'Submitted' ? (
                       <button
                         type="button"
                         onClick={() => onViewResponse?.(r)}
@@ -239,7 +232,7 @@ export default function EmployeeTable({
                         aria-label={`View application response for ${r.name}`}
                       >
                         {showReviewTextCta && <span>Review</span>}
-                        <IconEye className={showReviewTextCta ? 'h-5 w-5' : 'h-5 w-5'} />
+                        <IconEye className="h-5 w-5" />
                       </button>
                     ) : (
                       <span className="text-slate-400">-</span>
@@ -269,7 +262,7 @@ export default function EmployeeTable({
                     <button
                       type="button"
                       onClick={() => onRowAction?.(r)}
-                      className="px-2.5 py-1 text-xs rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
+                      className="rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50"
                     >
                       {actionLabel}
                     </button>
@@ -277,7 +270,9 @@ export default function EmployeeTable({
                 )}
                 {showJoiningStatus && (
                   <td className="px-4 py-3 text-slate-700">
-                    {joiningStatusCellRenderer ? joiningStatusCellRenderer(r, joiningStatusLabel) : joiningStatusLabel(r)}
+                    {joiningStatusCellRenderer
+                      ? joiningStatusCellRenderer(r, joiningStatusLabel)
+                      : joiningStatusLabel(r)}
                   </td>
                 )}
               </tr>
@@ -287,4 +282,11 @@ export default function EmployeeTable({
       </table>
     </div>
   );
+}
+
+function isPmApprovedOnlyFallback(row) {
+  if (String(row?.form_review_status ?? '').trim().toUpperCase() === 'APPROVED') {
+    return 'PM APPROVED';
+  }
+  return String(row?.onboarding_status ?? '').trim() || '-';
 }

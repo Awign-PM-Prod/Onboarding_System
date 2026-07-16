@@ -1,125 +1,173 @@
-import { NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
-import { useMemo } from 'react';
+import { useEffect, useState } from 'react';
+import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import CollapsibleAppSidebar, {
+  IconDashboard,
+  IconOnboarding,
+  readSidebarCollapsed
+} from './CollapsibleAppSidebar';
+import BackToClientsLink from './BackToClientsLink';
 
-function initialsFromName(name) {
-  if (!name || typeof name !== 'string') return '?';
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+function IconMenu({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+    </svg>
+  );
+}
+
+function IconClose({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  );
+}
+
+function IconCheck({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function IconReject({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function IconId({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5zm6-10.125a1.875 1.875 0 11-3.75 0 1.875 1.875 0 013.75 0zm1.294 6.336a6.721 6.721 0 01-3.17.789 6.721 6.721 0 01-3.168-.789 3.376 3.376 0 016.338 0z"
+      />
+    </svg>
+  );
 }
 
 export default function PayrollClientLayout() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { profile, user, signOut } = useAuth();
-  const initials = useMemo(
-    () => initialsFromName(profile?.name ?? user?.email ?? ''),
-    [profile?.name, user?.email]
-  );
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
 
   const handleSignOut = async () => {
     await signOut();
     navigate('/login', { replace: true });
   };
 
+  const closeMobile = () => setMobileNavOpen(false);
+  const base = `/dashboard/client/${id}`;
+  const path = location.pathname;
+
+  const items = [
+    {
+      id: 'dashboard',
+      to: `${base}/dashboard`,
+      label: 'Dashboard',
+      active: /\/dashboard\/?$/.test(path),
+      icon: <IconDashboard className="h-full w-full" />
+    },
+    {
+      id: 'pm-approved',
+      to: `${base}/approved-employees`,
+      label: 'PM Approved',
+      active: /\/approved-employees\/?$/.test(path),
+      icon: <IconOnboarding className="h-full w-full" />
+    },
+    {
+      id: 'approved',
+      to: `${base}/pl-approved-employees`,
+      label: 'Approved',
+      active: path.includes('/pl-approved-employees'),
+      icon: <IconCheck className="h-full w-full" />
+    },
+    {
+      id: 'rejected',
+      to: `${base}/rejected-employees`,
+      label: 'Rejected',
+      active: path.includes('/rejected-employees'),
+      icon: <IconReject className="h-full w-full" />
+    },
+    {
+      id: 'identity',
+      to: `${base}/identity-numbers`,
+      label: 'UAN & ESIC',
+      active: path.includes('/identity-numbers'),
+      icon: <IconId className="h-full w-full" />
+    }
+  ];
+
+  const renderSidebar = (showCollapseToggle = true) => (
+    <CollapsibleAppSidebar
+      homeTo="/dashboard/clients"
+      profile={profile}
+      user={user}
+      onSignOut={handleSignOut}
+      onNavigate={closeMobile}
+      collapsed={sidebarCollapsed}
+      onCollapsedChange={setSidebarCollapsed}
+      showCollapseToggle={showCollapseToggle}
+      items={items}
+    />
+  );
+
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-slate-100">
-      <aside className="hidden h-full w-64 shrink-0 border-r border-slate-800 bg-slate-900 lg:flex lg:flex-col">
-        <div className="border-b border-slate-700/80 px-5 py-6">
-          <button
-            type="button"
-            onClick={() => navigate('/dashboard')}
-            className="text-left text-lg font-semibold tracking-tight text-white hover:text-indigo-200"
-          >
-            Onboarding System
-          </button>
-          <p className="mt-1 text-xs text-slate-400">Payroll Lead portal</p>
-        </div>
-        <nav className="flex-1 space-y-1 px-3 py-4">
-          <NavLink
-            to={`/dashboard/client/${id}/dashboard`}
-            className={({ isActive }) =>
-              `flex items-center rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-          >
-            Dashboard
-          </NavLink>
-          <NavLink
-            to={`/dashboard/client/${id}/approved-employees`}
-            className={({ isActive }) =>
-              `flex items-center rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-          >
-            PM Approved
-          </NavLink>
-          <NavLink
-            to={`/dashboard/client/${id}/pl-approved-employees`}
-            className={({ isActive }) =>
-              `flex items-center rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-          >
-            Approved Employees
-          </NavLink>
-          <NavLink
-            to={`/dashboard/client/${id}/rejected-employees`}
-            className={({ isActive }) =>
-              `flex items-center rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-          >
-            Rejected Employees
-          </NavLink>
-          <NavLink
-            to={`/dashboard/client/${id}/identity-numbers`}
-            className={({ isActive }) =>
-              `flex items-center rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/30'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`
-            }
-          >
-            UAN & ESIC
-          </NavLink>
-        </nav>
-        <div className="border-t border-slate-700/80 p-4">
-          <div className="mb-3 flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-2 py-2">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white">
-              {initials}
-            </span>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-white">{profile?.name ?? 'Profile'}</p>
-              <p className="truncate text-xs text-slate-400">{user?.email}</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleSignOut}
-            className="w-full rounded-lg border border-slate-600 bg-transparent px-3 py-2 text-sm font-medium text-slate-200 hover:border-red-500/50 hover:bg-red-950/40 hover:text-red-100"
-          >
-            Log out
-          </button>
-        </div>
+      <aside className="relative z-30 hidden h-full max-h-screen shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
+        {renderSidebar(true)}
       </aside>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <Outlet />
+
+      {mobileNavOpen && (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm lg:hidden"
+          aria-label="Close menu"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 h-screen max-h-screen overflow-visible border-r border-slate-800/80 shadow-2xl transition-transform duration-200 ease-out lg:hidden ${
+          mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        {renderSidebar(false)}
+      </aside>
+
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="z-20 flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen((v) => !v)}
+            className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
+            aria-expanded={mobileNavOpen}
+            aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+          >
+            {mobileNavOpen ? <IconClose className="h-6 w-6" /> : <IconMenu className="h-6 w-6" />}
+          </button>
+          <span className="min-w-0 truncate text-sm font-semibold text-slate-900">Onboarding System</span>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
+          <div className="px-6 pt-6">
+            <BackToClientsLink to="/dashboard/clients" />
+          </div>
+          <Outlet />
+        </div>
       </div>
     </div>
   );

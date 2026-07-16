@@ -3592,9 +3592,8 @@ export default function OnboardingForm() {
                   {!aadhaarResumeFlow && aadhaarPhase === 'input' && (
                     <>
                       <p className="mb-4 text-sm text-slate-600">
-                        Enter the 12-digit Aadhaar number linked to your mobile{' '}
-                        <span className="tabular-nums">{mobile}</span>. We will send an OTP to your Aadhaar-registered
-                        mobile number.
+                        Enter the 12-digit Aadhaar number. We will send an OTP to your Aadhaar-registered mobile
+                        number.
                       </p>
                       <label htmlFor="onboarding-aadhaar" className="mb-2 block text-sm font-medium text-slate-800">
                         Aadhaar Number <span className="text-rose-500">*</span>

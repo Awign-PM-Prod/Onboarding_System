@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import Navbar from '../components/Navbar';
 import DesignationsInput from '../components/DesignationsInput';
 
 const emptyForm = {
@@ -121,31 +120,26 @@ export default function ClientForm() {
 
   if (loading || pmsLoading) {
     return (
-      <div className="min-h-screen">
-        <Navbar />
-        <main className="max-w-3xl mx-auto px-6 py-8 text-slate-500">Loading...</main>
-      </div>
+      <main className="mx-auto max-w-3xl px-6 py-8 text-slate-500">Loading...</main>
     );
   }
 
   return (
-    <div className="min-h-screen">
-      <Navbar />
-      <main className="max-w-3xl mx-auto px-6 py-8">
-        <div className="mb-6">
-          <Link to="/dashboard" className="text-sm text-indigo-600 hover:text-indigo-800">
-            &larr; Back to clients
-          </Link>
-          <h1 className="text-2xl font-semibold text-slate-900 mt-2">
-            {isEdit ? 'Edit Client' : 'Create Client'}
-          </h1>
-        </div>
+    <main className="mx-auto max-w-3xl px-6 py-8">
+      <div className="mb-6">
+        <Link to="/dashboard" className="text-sm text-indigo-600 hover:text-indigo-800">
+          &larr; Back to clients
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold text-slate-900">
+          {isEdit ? 'Edit Client' : 'Create Client'}
+        </h1>
+      </div>
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 mb-4 text-sm">
-            {error}
-          </div>
-        )}
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
         <form onSubmit={onSubmit} className="bg-white border border-slate-200 rounded-lg p-6 space-y-5">
           <Field label="Client Name" error={fieldErrors.client_name}>
@@ -295,8 +289,7 @@ export default function ClientForm() {
             </button>
           </div>
         </form>
-      </main>
-    </div>
+    </main>
   );
 }
 

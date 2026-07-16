@@ -37,23 +37,18 @@ export default function App() {
       <Route path="/login" element={<Login />} />
 
       <Route
-        path="/dashboard"
         element={
           <ProtectedRoute role="PAYROLL_LEAD">
             <PayrollLeadLayout />
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="clients" replace />} />
-        <Route path="dashboard" element={<PayrollLeadDashboardHome />} />
-        <Route path="clients" element={<Dashboard />} />
+        <Route path="/dashboard" element={<Navigate to="/dashboard/clients" replace />} />
+        <Route path="/dashboard/dashboard" element={<PayrollLeadDashboardHome />} />
+        <Route path="/dashboard/clients" element={<Dashboard />} />
+        <Route path="/clients/new" element={<ClientForm />} />
+        <Route path="/clients/:id/edit" element={<ClientForm />} />
       </Route>
-      <Route path="/clients/new" element={
-        <ProtectedRoute role="PAYROLL_LEAD"><ClientForm /></ProtectedRoute>
-      } />
-      <Route path="/clients/:id/edit" element={
-        <ProtectedRoute role="PAYROLL_LEAD"><ClientForm /></ProtectedRoute>
-      } />
       <Route
         path="/dashboard/client/:id"
         element={

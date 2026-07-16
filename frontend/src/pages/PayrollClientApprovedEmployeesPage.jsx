@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import EmployeeFormResponseModal from '../components/EmployeeFormResponseModal';
+import {
+  employeeStatusBadgeClass,
+  resolveEmployeeStatusLabel,
+} from '../lib/employeeStatusBadge';
 
 function IconEye({ className }) {
   return (
@@ -32,7 +36,6 @@ function joiningStatusLabel(row) {
 
 export default function PayrollClientApprovedEmployeesPage() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const [employees, setEmployees] = useState([]);
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -146,26 +149,19 @@ export default function PayrollClientApprovedEmployeesPage() {
   };
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-8">
+    <main className="mx-auto max-w-6xl px-6 pb-8 pt-4">
       {toast && (
         <div className="fixed bottom-6 left-1/2 z-[110] max-w-md -translate-x-1/2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-lg">
           {toast}
         </div>
       )}
-      <div className="mb-6 flex items-center justify-between gap-3">
+      <div className="mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">PM Approved</h1>
           <p className="mt-1 text-sm text-slate-500">
             {client?.client_name || 'Client'}: Program Manager–approved applications awaiting Payroll Lead review.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => navigate('/dashboard')}
-          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
-        >
-          Back to Clients
-        </button>
       </div>
 
       {loading && (
@@ -192,19 +188,25 @@ export default function PayrollClientApprovedEmployeesPage() {
                 <th className="px-4 py-2 text-left font-medium">Mobile</th>
                 <th className="px-4 py-2 text-left font-medium">Email</th>
                 <th className="px-4 py-2 text-left font-medium">Designation</th>
-                <th className="px-4 py-2 text-left font-medium">Onboarding Status</th>
+                <th className="px-4 py-2 text-left font-medium">PL Status</th>
                 <th className="px-4 py-2 text-left font-medium">Joining Status</th>
                 <th className="w-14 px-3 py-2 text-center font-medium">View</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {awaitingPlRows.map((row) => (
+              {awaitingPlRows.map((row) => {
+                const statusLabel = resolveEmployeeStatusLabel(row);
+                return (
                 <tr key={row.id}>
                   <td className="px-4 py-3 text-slate-900">{row.name}</td>
                   <td className="px-4 py-3 text-slate-700">{row.mobile}</td>
                   <td className="px-4 py-3 text-slate-700">{row.email || '-'}</td>
                   <td className="px-4 py-3 text-slate-700">{row.designation || '-'}</td>
-                  <td className="px-4 py-3 text-slate-700">{row.onboarding_status || '-'}</td>
+                  <td className="px-4 py-3">
+                    <span className={employeeStatusBadgeClass(statusLabel)}>
+                      {statusLabel}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-slate-700">{joiningStatusLabel(row)}</td>
                   <td className="px-2 py-3 text-center">
                     <button
@@ -218,7 +220,8 @@ export default function PayrollClientApprovedEmployeesPage() {
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
