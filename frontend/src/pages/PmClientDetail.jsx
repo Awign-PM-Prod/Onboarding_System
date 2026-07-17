@@ -1179,34 +1179,6 @@ export default function PmClientDetail() {
                 )}
               </div>
 
-              <nav className="mt-4 flex flex-wrap items-center gap-2" aria-label="Client views">
-                <NavLink
-                  to={pmClientTabUrl(id, 'client_dashboard')}
-                  className={({ isActive }) =>
-                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`
-                  }
-                >
-                  Dashboard
-                </NavLink>
-                <NavLink
-                  to={pmClientTabUrl(id, 'testing')}
-                  className={({ isActive }) =>
-                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`
-                  }
-                >
-                  Onboarding in Progress
-                  <span className="ml-1.5 tabular-nums font-medium text-slate-500">({employees.length})</span>
-                </NavLink>
-              </nav>
-
               <div className="mt-5 grid gap-5 border-t border-slate-100 pt-5 sm:grid-cols-2 lg:grid-cols-12 lg:items-start lg:gap-x-8">
                 <div className="lg:col-span-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contract code</p>
@@ -1242,6 +1214,34 @@ export default function PmClientDetail() {
                   </div>
                 </div>
               </div>
+
+              <nav className="mt-4 flex flex-wrap items-center gap-2" aria-label="Client views">
+                <NavLink
+                  to={pmClientTabUrl(id, 'client_dashboard')}
+                  className={({ isActive }) =>
+                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      isActive
+                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    }`
+                  }
+                >
+                  Dashboard
+                </NavLink>
+                <NavLink
+                  to={pmClientTabUrl(id, 'testing')}
+                  className={({ isActive }) =>
+                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      isActive
+                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    }`
+                  }
+                >
+                  Onboarding in Progress
+                  <span className="ml-1.5 tabular-nums font-medium text-slate-500">({employees.length})</span>
+                </NavLink>
+              </nav>
             </div>
           </header>
         )}

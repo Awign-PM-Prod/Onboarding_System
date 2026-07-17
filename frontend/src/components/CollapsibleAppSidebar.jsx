@@ -107,7 +107,7 @@ function IconLogo({ className }) {
 
 function itemClass(collapsed, active) {
   if (collapsed) {
-    return `flex w-full flex-col items-center justify-center gap-1 rounded-xl px-1 py-2.5 text-center transition-colors ${
+    return `flex w-full items-center justify-center rounded-xl px-1 py-2.5 transition-colors ${
       active
         ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/25'
         : 'text-slate-300 hover:bg-white/10 hover:text-white'
@@ -128,24 +128,26 @@ function NavItem({ item, collapsed, onNavigate }) {
       <span className={`flex shrink-0 items-center justify-center ${collapsed ? 'h-6 w-6' : 'h-5 w-5'}`}>
         {icon}
       </span>
-      {collapsed ? (
-        <span className="max-w-full break-words text-[10px] font-medium leading-tight tracking-wide">{label}</span>
-      ) : (
-        <span className="truncate">{label}</span>
-      )}
+      {!collapsed && <span className="truncate">{label}</span>}
     </>
   );
 
   if (to) {
     return (
-      <NavLink to={to} className={className} aria-label={label} onClick={onNavigate}>
+      <NavLink to={to} className={className} aria-label={label} title={label} onClick={onNavigate}>
         {body}
       </NavLink>
     );
   }
 
   return (
-    <button type="button" className={className} aria-label={label} onClick={onClick ?? onNavigate}>
+    <button
+      type="button"
+      className={className}
+      aria-label={label}
+      title={label}
+      onClick={onClick ?? onNavigate}
+    >
       {body}
     </button>
   );
@@ -157,17 +159,41 @@ export function SidebarBackLink({ to, label = 'Back', onClick, collapsed }) {
       to={to}
       onClick={onClick}
       aria-label={label}
+      title={label}
       className={itemClass(collapsed, false)}
     >
       <span className={`flex shrink-0 items-center justify-center ${collapsed ? 'h-6 w-6' : 'h-5 w-5'}`}>
         <IconChevronLeft className="h-5 w-5" />
       </span>
-      {collapsed ? (
-        <span className="max-w-full break-words text-[10px] font-medium leading-tight tracking-wide">{label}</span>
-      ) : (
-        <span className="truncate">{label}</span>
-      )}
+      {!collapsed && <span className="truncate">{label}</span>}
     </NavLink>
+  );
+}
+
+function IconPanelLeft({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 4.5v15m-4.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125z"
+      />
+    </svg>
+  );
+}
+
+/** Content-header toggle matching the panel icon in the design reference. */
+export function SidebarCollapseToggle({ collapsed, onToggle, className = '' }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 ${className}`.trim()}
+      aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+    >
+      <IconPanelLeft className="h-5 w-5" />
+    </button>
   );
 }
 
@@ -200,7 +226,7 @@ export default function CollapsibleAppSidebar({
   user,
   onSignOut,
   onNavigate,
-  showCollapseToggle = true,
+  showCollapseToggle = false,
   collapsed: collapsedProp,
   onCollapsedChange
 }) {
@@ -248,6 +274,10 @@ export default function CollapsibleAppSidebar({
     };
   }, [settingsOpen]);
 
+  useEffect(() => {
+    if (!collapsed) setSettingsOpen(false);
+  }, [collapsed]);
+
   const handleNav = () => {
     setSettingsOpen(false);
     onNavigate?.();
@@ -255,8 +285,8 @@ export default function CollapsibleAppSidebar({
 
   return (
     <div
-      className={`relative flex h-full flex-col overflow-hidden bg-[#1a1f3a] transition-[width] duration-200 ease-out ${
-        collapsed ? 'w-[4.75rem]' : 'w-64'
+      className={`relative flex h-full min-h-0 flex-col bg-[#1a1f3a] transition-[width] duration-200 ease-out ${
+        collapsed ? 'w-[4.5rem]' : 'w-64'
       }`}
     >
       {showCollapseToggle && (
@@ -280,6 +310,7 @@ export default function CollapsibleAppSidebar({
           to={homeTo}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white transition-opacity hover:opacity-80"
           aria-label="Home"
+          title="Onboarding System"
           onClick={handleNav}
         >
           <IconLogo className="h-7 w-7" />
@@ -306,14 +337,27 @@ export default function CollapsibleAppSidebar({
 
       <div
         ref={settingsRef}
-        className={`relative shrink-0 border-t border-white/10 ${collapsed ? 'px-2 py-3' : 'px-3 py-4'}`}
+        className={`relative z-20 shrink-0 border-t border-white/10 ${collapsed ? 'px-2 py-3' : 'px-3 py-4'}`}
       >
-        {settingsOpen && (
-          <div
-            className={`absolute bottom-full mb-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-xs text-slate-300 shadow-xl ${
-              collapsed ? 'left-2 right-2' : 'left-3 right-3'
-            }`}
-          >
+        {settingsOpen && collapsed && (
+          <div className="absolute bottom-full left-full z-50 mb-2 ml-2 w-44 overflow-hidden rounded-lg border border-slate-700/80 bg-[#1e2438] shadow-2xl">
+            <div className="px-4 py-3">
+              <p className="truncate text-sm font-semibold text-white">{profile?.name ?? 'Profile'}</p>
+            </div>
+            <div className="border-t border-white/10" aria-hidden />
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-rose-400 transition hover:bg-white/5"
+            >
+              <IconLogout className="h-4 w-4 shrink-0" />
+              Logout
+            </button>
+          </div>
+        )}
+
+        {settingsOpen && !collapsed && (
+          <div className="absolute bottom-full left-3 right-3 mb-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-xs text-slate-300 shadow-xl">
             <p className="truncate font-medium text-white">{profile?.name}</p>
             <p className="mt-0.5 truncate text-slate-400">{user?.email}</p>
             <p className="mt-1 text-slate-500">{roleLabel}</p>
@@ -330,23 +374,21 @@ export default function CollapsibleAppSidebar({
 
         {collapsed ? (
           <div className="flex flex-col items-stretch gap-2">
-            <button
-              type="button"
-              onClick={() => setSettingsOpen((v) => !v)}
+            <span
               className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white ring-2 ring-indigo-400/30"
-              aria-label="Profile"
-              title={profile?.name ?? 'Profile'}
+              aria-hidden
             >
               {initials}
-            </button>
+            </span>
             <button
               type="button"
               onClick={() => setSettingsOpen((v) => !v)}
               className={itemClass(true, settingsOpen)}
               aria-label="Settings"
+              aria-expanded={settingsOpen}
+              title="Settings"
             >
               <IconSettings className="h-5 w-5" />
-              <span className="text-[10px] font-medium leading-tight">Settings</span>
             </button>
           </div>
         ) : (

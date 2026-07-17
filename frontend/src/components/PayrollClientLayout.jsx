@@ -4,7 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import CollapsibleAppSidebar, {
   IconDashboard,
   IconOnboarding,
-  readSidebarCollapsed
+  SidebarCollapseToggle,
+  readSidebarCollapsed,
+  writeSidebarCollapsed
 } from './CollapsibleAppSidebar';
 import BackToClientsLink from './BackToClientsLink';
 
@@ -111,7 +113,7 @@ export default function PayrollClientLayout() {
     }
   ];
 
-  const renderSidebar = (showCollapseToggle = true) => (
+  const renderSidebar = () => (
     <CollapsibleAppSidebar
       homeTo="/dashboard/clients"
       profile={profile}
@@ -120,15 +122,22 @@ export default function PayrollClientLayout() {
       onNavigate={closeMobile}
       collapsed={sidebarCollapsed}
       onCollapsedChange={setSidebarCollapsed}
-      showCollapseToggle={showCollapseToggle}
       items={items}
     />
   );
 
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((v) => {
+      const next = !v;
+      writeSidebarCollapsed(next);
+      return next;
+    });
+  };
+
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-slate-100">
       <aside className="relative z-30 hidden h-full max-h-screen shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
-        {renderSidebar(true)}
+        {renderSidebar()}
       </aside>
 
       {mobileNavOpen && (
@@ -145,21 +154,26 @@ export default function PayrollClientLayout() {
           mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {renderSidebar(false)}
+        {renderSidebar()}
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="z-20 flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:hidden">
+        <header className="z-20 flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur">
           <button
             type="button"
             onClick={() => setMobileNavOpen((v) => !v)}
-            className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
+            className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 lg:hidden"
             aria-expanded={mobileNavOpen}
             aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
           >
             {mobileNavOpen ? <IconClose className="h-6 w-6" /> : <IconMenu className="h-6 w-6" />}
           </button>
-          <span className="min-w-0 truncate text-sm font-semibold text-slate-900">Onboarding System</span>
+          <SidebarCollapseToggle
+            collapsed={sidebarCollapsed}
+            onToggle={toggleSidebarCollapsed}
+            className="hidden lg:inline-flex"
+          />
+          <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Onboarding System</span>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
