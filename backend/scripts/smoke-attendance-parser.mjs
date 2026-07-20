@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import {
   parseAmsAttendanceCsv,
   parseDayHeaderToDate,
-  toSqlDate
+  toSqlDate,
+  normalizeEmployeeStatus
 } from '../src/utils/amsAttendanceParser.js';
 import { computeLegendTotals, normalizeAttendanceCode } from '../src/utils/attendanceLegend.js';
 
@@ -17,6 +18,12 @@ assert.equal(normalizeAttendanceCode('oc'), null);
 assert.equal(normalizeAttendanceCode('NH'), 'NH');
 assert.equal(normalizeAttendanceCode('FH'), 'FH');
 assert.equal(normalizeAttendanceCode('a'), 'A');
+
+assert.equal(normalizeEmployeeStatus('active'), 'Active');
+assert.equal(normalizeEmployeeStatus('New Joinee'), 'New Joiner');
+assert.equal(normalizeEmployeeStatus('Absconded'), 'Abscond');
+assert.equal(normalizeEmployeeStatus('Terminated'), 'Termination');
+assert.equal(normalizeEmployeeStatus('bogus'), null);
 
 assert.equal(toSqlDate('1st of E.M', '2026-07-01'), '2026-07-01');
 assert.equal(toSqlDate('1st of every month', '2026-07-15'), '2026-07-01');
@@ -34,6 +41,7 @@ assert.ok(sheetMeta?.attendance_month, 'attendance_month detected');
 assert.equal(rows.length, 2, 'two data rows');
 assert.ok(rows[0].day_marks.length >= 7, 'day marks present');
 assert.equal(rows[0].emp_code, 'T016394');
+assert.equal(rows[0].status_label, 'Active');
 assert.equal(rows[0].legend_totals.P, 3);
 assert.equal(rows[0].legend_totals.NH, 1);
 assert.equal(rows[0].legend_totals.A, 1);
@@ -72,6 +80,16 @@ const bareParsed = parseAmsAttendanceCsv(bareDays, { attendanceMonthHint: '2026-
 assert.equal(bareParsed.rows[0].day_marks.length, 3);
 assert.equal(bareParsed.rows[0].day_marks[0].mark_date, '2026-07-01');
 assert.equal(bareParsed.rows[0].day_marks[2].code, 'A');
+
+// StaffingGo-style "Employee Status" header (not plain "Status")
+const empStatusCsv = [
+  'Emp Code,Employee Name,DOJ,LWD,Employee Status,Amt. Type,1-Apr-26,2-Apr-26,3-Apr-26',
+  'T1,Alice,2026-01-01,,New Joinee,CTC,P,W,A',
+  'T2,Bob,2026-01-02,,Absconded,CTC,P,P,P'
+].join('\n');
+const empStatusParsed = parseAmsAttendanceCsv(empStatusCsv);
+assert.equal(empStatusParsed.rows[0].status_label, 'New Joiner');
+assert.equal(empStatusParsed.rows[1].status_label, 'Abscond');
 
 console.log('attendance parser smoke OK', {
   month: sheetMeta.attendance_month,

@@ -9,6 +9,23 @@ import {
 
 const EDITABLE_CODES = ['P', 'W', 'NH', 'FH', 'HD', 'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO', 'A', 'R', 'T', '-'];
 
+const LEAVE_TYPE_OPTIONS = [
+  { value: '', label: 'All Types' },
+  { value: 'EL', label: 'EL — Earned Leave' },
+  { value: 'SL', label: 'SL — Sick Leave' },
+  { value: 'CL', label: 'CL — Casual Leave' },
+  { value: 'PL', label: 'PL — Privilege Leave' },
+  { value: 'ML', label: 'ML — Maternity Leave' },
+  { value: 'RH', label: 'RH — Restricted Holiday' },
+  { value: 'CO', label: 'CO — Comp Off' },
+  { value: 'A', label: 'A — Absent LOP' },
+  { value: 'NH', label: 'NH — National Holiday' },
+  { value: 'FH', label: 'FH — Festival Holiday' },
+  { value: 'HD', label: 'HD — Half day' },
+  { value: 'W', label: 'W — Week off' },
+  { value: 'P', label: 'P — Present' }
+];
+
 function currentMonthValue() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -24,7 +41,45 @@ function dayHeaderLabel(isoDate) {
   const d = new Date(`${isoDate}T00:00:00Z`);
   const day = d.getUTCDate();
   const weekday = d.toLocaleString('en-US', { weekday: 'short', timeZone: 'UTC' }).toUpperCase();
-  return `${day} ${weekday}`;
+  return { day, weekday, text: `${day} ${weekday}` };
+}
+
+function daysForMonth(monthYm) {
+  const m = String(monthYm ?? '').trim();
+  if (!/^\d{4}-\d{2}$/.test(m)) return [];
+  const year = Number(m.slice(0, 4));
+  const mon = Number(m.slice(5, 7));
+  const last = new Date(Date.UTC(year, mon, 0)).getUTCDate();
+  const out = [];
+  for (let day = 1; day <= last; day += 1) {
+    out.push(`${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+  }
+  return out;
+}
+
+function isWeekendDate(isoDate) {
+  const dow = new Date(`${isoDate}T00:00:00Z`).getUTCDay();
+  return dow === 0 || dow === 6;
+}
+
+function toDateKey(raw) {
+  const s = String(raw ?? '');
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+function dayHeaderClass(isoDate) {
+  if (isWeekendDate(isoDate)) {
+    return 'border-b border-r border-[#F0E0C8] bg-[#FFF6E8] px-1.5 py-2 text-center font-medium text-[#C47A2C]';
+  }
+  return 'border-b border-r border-slate-200 bg-white px-1.5 py-2 text-center font-medium text-slate-700';
+}
+
+function dayBodyClass(isoDate) {
+  if (isWeekendDate(isoDate)) {
+    return 'border-b border-r border-[#F0E0C8] bg-[#FFFBF3] p-0.5 text-center';
+  }
+  return 'border-b border-r border-slate-100 bg-white p-0.5 text-center';
 }
 
 /**
@@ -42,6 +97,7 @@ export default function AttendancePanel({ clientId, role }) {
   const [logs, setLogs] = useState([]);
   const [showLogs, setShowLogs] = useState(false);
   const [search, setSearch] = useState('');
+  const [leaveType, setLeaveType] = useState('');
   const [editingCell, setEditingCell] = useState(null); // { rowId, date }
   const [uploadSkipModal, setUploadSkipModal] = useState(null); // { imported, skipped, errors }
 
@@ -55,20 +111,43 @@ export default function AttendancePanel({ clientId, role }) {
   const dayDates = useMemo(() => {
     const set = new Set();
     for (const row of rows) {
-      for (const m of row.day_marks ?? []) set.add(m.mark_date);
+      for (const m of row.day_marks ?? []) {
+        const key = toDateKey(m.mark_date);
+        if (key) set.add(key);
+      }
     }
     return Array.from(set).sort();
   }, [rows]);
 
+  // Prefer the month of stored day marks so statuses align with calendar columns.
+  const gridDayDates = useMemo(() => {
+    const fromMarks = dayDates.length ? toDateKey(dayDates[0])?.slice(0, 7) : null;
+    const fromSheet = sheet?.attendance_month
+      ? String(sheet.attendance_month).slice(0, 7)
+      : null;
+    const monthYm = fromMarks || fromSheet || month;
+    const full = daysForMonth(monthYm);
+    return full.length ? full : dayDates;
+  }, [sheet?.attendance_month, month, dayDates]);
+
+  const client = payload?.client ?? null;
+
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (r) =>
-        String(r.employee_name_snapshot ?? '').toLowerCase().includes(q) ||
-        String(r.emp_code ?? '').toLowerCase().includes(q)
-    );
-  }, [rows, search]);
+    return rows.filter((r) => {
+      if (q) {
+        const name = String(r.employee_name_snapshot ?? '').toLowerCase();
+        const code = String(r.emp_code ?? '').toLowerCase();
+        if (!name.includes(q) && !code.includes(q)) return false;
+      }
+      if (leaveType) {
+        const total = Number(r.legend_totals?.[leaveType] ?? 0);
+        if (total > 0) return true;
+        return (r.day_marks ?? []).some((m) => String(m.code ?? '').toUpperCase() === leaveType);
+      }
+      return true;
+    });
+  }, [rows, search, leaveType]);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -120,6 +199,12 @@ export default function AttendancePanel({ clientId, role }) {
     setError(null);
     try {
       const result = await api.uploadAttendance({ clientId, month, file });
+      const sheetMonth = result.sheet?.attendance_month
+        ? String(result.sheet.attendance_month).slice(0, 7)
+        : null;
+      if (sheetMonth && sheetMonth !== month) {
+        setMonth(sheetMonth);
+      }
       setPayload(result);
       if (result.sheet?.id) {
         const logRows = await api.getAttendanceLogs({ clientId, sheetId: result.sheet.id });
@@ -281,8 +366,15 @@ export default function AttendancePanel({ clientId, role }) {
   };
 
   const markFor = (row, date) => {
-    const m = (row.day_marks ?? []).find((d) => d.mark_date === date);
-    return m?.code ?? '-';
+    const key = toDateKey(date);
+    if (!key) return '-';
+    const marks = row.day_marks ?? [];
+    const exact = marks.find((d) => toDateKey(d.mark_date) === key);
+    if (exact) return exact.code ?? '-';
+    // Fallback: same day-of-month if mark dates were stored under a different month
+    const day = key.slice(8, 10);
+    const byDom = marks.find((d) => toDateKey(d.mark_date)?.slice(8, 10) === day);
+    return byDom?.code ?? '-';
   };
 
   return (
@@ -351,9 +443,11 @@ export default function AttendancePanel({ clientId, role }) {
 
       <div className="flex flex-wrap items-end justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Attendance</h2>
+          <h2 className="text-xl font-semibold text-slate-900">
+            {client?.client_name || 'Attendance'}
+          </h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            {payload?.client?.client_name || 'Client'} · {formatMonthLabel(sheet?.attendance_month || `${month}-01`)}
+            Attendance · {formatMonthLabel(sheet?.attendance_month || `${month}-01`)}
           </p>
           {sheet && (
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -378,7 +472,7 @@ export default function AttendancePanel({ clientId, role }) {
 
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm text-slate-600">
-            Month
+            Attendance Month
             <input
               type="month"
               className="ml-2 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
@@ -386,9 +480,10 @@ export default function AttendancePanel({ clientId, role }) {
               onChange={(e) => setMonth(e.target.value)}
             />
           </label>
-          <label className={`cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-white ${
-            busy || (sheet && !canEdit) ? 'bg-slate-400' : 'bg-indigo-600 hover:bg-indigo-700'
+          <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-white ${
+            busy || (sheet && !canEdit) ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'
           }`}>
+            <UploadIcon className="h-4 w-4" />
             Upload CSV
             <input
               type="file"
@@ -410,14 +505,15 @@ export default function AttendancePanel({ clientId, role }) {
         </div>
       </div>
 
-      {sheet && (
-        <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-          <Meta label="Contract" value={sheet.contract_code} />
-          <Meta label="Entity" value={sheet.entity} />
-          <Meta label="Cycle" value={sheet.payroll_cycle || sheet.cycle_type} />
-          <Meta label="Payout" value={sheet.salary_payout_date} />
-        </div>
-      )}
+      <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        <Meta label="Contract Code" value={sheet?.contract_code || client?.contract_code} />
+        <Meta label="Client" value={client?.client_name} />
+        <Meta label="Entity" value={sheet?.entity} />
+        <Meta label="Cycle Type" value={sheet?.cycle_type} />
+        <Meta label="Payroll Cycle" value={sheet?.payroll_cycle} />
+        <Meta label="Salary Payout Date" value={sheet?.salary_payout_date} />
+        <Meta label="Project Manager" value={sheet?.project_manager_name} />
+      </div>
 
       {error && (
         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
@@ -462,29 +558,36 @@ export default function AttendancePanel({ clientId, role }) {
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
           Loading attendance…
         </div>
-      ) : !sheet ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
-          <p className="text-base font-semibold text-slate-900">No attendance data yet</p>
-          <p className="mt-2 max-w-md text-sm text-slate-500">
-            Upload a Project AMS CSV for this month. Employees must already exist with matching Emp Codes.
-          </p>
-          <label className="mt-6 cursor-pointer rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">
-            Upload CSV
-            <input type="file" accept=".csv,text/csv" className="hidden" disabled={busy} onChange={onUpload} />
-          </label>
-        </div>
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <input
-              type="search"
-              placeholder="Search name or emp code…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full max-w-xs rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-            />
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                type="search"
+                placeholder="Search employee name or code…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                disabled={!sheet}
+                className="w-full max-w-xs rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+              />
+              <label className="flex items-center gap-2 text-sm text-slate-600">
+                <span className="whitespace-nowrap">Leave Type:</span>
+                <select
+                  value={leaveType}
+                  onChange={(e) => setLeaveType(e.target.value)}
+                  disabled={!sheet}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 disabled:bg-slate-50 disabled:text-slate-400"
+                >
+                  {LEAVE_TYPE_OPTIONS.map((opt) => (
+                    <option key={opt.value || 'all'} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="flex flex-wrap gap-2">
-              {isPl && canLock && (
+              {sheet && isPl && canLock && (
                 <button
                   type="button"
                   disabled={busy}
@@ -494,7 +597,7 @@ export default function AttendancePanel({ clientId, role }) {
                   Lock
                 </button>
               )}
-              {isPl && canUnlock && (
+              {sheet && isPl && canUnlock && (
                 <button
                   type="button"
                   disabled={busy}
@@ -504,7 +607,7 @@ export default function AttendancePanel({ clientId, role }) {
                   Unlock
                 </button>
               )}
-              {!isPl && sheet.locked && (
+              {sheet && !isPl && sheet.locked && (
                 <button
                   type="button"
                   disabled={busy || sheet.unlock_request_status === 'PENDING'}
@@ -514,18 +617,20 @@ export default function AttendancePanel({ clientId, role }) {
                   {sheet.unlock_request_status === 'PENDING' ? 'Request pending' : 'Request edit access'}
                 </button>
               )}
-              <button
-                type="button"
-                disabled={busy || !canEdit}
-                onClick={onSubmit}
-                className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-              >
-                {sheet.status === 'SUBMITTED' ? 'Resubmit attendance' : 'Submit attendance'}
-              </button>
+              {sheet && (
+                <button
+                  type="button"
+                  disabled={busy || !canEdit}
+                  onClick={onSubmit}
+                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {sheet.status === 'SUBMITTED' ? 'Resubmit attendance' : 'Submit attendance'}
+                </button>
+              )}
             </div>
           </div>
 
-          <LegendBar />
+          {sheet && <LegendBar />}
 
           <div className="overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
             <table className="min-w-max border-separate border-spacing-0 text-xs">
@@ -548,11 +653,14 @@ export default function AttendancePanel({ clientId, role }) {
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">Status</th>
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">Amt. Type</th>
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">Contract</th>
-                  {dayDates.map((d) => (
-                    <th key={d} className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-1.5 py-2 text-center font-medium">
-                      {dayHeaderLabel(d)}
-                    </th>
-                  ))}
+                  {gridDayDates.map((d) => {
+                    const label = dayHeaderLabel(d);
+                    return (
+                      <th key={d} className={`min-w-[2.75rem] whitespace-nowrap ${dayHeaderClass(d)}`}>
+                        {label.text}
+                      </th>
+                    );
+                  })}
                   {LEGEND_TOTAL_COLUMNS.map((col) => (
                     <th key={`t-${col.code}`} className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium text-slate-700">
                       {col.label}
@@ -564,86 +672,145 @@ export default function AttendancePanel({ clientId, role }) {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row, index) => (
-                  <tr key={row.id} className="group hover:bg-slate-50">
-                    <td className="sticky left-0 z-20 w-10 min-w-[2.5rem] border-b border-slate-100 bg-white px-2 py-1.5 tabular-nums text-slate-500 group-hover:bg-slate-50">
-                      {index + 1}
-                    </td>
-                    <td className="sticky left-10 z-20 w-[5.5rem] min-w-[5.5rem] border-b border-slate-100 bg-white px-2 py-1.5 font-mono text-slate-800 group-hover:bg-slate-50">
-                      {row.emp_code}
-                    </td>
-                    <td className="sticky left-[7.5rem] z-20 min-w-[9rem] max-w-[11rem] truncate border-b border-r border-slate-100 bg-white px-3 py-1.5 font-medium text-slate-900 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.12)] group-hover:bg-slate-50">
-                      {row.employee_name_snapshot}
-                    </td>
-                    <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.mobile || '—'}</td>
-                    <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.gender || '—'}</td>
-                    <td className="max-w-[120px] truncate border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.designation || '—'}</td>
-                    <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.doj || '—'}</td>
-                    <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.lwd || '—'}</td>
-                    <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.status_label || '—'}</td>
-                    <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.amt_type || '—'}</td>
-                    <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 font-mono text-slate-700">
-                      {sheet?.contract_code || '—'}
-                    </td>
-                    {dayDates.map((d) => {
-                      const code = markFor(row, d);
-                      const isEditing =
-                        editingCell?.rowId === row.id && editingCell?.date === d;
-                      return (
-                        <td key={`${row.id}-${d}`} className="border-b border-slate-100 p-0.5 text-center">
-                          {isEditing && canEdit ? (
-                            <select
-                              autoFocus
-                              className="w-14 rounded border border-indigo-300 bg-white py-0.5 text-xs"
-                              value={code}
-                              onChange={(e) => onChangeCell(row.id, d, e.target.value)}
-                              onBlur={() => setEditingCell(null)}
-                            >
-                              {EDITABLE_CODES.map((c) => (
-                                <option key={c} value={c}>
-                                  {c === 'A' ? 'A (Absent LOP)' : c === 'NH' ? 'NH' : c === 'FH' ? 'FH' : c}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={!canEdit}
-                              title={LEGEND_LABELS[code] || code}
-                              onClick={() => canEdit && setEditingCell({ rowId: row.id, date: d })}
-                              className={`inline-flex min-w-[1.75rem] items-center justify-center rounded px-1 py-0.5 ${codeCellClass(code)} ${
-                                canEdit ? 'cursor-pointer hover:ring-1 hover:ring-indigo-300' : 'cursor-default'
-                              }`}
-                            >
-                              {displayCode(code)}
-                            </button>
-                          )}
-                        </td>
-                      );
-                    })}
-                    {LEGEND_TOTAL_COLUMNS.map((col) => (
-                      <td key={`${row.id}-tot-${col.code}`} className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-slate-700">
-                        {Number(row.legend_totals?.[col.code] ?? 0)}
-                      </td>
-                    ))}
-                    <td className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums">{row.paid_days ?? '—'}</td>
-                    <td className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-red-700">{row.lop ?? '—'}</td>
-                    <td className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-slate-600">
-                      {row.not_considered ?? '—'}
+                {!sheet ? (
+                  <tr>
+                    <td
+                      colSpan={11 + gridDayDates.length + LEGEND_TOTAL_COLUMNS.length + 3}
+                      className="border-b border-slate-100 px-4 py-16"
+                    >
+                      <EmptyAttendanceState busy={busy} onUpload={onUpload} />
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredRows.map((row, index) => (
+                    <tr key={row.id} className="group hover:bg-slate-50">
+                      <td className="sticky left-0 z-20 w-10 min-w-[2.5rem] border-b border-slate-100 bg-white px-2 py-1.5 tabular-nums text-slate-500 group-hover:bg-slate-50">
+                        {index + 1}
+                      </td>
+                      <td className="sticky left-10 z-20 w-[5.5rem] min-w-[5.5rem] border-b border-slate-100 bg-white px-2 py-1.5 font-mono text-slate-800 group-hover:bg-slate-50">
+                        {row.emp_code}
+                      </td>
+                      <td className="sticky left-[7.5rem] z-20 min-w-[9rem] max-w-[11rem] truncate border-b border-r border-slate-100 bg-white px-3 py-1.5 font-medium text-slate-900 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.12)] group-hover:bg-slate-50">
+                        {row.employee_name_snapshot}
+                      </td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.mobile || '—'}</td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.gender || '—'}</td>
+                      <td className="max-w-[120px] truncate border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.designation || '—'}</td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.doj || '—'}</td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.lwd || '—'}</td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.status_label || '—'}</td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.amt_type || '—'}</td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 font-mono text-slate-700">
+                        {sheet?.contract_code || '—'}
+                      </td>
+                      {gridDayDates.map((d) => {
+                        const code = markFor(row, d);
+                        const isEditing =
+                          editingCell?.rowId === row.id && editingCell?.date === d;
+                        return (
+                          <td key={`${row.id}-${d}`} className={dayBodyClass(d)}>
+                            {isEditing && canEdit ? (
+                              <select
+                                autoFocus
+                                className="w-14 rounded border border-indigo-300 bg-white py-0.5 text-xs"
+                                value={code}
+                                onChange={(e) => onChangeCell(row.id, d, e.target.value)}
+                                onBlur={() => setEditingCell(null)}
+                              >
+                                {EDITABLE_CODES.map((c) => (
+                                  <option key={c} value={c}>
+                                    {c === 'A' ? 'A (Absent LOP)' : c === 'NH' ? 'NH' : c === 'FH' ? 'FH' : c}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={!canEdit}
+                                title={LEGEND_LABELS[code] || code}
+                                onClick={() => canEdit && setEditingCell({ rowId: row.id, date: d })}
+                                className={`inline-flex min-w-[1.75rem] items-center justify-center rounded px-1 py-0.5 ${codeCellClass(code)} ${
+                                  canEdit ? 'cursor-pointer hover:ring-1 hover:ring-indigo-300' : 'cursor-default'
+                                }`}
+                              >
+                                {displayCode(code)}
+                              </button>
+                            )}
+                          </td>
+                        );
+                      })}
+                      {LEGEND_TOTAL_COLUMNS.map((col) => (
+                        <td key={`${row.id}-tot-${col.code}`} className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-slate-700">
+                          {Number(row.legend_totals?.[col.code] ?? 0)}
+                        </td>
+                      ))}
+                      <td className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums">{row.paid_days ?? '—'}</td>
+                      <td className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-red-700">{row.lop ?? '—'}</td>
+                      <td className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-slate-600">
+                        {row.not_considered ?? '—'}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
 
-          <p className="text-sm text-slate-500">
-            {filteredRows.length} employee{filteredRows.length === 1 ? '' : 's'}
-            {dayDates.length === 0 && ' · No day columns found — re-upload CSV with date headers (e.g. 1-Jul-26)'}
-            {!canEdit && ' · Sheet is locked (unlock required to edit)'}
-          </p>
+          {sheet && (
+            <p className="text-sm text-slate-500">
+              {filteredRows.length} employee{filteredRows.length === 1 ? '' : 's'}
+              {dayDates.length === 0 && ' · No day columns found — re-upload CSV with date headers (e.g. 1-Jul-26)'}
+              {!canEdit && ' · Sheet is locked (unlock required to edit)'}
+            </p>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+function UploadIcon({ className = 'h-4 w-4' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M10 12.5V3.75M10 3.75L6.875 6.875M10 3.75L13.125 6.875M3.75 12.5v2.083c0 .921.746 1.667 1.667 1.667h9.166c.921 0 1.667-.746 1.667-1.667V12.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EmptyAttendanceState({ busy, onUpload }) {
+  return (
+    <div className="mx-auto flex max-w-sm flex-col items-center justify-center rounded-2xl border border-slate-100 bg-white px-8 py-10 text-center shadow-sm">
+      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+        <svg className="h-9 w-9" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <rect x="8" y="18" width="32" height="22" rx="3" stroke="currentColor" strokeWidth="2.5" />
+          <path d="M8 24h32" stroke="currentColor" strokeWidth="2.5" />
+          <path
+            d="M16 18V14a8 8 0 0 1 16 0v4"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          />
+          <rect x="18" y="28" width="5" height="7" rx="1" fill="currentColor" opacity="0.35" />
+          <rect x="25" y="28" width="5" height="7" rx="1" fill="currentColor" opacity="0.55" />
+          <rect x="32" y="28" width="5" height="7" rx="1" fill="currentColor" opacity="0.75" />
+        </svg>
+      </div>
+      <p className="text-lg font-semibold text-slate-900">No data yet</p>
+      <p className="mt-1 text-sm text-slate-500">Upload a CSV file to get started</p>
+      <label
+        className={`mt-5 inline-flex cursor-pointer items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-white ${
+          busy ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'
+        }`}
+      >
+        Upload CSV
+        <input type="file" accept=".csv,text/csv" className="hidden" disabled={busy} onChange={onUpload} />
+      </label>
     </div>
   );
 }

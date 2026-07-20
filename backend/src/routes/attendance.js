@@ -164,7 +164,10 @@ async function fetchSheetBundle(sheetId) {
     sheet,
     rows: (rows ?? []).map((r) => ({
       ...r,
-      day_marks: marksByRow.get(r.id) ?? []
+      day_marks: (marksByRow.get(r.id) ?? []).map((m) => ({
+        ...m,
+        mark_date: String(m.mark_date ?? '').slice(0, 10)
+      }))
     }))
   };
 }
@@ -182,6 +185,20 @@ function monthParamToDate(month) {
   if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s.slice(0, 7)}-01`;
   return null;
+}
+
+function monthYm(dateOrYm) {
+  const s = String(dateOrYm ?? '');
+  if (/^\d{4}-\d{2}$/.test(s)) return s;
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 7);
+  return null;
+}
+
+function formatMonthLabel(dateOrYm) {
+  const ym = monthYm(dateOrYm);
+  if (!ym) return String(dateOrYm ?? '');
+  const d = new Date(`${ym}-01T00:00:00Z`);
+  return d.toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 }
 
 // GET /api/clients/:clientId/attendance?month=YYYY-MM
@@ -290,16 +307,56 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
     if (!access.ok) return res.status(access.status).json({ error: access.error });
 
     if (!req.file) return res.status(400).json({ error: 'CSV file required' });
-    const monthOverride = monthParamToDate(req.body?.month || req.query?.month);
+    const selectedMonth = monthParamToDate(req.body?.month || req.query?.month);
+    if (!selectedMonth) {
+      return res.status(400).json({
+        error: 'Attendance month is required. Select a month, then upload the matching CSV.'
+      });
+    }
 
     const text = req.file.buffer.toString('utf8');
+    // Parse without month hint first so CSV day headers / Payroll Month are authoritative.
     const { sheetMeta, rows: parsedRows, errors: parseErrors } = parseAmsAttendanceCsv(text, {
-      attendanceMonthHint: monthOverride
+      attendanceMonthHint: null
     });
-    const attendanceMonth = monthOverride || sheetMeta?.attendance_month;
-    if (!attendanceMonth) {
+
+    let csvMonth = monthParamToDate(sheetMeta?.attendance_month);
+    const dayMarkCountPreliminary = parsedRows.reduce((n, r) => n + (r.day_marks?.length || 0), 0);
+    let rowsToUse = parsedRows;
+    let metaToUse = sheetMeta;
+    let errorsToUse = parseErrors;
+
+    if (csvMonth && monthYm(csvMonth) !== monthYm(selectedMonth)) {
       return res.status(400).json({
-        error: 'Could not determine attendance month from CSV. Pass month=YYYY-MM.'
+        error: `This CSV is for ${formatMonthLabel(csvMonth)}, but ${formatMonthLabel(selectedMonth)} is selected. Change Attendance Month to ${formatMonthLabel(csvMonth)} (or upload the CSV for ${formatMonthLabel(selectedMonth)}). Upload was not saved.`,
+        csv_month: monthYm(csvMonth),
+        selected_month: monthYm(selectedMonth)
+      });
+    }
+
+    // Bare day numbers (1…31) need the selected month as a parse hint.
+    if (dayMarkCountPreliminary === 0) {
+      const hinted = parseAmsAttendanceCsv(text, { attendanceMonthHint: selectedMonth });
+      rowsToUse = hinted.rows;
+      metaToUse = hinted.sheetMeta;
+      errorsToUse = hinted.errors;
+      csvMonth = monthParamToDate(metaToUse?.attendance_month);
+      if (csvMonth && monthYm(csvMonth) !== monthYm(selectedMonth)) {
+        return res.status(400).json({
+          error: `This CSV is for ${formatMonthLabel(csvMonth)}, but ${formatMonthLabel(selectedMonth)} is selected. Change Attendance Month to ${formatMonthLabel(csvMonth)} (or upload the CSV for ${formatMonthLabel(selectedMonth)}). Upload was not saved.`,
+          csv_month: monthYm(csvMonth),
+          selected_month: monthYm(selectedMonth)
+        });
+      }
+    }
+
+    const attendanceMonth = selectedMonth;
+    const dayMarkCount = rowsToUse.reduce((n, r) => n + (r.day_marks?.length || 0), 0);
+    if (rowsToUse.length > 0 && dayMarkCount === 0) {
+      return res.status(400).json({
+        error:
+          'No day columns detected in the CSV. Use date headers like 1-Jul-26 (or 1…31 with Payroll Month). Existing employee rows were not replaced.',
+        details: errorsToUse
       });
     }
 
@@ -314,16 +371,7 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       return res.status(423).json({ error: 'Attendance sheet is locked. Unlock it before uploading.' });
     }
 
-    const empCodes = parsedRows.map((r) => r.emp_code);
-    const dayMarkCount = parsedRows.reduce((n, r) => n + (r.day_marks?.length || 0), 0);
-    if (parsedRows.length > 0 && dayMarkCount === 0) {
-      return res.status(400).json({
-        error:
-          'No day columns detected in the CSV. Use date headers like 1-Jul-26 (or 1…31 with Payroll Month). Existing employee rows were not replaced.',
-        details: parseErrors
-      });
-    }
-
+    const empCodes = rowsToUse.map((r) => r.emp_code);
     const { data: employees, error: empErr } = await supabaseAdmin
       .from('employees')
       .select('id, emp_code, name, mobile')
@@ -334,9 +382,9 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
 
     const matched = [];
     const skipped = [];
-    const allErrors = [...(parseErrors ?? [])];
+    const allErrors = [...(errorsToUse ?? [])];
 
-    for (const row of parsedRows) {
+    for (const row of rowsToUse) {
       const emp = empByCode.get(row.emp_code);
       if (!emp) {
         skipped.push({ emp_code: row.emp_code, error: 'No matching employee emp_code on this client' });
@@ -349,7 +397,7 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       return res.status(400).json({
         error:
           'No CSV rows matched employees on this client. Ensure emp_code values exist (e.g. T016394). Sheet was not changed.',
-        details: [...(parseErrors ?? []), ...skipped]
+        details: [...(errorsToUse ?? []), ...skipped]
       });
     }
 
@@ -368,14 +416,14 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
         .from('attendance_sheets')
         .update({
           status: 'DRAFT',
-          contract_code: sheetMeta.contract_code,
-          entity: sheetMeta.entity,
-          cycle_type: sheetMeta.cycle_type,
-          payroll_cycle: sheetMeta.payroll_cycle,
-          payroll_start_date: sheetMeta.payroll_start_date,
-          payroll_end_date: sheetMeta.payroll_end_date,
-          salary_payout_date: sheetMeta.salary_payout_date,
-          project_manager_name: sheetMeta.project_manager_name,
+          contract_code: metaToUse?.contract_code,
+          entity: metaToUse?.entity,
+          cycle_type: metaToUse?.cycle_type,
+          payroll_cycle: metaToUse?.payroll_cycle,
+          payroll_start_date: metaToUse?.payroll_start_date,
+          payroll_end_date: metaToUse?.payroll_end_date,
+          salary_payout_date: metaToUse?.salary_payout_date,
+          project_manager_name: metaToUse?.project_manager_name,
           source_filename: req.file.originalname || null,
           uploaded_by: req.user.id,
           uploaded_at: now,
@@ -399,14 +447,14 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
           locked: false,
           ever_locked: false,
           unlock_request_status: 'NONE',
-          contract_code: sheetMeta.contract_code,
-          entity: sheetMeta.entity,
-          cycle_type: sheetMeta.cycle_type,
-          payroll_cycle: sheetMeta.payroll_cycle,
-          payroll_start_date: sheetMeta.payroll_start_date,
-          payroll_end_date: sheetMeta.payroll_end_date,
-          salary_payout_date: sheetMeta.salary_payout_date,
-          project_manager_name: sheetMeta.project_manager_name,
+          contract_code: metaToUse?.contract_code,
+          entity: metaToUse?.entity,
+          cycle_type: metaToUse?.cycle_type,
+          payroll_cycle: metaToUse?.payroll_cycle,
+          payroll_start_date: metaToUse?.payroll_start_date,
+          payroll_end_date: metaToUse?.payroll_end_date,
+          salary_payout_date: metaToUse?.salary_payout_date,
+          project_manager_name: metaToUse?.project_manager_name,
           source_filename: req.file.originalname || null,
           uploaded_by: req.user.id,
           uploaded_at: now

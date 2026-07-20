@@ -144,6 +144,11 @@ const NON_DAY_COMPACT = new Set([
   'lwd',
   'lastworkingday',
   'status',
+  'employeestatus',
+  'employmentstatus',
+  'empstatus',
+  'currentstatus',
+  'workerstatus',
   'amttype',
   'amounttype',
   'monthlyamt',
@@ -279,6 +284,106 @@ function numOrNull(v) {
 function strOrNull(v) {
   const s = String(v ?? '').trim();
   return s && s !== '-' ? s : null;
+}
+
+/** Canonical AMS employee statuses shown in the attendance grid. */
+export const EMPLOYEE_STATUS_LABELS = [
+  'Active',
+  'New Joiner',
+  'Abscond',
+  'Inactive',
+  'Resigned',
+  'Termination'
+];
+
+const EMPLOYEE_STATUS_ALIASES = new Map([
+  ['active', 'Active'],
+  ['newjoiner', 'New Joiner'],
+  ['newjoinee', 'New Joiner'],
+  ['newjoin', 'New Joiner'],
+  ['yettojoin', 'New Joiner'],
+  ['abscond', 'Abscond'],
+  ['absconded', 'Abscond'],
+  ['absconder', 'Abscond'],
+  ['inactive', 'Inactive'],
+  ['inactve', 'Inactive'],
+  ['resigned', 'Resigned'],
+  ['resign', 'Resigned'],
+  ['resignation', 'Resigned'],
+  ['termination', 'Termination'],
+  ['terminated', 'Termination'],
+  ['terminate', 'Termination']
+]);
+
+/** Map raw CSV status text to one of the six canonical labels (or null). */
+export function normalizeEmployeeStatus(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s || s === '-' || s === '—') return null;
+  const compact = s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (EMPLOYEE_STATUS_ALIASES.has(compact)) return EMPLOYEE_STATUS_ALIASES.get(compact);
+  // Exact label match ignoring case/spacing
+  for (const label of EMPLOYEE_STATUS_LABELS) {
+    if (compactKey(label) === compact) return label;
+  }
+  return null;
+}
+
+function looksLikeEmployeeStatus(raw) {
+  return Boolean(normalizeEmployeeStatus(raw));
+}
+
+/**
+ * Resolve Status column: named aliases first, then scan for status-like values,
+ * then positional slot between DOJ/LWD and Amt. Type.
+ */
+function resolveStatusColumnIndex(headers, map, sampleRows = []) {
+  const namedAliases = [
+    'Status',
+    'Employee Status',
+    'Employment Status',
+    'Emp Status',
+    'Emp. Status',
+    'Current Status',
+    'Worker Status'
+  ];
+  for (const a of namedAliases) {
+    const idx = map.byCompact[compactKey(a)];
+    if (idx != null) return idx;
+  }
+
+  const dayIdx = new Set((map.dayCols ?? []).map((d) => d.index));
+  let bestIdx = null;
+  let bestScore = 0;
+  for (let i = 0; i < headers.length; i += 1) {
+    if (dayIdx.has(i)) continue;
+    const compact = compactKey(headers[i]);
+    if (compact && NON_DAY_COMPACT.has(compact) && !compact.includes('status')) continue;
+    let hits = 0;
+    let seen = 0;
+    for (const row of sampleRows.slice(0, 20)) {
+      const v = row[i];
+      if (v == null || String(v).trim() === '') continue;
+      seen += 1;
+      if (looksLikeEmployeeStatus(v)) hits += 1;
+    }
+    if (seen >= 2 && hits / seen >= 0.5 && hits > bestScore) {
+      bestScore = hits;
+      bestIdx = i;
+    }
+  }
+  if (bestIdx != null) return bestIdx;
+
+  const left = Math.max(map.byCompact.lwd ?? -1, map.byCompact.doj ?? -1, map.byCompact.dateofjoining ?? -1);
+  const right =
+    map.byCompact.amttype ??
+    map.byCompact.amounttype ??
+    map.byCompact.monthlyamt ??
+    map.byCompact.monthlyamount ??
+    map.byCompact.ctc;
+  if (left >= 0 && right != null && right === left + 2) {
+    return left + 1;
+  }
+  return null;
 }
 
 function findHeaderRow(matrix) {
@@ -433,6 +538,7 @@ export function parseAmsAttendanceCsv(text, options = {}) {
   }
 
   const colMap = buildColumnMap(headers, peekMonth, dataRows);
+  const statusColIdx = resolveStatusColumnIndex(headers, colMap, dataRows);
   const errors = [];
   if (colMap.dayCols.length === 0) {
     errors.push({
@@ -541,6 +647,22 @@ export function parseAmsAttendanceCsv(text, options = {}) {
 
     const legend_totals = computeLegendTotals(dayMarks.map((d) => d.code));
 
+    const statusRaw =
+      statusColIdx != null
+        ? row[statusColIdx]
+        : col(
+            row,
+            colMap,
+            'Status',
+            'Employee Status',
+            'Employment Status',
+            'Emp Status',
+            'Emp. Status',
+            'Current Status'
+          );
+    const statusNormalized = normalizeEmployeeStatus(statusRaw);
+    const status_label = statusNormalized || strOrNull(statusRaw);
+
     outRows.push({
       emp_code: empCode,
       employee_name_snapshot: name,
@@ -550,7 +672,7 @@ export function parseAmsAttendanceCsv(text, options = {}) {
       designation: strOrNull(col(row, colMap, 'Designation', 'Role')),
       doj: toSqlDate(col(row, colMap, 'DOJ', 'Date of Joining'), sheetMeta.attendance_month),
       lwd: toSqlDate(col(row, colMap, 'LWD', 'Last Working Day'), sheetMeta.attendance_month),
-      status_label: strOrNull(col(row, colMap, 'Status')),
+      status_label,
       amt_type: amtType,
       monthly_amt: numOrNull(col(row, colMap, 'Monthly Amt', 'Monthly Amount', 'CTC')),
       paid_days: numOrNull(col(row, colMap, 'Paid Days')),
