@@ -5,9 +5,10 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "dev": "nodemon src/index.js",
-    "start": "node src/index.js",
-    "seed": "node scripts/seed.mjs"
+    "dev": "nodemon --exec \"node --use-system-ca\" src/index.js",
+    "start": "node --use-system-ca src/index.js",
+    "seed": "node --use-system-ca scripts/seed.mjs",
+    "smoke:attendance": "node scripts/smoke-attendance-parser.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.0",

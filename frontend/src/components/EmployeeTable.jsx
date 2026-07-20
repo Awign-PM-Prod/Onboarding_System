@@ -99,6 +99,7 @@ export default function EmployeeTable({
               </th>
             )}
             <th className="px-4 py-2 text-left font-medium">Name</th>
+            <th className="px-4 py-2 text-left font-medium">Emp Code</th>
             <th className="px-4 py-2 text-left font-medium">Mobile</th>
             <th className="px-4 py-2 text-left font-medium">Email</th>
             {showJobColumns && <th className="px-4 py-2 text-left font-medium">Designation</th>}
@@ -164,6 +165,7 @@ export default function EmployeeTable({
                   </td>
                 )}
                 <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
+                <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.emp_code || '—'}</td>
                 <td className="px-4 py-3 text-slate-700">{r.mobile}</td>
                 <td className="px-4 py-3 text-slate-700">{r.email}</td>
                 {showJobColumns && (

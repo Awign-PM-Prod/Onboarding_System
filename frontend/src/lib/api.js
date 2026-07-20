@@ -19,14 +19,10 @@ function apiUrl(path) {
   return `${BASE_URL}${p}`;
 }
 
-async function authHeader() {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 const REQUEST_TIMEOUT_MS = 15_000;
 const BANK_VERIFY_TIMEOUT_MS = 60_000;
+const ATTENDANCE_UPLOAD_TIMEOUT_MS = 120_000;
+const ATTENDANCE_GET_TIMEOUT_MS = 60_000;
 
 async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -35,14 +31,30 @@ async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
     return await fetch(url, { ...options, signal: controller.signal });
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s (is the backend running at ${BASE_URL}?)`);
+      throw new Error(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s. If uploading attendance, wait and retry — large CSVs can take longer. Also confirm the backend is running at ${BASE_URL || 'same origin'}.`
+      );
     }
     if (err instanceof TypeError) {
-      throw new Error(`Cannot reach backend at ${BASE_URL} (${err.message})`);
+      throw new Error(`Cannot reach backend at ${BASE_URL || 'same origin'} (${err.message})`);
     }
     throw err;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function authHeader() {
+  try {
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise((resolve) =>
+      setTimeout(() => resolve({ data: { session: null } }), 5000)
+    );
+    const { data } = await Promise.race([sessionPromise, timeoutPromise]);
+    const token = data?.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
   }
 }
 
@@ -64,9 +76,9 @@ async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   return body;
 }
 
-async function uploadRequest(path, formData) {
+async function uploadRequest(path, formData, timeoutMs = REQUEST_TIMEOUT_MS) {
   const headers = { ...(await authHeader()) };
-  const res = await fetchWithTimeout(apiUrl(path), { method: 'POST', headers, body: formData });
+  const res = await fetchWithTimeout(apiUrl(path), { method: 'POST', headers, body: formData }, timeoutMs);
   const text = await res.text();
   const body = text ? JSON.parse(text) : null;
   if (!res.ok) {
@@ -325,6 +337,52 @@ export const api = {
   },
   listAdminClients: () => request('/api/admin/clients'),
   getAdminComplianceStats: () => request('/api/admin/compliance-stats'),
+
+  getAttendance: ({ clientId, month }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance?month=${encodeURIComponent(month)}`,
+      {},
+      ATTENDANCE_GET_TIMEOUT_MS
+    ),
+  uploadAttendance: ({ clientId, month, file }) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (month) fd.append('month', month);
+    return uploadRequest(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/upload`,
+      fd,
+      ATTENDANCE_UPLOAD_TIMEOUT_MS
+    );
+  },
+  patchAttendanceDay: ({ clientId, sheetId, rowId, date, code }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/rows/${encodeURIComponent(rowId)}/days/${encodeURIComponent(date)}`,
+      { method: 'PATCH', body: JSON.stringify({ code }) }
+    ),
+  submitAttendance: ({ clientId, sheetId }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/submit`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+  lockAttendance: ({ clientId, sheetId }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/lock`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+  unlockAttendance: ({ clientId, sheetId }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/unlock`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+  requestAttendanceEdit: ({ clientId, sheetId }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/request-edit`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
+  getAttendanceLogs: ({ clientId, sheetId }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/logs`
+    ),
 
   uploadBpDocument: ({ mobile, employeeId, file, kind }) => {
     const q = new URLSearchParams();

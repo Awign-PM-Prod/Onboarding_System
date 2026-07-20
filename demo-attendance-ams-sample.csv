@@ -1,0 +1,3 @@
+Emp Code,Employee Name,Mobile,Gender,Location,Designation,DOJ,Status,Amt. Type,Monthly Amt,Contract Code,Entity,Cycle Type,Payroll Cycle,Payroll Month,1-Apr-26,2-Apr-26,3-Apr-26,4-Apr-26,5-Apr-26,6-Apr-26,7-Apr-26,Paid Days,LOP,Not Considered,Total Days,EL Taken,CL Taken,SL Taken,Remarks
+T016394,Anita Rao,9900011122,F,Bangalore,Field Executive,2026-05-05,Active,MONTHLY,35000,ACM-001,Awign,Monthly,Cycle-1,Apr-26,P,P,NH,A,W,W,P,4,1,0,7,0,0,0,Sample row
+T016395,Vikram Desai,9900011123,M,Bangalore,Field Executive,2026-05-06,Active,MONTHLY,33000,ACM-001,Awign,Monthly,Cycle-1,Apr-26,P,FH,P,P,W,W,HD,4.5,0,0,7,0,0,0,Sample row

@@ -98,6 +98,7 @@ export default function PmLayout() {
   const clientTabSeg = clientRoute?.tabSegment;
   const isClientOnboardingModule =
     clientTabSeg === 'dashboard' || clientTabSeg === 'in-progress';
+  const isClientAttendanceModule = clientTabSeg === 'attendance';
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -157,6 +158,13 @@ export default function PmLayout() {
           label: 'Onboarding',
           active: isClientOnboardingModule,
           icon: <IconOnboarding className="h-full w-full" filled={isClientOnboardingModule} />
+        },
+        {
+          id: 'attendance',
+          to: pmClientTabUrl(c, 'attendance'),
+          label: 'Attendance',
+          active: isClientAttendanceModule,
+          icon: <IconDashboard className="h-full w-full" />
         }
       ]
     : [];

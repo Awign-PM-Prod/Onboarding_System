@@ -6,7 +6,8 @@ import { api } from '../lib/api';
 const TEMPLATE_HEADERS = [
   'name',
   'mobile',
-  'email'
+  'email',
+  'emp_code'
 ];
 
 const PREVIEW_LIMIT = 10;
@@ -23,7 +24,8 @@ function buildTemplateCsv() {
   const demoRow = {
     name: 'Demo Employee',
     mobile: '9000000000',
-    email: 'demo.employee@example.com'
+    email: 'demo.employee@example.com',
+    emp_code: 'T016394'
   };
   const lines = [
     TEMPLATE_HEADERS.join(','),

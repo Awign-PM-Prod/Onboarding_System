@@ -7,7 +7,8 @@ export const PM_CLIENT_TAB_SEGMENT = {
   pl_reviewed: 'pl-reviewed',
   employee_directory: 'employee-directory',
   testing: 'in-progress',
-  add_employee: 'add-employees'
+  add_employee: 'add-employees',
+  attendance: 'attendance'
 };
 
 /** Map URL segment -> internal tab key */
@@ -19,7 +20,8 @@ export const PM_TAB_SEGMENT_TO_KEY = {
   'pl-reviewed': 'pl_reviewed',
   'employee-directory': 'employee_directory',
   testing: 'testing',
-  'add-employees': 'add_employee'
+  'add-employees': 'add_employee',
+  attendance: 'attendance'
 };
 
 export function pmClientTabUrl(clientId, tabKey) {

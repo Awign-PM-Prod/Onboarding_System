@@ -7,6 +7,7 @@ import AddEmployeeModal from '../components/AddEmployeeModal';
 import BulkUploadModal from '../components/BulkUploadModal';
 import RoleDetailsModal from '../components/RoleDetailsModal';
 import PmClientDashboard from '../components/PmClientDashboard';
+import AttendancePanel from '../components/AttendancePanel';
 import { api } from '../lib/api';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
 import BackToClientsLink from '../components/BackToClientsLink';
@@ -473,7 +474,8 @@ export default function PmClientDetail() {
       : activeTab;
   const showAddEmployeePanel =
     activeTab === 'add_employee' || (activeTab === 'testing' && testingSubtab === 'add_employee');
-  const showEmployeeTable = activeTab !== 'client_dashboard' && !showAddEmployeePanel;
+  const showEmployeeTable =
+    activeTab !== 'client_dashboard' && activeTab !== 'attendance' && !showAddEmployeePanel;
   const visibleRows =
     activeTab === 'client_dashboard'
       ? []
@@ -1241,6 +1243,18 @@ export default function PmClientDetail() {
                   Onboarding in Progress
                   <span className="ml-1.5 tabular-nums font-medium text-slate-500">({employees.length})</span>
                 </NavLink>
+                <NavLink
+                  to={pmClientTabUrl(id, 'attendance')}
+                  className={({ isActive }) =>
+                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      isActive
+                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    }`
+                  }
+                >
+                  Attendance
+                </NavLink>
               </nav>
             </div>
           </header>
@@ -1266,6 +1280,10 @@ export default function PmClientDetail() {
 
         {activeTab === 'client_dashboard' && (
           <PmClientDashboard employees={employees} />
+        )}
+
+        {activeTab === 'attendance' && (
+          <AttendancePanel clientId={id} role="PROGRAM_MANAGER" />
         )}
 
         {(activeTab === 'pending' || activeTab === 'role_assigned') && (

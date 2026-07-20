@@ -455,11 +455,23 @@ async function fetchExistingMobiles(mobiles) {
   return new Set(data.map(r => r.mobile));
 }
 
+async function fetchExistingEmpCodes(codes) {
+  const cleaned = (codes ?? []).map((c) => String(c ?? '').trim()).filter(Boolean);
+  if (!cleaned.length) return new Set();
+  const { data, error } = await supabaseAdmin
+    .from('employees')
+    .select('emp_code')
+    .in('emp_code', cleaned);
+  if (error) throw error;
+  return new Set((data ?? []).map((r) => r.emp_code).filter(Boolean));
+}
+
 function validateEmployeeRow(raw, designationSet) {
   const errors = [];
   const name = String(raw.name ?? '').trim();
   const mobile = String(raw.mobile ?? '').trim();
   const email = String(raw.email ?? '').trim();
+  const empCode = String(raw.emp_code ?? raw.empcode ?? '').trim();
   const designation = String(raw.designation ?? '').trim();
   const doj = String(raw.date_of_joining ?? '').trim();
   const ctcType = String(raw.ctc_type ?? '').trim().toUpperCase();
@@ -468,6 +480,7 @@ function validateEmployeeRow(raw, designationSet) {
   if (!name) errors.push('name required');
   if (!mobile) errors.push('mobile required');
   if (!email) errors.push('email required');
+  if (!empCode) errors.push('emp_code required');
   if (designation && !designationSet.has(designation.toLowerCase())) {
     errors.push(`designation "${designation}" is not defined on this client`);
   }
@@ -496,6 +509,7 @@ function validateEmployeeRow(raw, designationSet) {
       name,
       mobile,
       email,
+      emp_code: empCode,
       designation: designation || null,
       date_of_joining: doj || null,
       ctc_type: hasCtcType ? ctcType : null,
@@ -652,10 +666,13 @@ router.post('/', async (req, res, next) => {
     // Skip rows whose mobile already exists in the DB or appears earlier in
     // this same batch. Each skipped row is reported in `errors`.
     const existingMobiles = await fetchExistingMobiles(validated.map(v => v.payload.mobile));
+    const existingEmpCodes = await fetchExistingEmpCodes(validated.map(v => v.payload.emp_code));
     const seenInBatch = new Set();
+    const seenCodesInBatch = new Set();
     const toInsert = [];
     for (const v of validated) {
       const mobile = v.payload.mobile;
+      const empCode = v.payload.emp_code;
       if (existingMobiles.has(mobile)) {
         errors.push({ index: v.source_index, errors: [`mobile "${mobile}" already exists`] });
         continue;
@@ -664,7 +681,16 @@ router.post('/', async (req, res, next) => {
         errors.push({ index: v.source_index, errors: [`mobile "${mobile}" is duplicated in this batch`] });
         continue;
       }
+      if (existingEmpCodes.has(empCode)) {
+        errors.push({ index: v.source_index, errors: [`emp_code "${empCode}" already exists`] });
+        continue;
+      }
+      if (seenCodesInBatch.has(empCode)) {
+        errors.push({ index: v.source_index, errors: [`emp_code "${empCode}" is duplicated in this batch`] });
+        continue;
+      }
       seenInBatch.add(mobile);
+      seenCodesInBatch.add(empCode);
       toInsert.push(v.payload);
     }
 
@@ -767,10 +793,13 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
     // Skip rows whose mobile already exists in the DB or appears earlier in
     // this same file. Reported in `errors` with the original spreadsheet row.
     const existingMobiles = await fetchExistingMobiles(validated.map(v => v.payload.mobile));
+    const existingEmpCodes = await fetchExistingEmpCodes(validated.map(v => v.payload.emp_code));
     const seenInFile = new Set();
+    const seenCodesInFile = new Set();
     const toInsert = [];
     for (const v of validated) {
       const mobile = v.payload.mobile;
+      const empCode = v.payload.emp_code;
       if (existingMobiles.has(mobile)) {
         errors.push({ row: v.source_row, errors: [`mobile "${mobile}" already exists`] });
         continue;
@@ -779,7 +808,16 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
         errors.push({ row: v.source_row, errors: [`mobile "${mobile}" is duplicated in this file`] });
         continue;
       }
+      if (existingEmpCodes.has(empCode)) {
+        errors.push({ row: v.source_row, errors: [`emp_code "${empCode}" already exists`] });
+        continue;
+      }
+      if (seenCodesInFile.has(empCode)) {
+        errors.push({ row: v.source_row, errors: [`emp_code "${empCode}" is duplicated in this file`] });
+        continue;
+      }
       seenInFile.add(mobile);
+      seenCodesInFile.add(empCode);
       toInsert.push(v.payload);
     }
 

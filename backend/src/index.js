@@ -10,6 +10,7 @@ import pmClientsRouter from './routes/pmClients.js';
 import employeesRouter from './routes/employees.js';
 import publicOnboardingRouter from './routes/publicOnboarding.js';
 import payrollHeadRouter from './routes/payrollHead.js';
+import attendanceRouter from './routes/attendance.js';
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.use('/api/me', requireAuth, meRouter);
 app.use('/api/program-managers', requireAuth, programManagersRouter);
+app.use('/api/clients/:clientId/attendance', requireAuth, attendanceRouter);
 app.use('/api/clients', requireAuth, clientsRouter);
 app.use('/api/pm/clients', requireAuth, pmClientsRouter);
 app.use('/api/employees', requireAuth, employeesRouter);

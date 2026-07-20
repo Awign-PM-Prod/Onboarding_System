@@ -58,11 +58,11 @@ const demoClients = [
 
 // 5 employees for Acme Logistics (PM = Rahul): 3 pending, 2 in progress.
 const demoEmployees = [
-  { name: 'Anita Rao',       mobile: '9900011122', email: 'anita.rao@acme.test',    designation: 'Field Executive', date_of_joining: '2026-05-05', ctc_type: 'MONTHLY', ctc_value: 35000, onboarding_initiated: false, onboarding_status: 'PENDING' },
-  { name: 'Vikram Desai',    mobile: '9900011123', email: 'vikram.desai@acme.test', designation: 'Field Executive', date_of_joining: '2026-05-06', ctc_type: 'MONTHLY', ctc_value: 33000, onboarding_initiated: false, onboarding_status: 'PENDING' },
-  { name: 'Neha Kulkarni',   mobile: '9900011124', email: 'neha.k@acme.test',       designation: 'Supervisor',      date_of_joining: '2026-05-08', ctc_type: 'ANNUAL',  ctc_value: 720000, onboarding_initiated: false, onboarding_status: 'PENDING' },
-  { name: 'Ravi Iyer',       mobile: '9900011125', email: 'ravi.iyer@acme.test',    designation: 'Team Lead',       date_of_joining: '2026-04-20', ctc_type: 'ANNUAL',  ctc_value: 900000, onboarding_initiated: true,  onboarding_status: 'FORM_SENT' },
-  { name: 'Sana Kapoor',     mobile: '9900011126', email: 'sana.kapoor@acme.test',  designation: 'Team Lead',       date_of_joining: '2026-04-22', ctc_type: 'ANNUAL',  ctc_value: 850000, onboarding_initiated: true,  onboarding_status: 'FORM_SENT' }
+  { name: 'Anita Rao',       mobile: '9900011122', email: 'anita.rao@acme.test',    emp_code: 'T016394', designation: 'Field Executive', date_of_joining: '2026-05-05', ctc_type: 'MONTHLY', ctc_value: 35000, onboarding_initiated: false, onboarding_status: 'PENDING' },
+  { name: 'Vikram Desai',    mobile: '9900011123', email: 'vikram.desai@acme.test', emp_code: 'T016395', designation: 'Field Executive', date_of_joining: '2026-05-06', ctc_type: 'MONTHLY', ctc_value: 33000, onboarding_initiated: false, onboarding_status: 'PENDING' },
+  { name: 'Neha Kulkarni',   mobile: '9900011124', email: 'neha.k@acme.test',       emp_code: 'T016396', designation: 'Supervisor',      date_of_joining: '2026-05-08', ctc_type: 'ANNUAL',  ctc_value: 720000, onboarding_initiated: false, onboarding_status: 'PENDING' },
+  { name: 'Ravi Iyer',       mobile: '9900011125', email: 'ravi.iyer@acme.test',    emp_code: 'T016397', designation: 'Team Lead',       date_of_joining: '2026-04-20', ctc_type: 'ANNUAL',  ctc_value: 900000, onboarding_initiated: true,  onboarding_status: 'FORM_SENT' },
+  { name: 'Sana Kapoor',     mobile: '9900011126', email: 'sana.kapoor@acme.test',  emp_code: 'T016398', designation: 'Team Lead',       date_of_joining: '2026-04-22', ctc_type: 'ANNUAL',  ctc_value: 850000, onboarding_initiated: true,  onboarding_status: 'FORM_SENT' }
 ];
 
 async function upsertUser(u) {
@@ -135,6 +135,17 @@ async function ensureEmployeesForClient({ clientId, creatorId, employees }) {
   if (countErr) throw countErr;
   if ((count ?? 0) > 0) {
     console.log(`  employees already present for client ${clientId} (${count} rows)`);
+    // Backfill emp_code when missing (for attendance matching)
+    for (const e of employees) {
+      if (!e.emp_code || !e.mobile) continue;
+      const { error: upErr } = await admin
+        .from('employees')
+        .update({ emp_code: e.emp_code })
+        .eq('client_id', clientId)
+        .eq('mobile', e.mobile)
+        .is('emp_code', null);
+      if (upErr) console.warn(`  emp_code backfill warn for ${e.mobile}: ${upErr.message}`);
+    }
     return;
   }
   const rows = employees.map(e => ({ ...e, client_id: clientId, created_by: creatorId }));

@@ -4,7 +4,8 @@ import { api } from '../lib/api';
 const empty = {
   name: '',
   mobile: '',
-  email: ''
+  email: '',
+  emp_code: ''
 };
 
 export default function AddEmployeeModal({ clientId, onClose, onCreated, embedded = false }) {
@@ -20,6 +21,7 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
     if (!form.name.trim()) errs.name = 'Required';
     if (!form.mobile.trim()) errs.mobile = 'Required';
     if (!form.email.trim()) errs.email = 'Required';
+    if (!form.emp_code.trim()) errs.emp_code = 'Required';
     return errs;
   };
 
@@ -37,7 +39,12 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
       };
       await api.createEmployee(payload);
       const createdName = String(form.name ?? '').trim();
-      await onCreated?.({ name: createdName, mobile: form.mobile, email: form.email });
+      await onCreated?.({
+        name: createdName,
+        mobile: form.mobile,
+        email: form.email,
+        emp_code: form.emp_code
+      });
       if (embedded) setForm({ ...empty });
       else onClose?.();
     } catch (err) {
@@ -57,6 +64,15 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
 
           <Field label="Name" error={fieldErrors.name}>
             <input className="input" value={form.name} onChange={e => set({ name: e.target.value })} />
+          </Field>
+
+          <Field label="Emp Code (StaffingGo)" error={fieldErrors.emp_code}>
+            <input
+              className="input"
+              value={form.emp_code}
+              onChange={e => set({ emp_code: e.target.value })}
+              placeholder="e.g. T016394"
+            />
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
