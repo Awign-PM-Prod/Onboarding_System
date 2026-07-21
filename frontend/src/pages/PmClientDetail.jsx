@@ -1167,7 +1167,7 @@ export default function PmClientDetail() {
   return (
     <main className="flex min-h-full flex-col">
         {client && (
-          <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur-sm">
+          <header className="sticky top-0 z-[60] isolate border-b border-slate-200 bg-white shadow-sm">
             <div className="mx-auto w-[98%] px-6 pb-4 pt-5">
               <BackToClientsLink to="/pm-dashboard/clients" className="mb-3" />
               <div className="flex flex-wrap items-center gap-3">

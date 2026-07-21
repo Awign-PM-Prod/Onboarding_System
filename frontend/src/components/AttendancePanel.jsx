@@ -98,6 +98,7 @@ export default function AttendancePanel({ clientId, role }) {
   const [showLogs, setShowLogs] = useState(false);
   const [search, setSearch] = useState('');
   const [leaveType, setLeaveType] = useState('');
+  const [sort, setSort] = useState({ key: null, direction: 'asc' });
   const [editingCell, setEditingCell] = useState(null); // { rowId, date }
   const [uploadSkipModal, setUploadSkipModal] = useState(null); // { imported, skipped, errors }
 
@@ -134,7 +135,7 @@ export default function AttendancePanel({ clientId, role }) {
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((r) => {
+    const result = rows.filter((r) => {
       if (q) {
         const name = String(r.employee_name_snapshot ?? '').toLowerCase();
         const code = String(r.emp_code ?? '').toLowerCase();
@@ -147,7 +148,24 @@ export default function AttendancePanel({ clientId, role }) {
       }
       return true;
     });
-  }, [rows, search, leaveType]);
+
+    if (!sort.key) return result;
+    const field = sort.key === 'emp_code' ? 'emp_code' : 'employee_name_snapshot';
+    const direction = sort.direction === 'desc' ? -1 : 1;
+    return [...result].sort((a, b) =>
+      String(a[field] ?? '').localeCompare(String(b[field] ?? ''), undefined, {
+        numeric: true,
+        sensitivity: 'base'
+      }) * direction
+    );
+  }, [rows, search, leaveType, sort]);
+
+  const toggleSort = (key) => {
+    setSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
 
   const showToast = (msg) => {
     setToast(msg);
@@ -632,18 +650,38 @@ export default function AttendancePanel({ clientId, role }) {
 
           {sheet && <LegendBar />}
 
-          <div className="overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="max-h-[70vh] overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
             <table className="min-w-max border-separate border-spacing-0 text-xs">
-              <thead>
+              <thead className="sticky top-0 z-40 bg-slate-50 shadow-[0_1px_0_0_rgb(226,232,240)]">
                 <tr className="text-slate-600">
-                  <th className="sticky left-0 z-30 w-10 min-w-[2.5rem] border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">
+                  <th className="sticky left-0 top-0 z-50 w-10 min-w-[2.5rem] border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">
                     S.No.
                   </th>
-                  <th className="sticky left-10 z-30 w-[5.5rem] min-w-[5.5rem] border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">
-                    Emp Code
+                  <th
+                    aria-sort={sort.key === 'emp_code' ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className="sticky left-10 top-0 z-50 w-[5.5rem] min-w-[5.5rem] border-b border-slate-200 bg-slate-50 text-left font-medium"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('emp_code')}
+                      className="flex w-full items-center gap-1 px-2 py-2 text-left hover:text-indigo-700"
+                    >
+                      Emp Code
+                      <SortIndicator active={sort.key === 'emp_code'} direction={sort.direction} />
+                    </button>
                   </th>
-                  <th className="sticky left-[7.5rem] z-30 min-w-[9rem] max-w-[11rem] border-b border-r border-slate-200 bg-slate-50 px-3 py-2 text-left font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.12)]">
-                    Name
+                  <th
+                    aria-sort={sort.key === 'name' ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    className="sticky left-[7.5rem] top-0 z-50 min-w-[9rem] max-w-[11rem] border-b border-r border-slate-200 bg-slate-50 text-left font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.12)]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('name')}
+                      className="flex w-full items-center gap-1 px-3 py-2 text-left hover:text-indigo-700"
+                    >
+                      Name
+                      <SortIndicator active={sort.key === 'name'} direction={sort.direction} />
+                    </button>
                   </th>
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">Mobile</th>
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">Gender</th>
@@ -780,6 +818,14 @@ function UploadIcon({ className = 'h-4 w-4' }) {
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+function SortIndicator({ active, direction }) {
+  return (
+    <span aria-hidden="true" className={active ? 'text-indigo-600' : 'text-slate-400'}>
+      {active ? (direction === 'asc' ? '▲' : '▼') : '↕'}
+    </span>
   );
 }
 
