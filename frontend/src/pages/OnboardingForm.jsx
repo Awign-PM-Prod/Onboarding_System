@@ -17,7 +17,7 @@ const KYC_IMAGE_HINT = 'Only JPG, JPEG, PNG, WEBP · max 5MB upload · stored op
 const BP_MAX_BYTES = 12 * 1024 * 1024;
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
-const ACCOUNT_NUMBER_REGEX = /^[0-9]{6,18}$/;
+const ACCOUNT_NUMBER_REGEX = /^[0-9]{9,18}$/;
 const PINCODE_REGEX = /^[0-9]{6}$/;
 
 const HIGHEST_QUALIFICATION_OPTIONS = [
@@ -1141,7 +1141,12 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       .then((result) => {
         setPanNumber((result.pan_number ?? p).toUpperCase());
         setPanVerified(true);
-        setPanVerifyMsg('');
+        setPanVerifyMsg(
+          result.manual_review
+            ? result.warning ||
+              'PAN saved for manual review. You can continue.'
+            : ''
+        );
       })
       .catch((err) => {
         setPanVerified(false);
@@ -1167,7 +1172,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     }
     if (!ACCOUNT_NUMBER_REGEX.test(acct)) {
       setBankVerified(false);
-      setBankVerifyMsg('Account number must be 6–18 digits.');
+      setBankVerifyMsg('Account number must be 9–18 digits.');
       return;
     }
     if (!IFSC_CODE_REGEX.test(ifscNorm)) {
@@ -1196,7 +1201,12 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         });
         setBankBranchConfirmed(true);
         setBankVerified(true);
-        setBankVerifyMsg('');
+        setBankVerifyMsg(
+          result.manual_review
+            ? result.warning ||
+              'Bank details saved for manual review. You can continue.'
+            : ''
+        );
       })
       .catch((err) => {
         setBankVerified(false);

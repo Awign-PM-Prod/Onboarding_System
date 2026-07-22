@@ -1,8 +1,6 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-const BANK_VERIFY_URL =
-  "https://kyc-api.surepass.io/api/v1/bank-verification/pennyless";
-
+const DEFAULT_BASE_URL = "https://tools.onxwork.com/api/partner/kyc";
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 function json(status: number, payload: Record<string, unknown>) {
@@ -12,49 +10,65 @@ function json(status: number, payload: Record<string, unknown>) {
   });
 }
 
+function partnerBaseUrl(): string {
+  const raw = String(Deno.env.get("PARTNER_KYC_BASE_URL") ?? "").trim();
+  return (raw || DEFAULT_BASE_URL).replace(/\/+$/, "");
+}
+
 serve(async (req) => {
   if (req.method !== "POST") {
     return json(405, { error: "Method not allowed" });
   }
 
-  let body: { id_number?: string; ifsc?: string } = {};
+  let body: {
+    id_number?: string;
+    account_number?: string;
+    ifsc?: string;
+  } = {};
   try {
     body = await req.json();
   } catch {
     return json(400, { error: "Invalid JSON body" });
   }
 
-  const idNumber = String(body?.id_number ?? "").replace(/\D/g, "");
+  const accountNumber = String(body?.account_number ?? body?.id_number ?? "")
+    .replace(/\D/g, "");
   const ifsc = String(body?.ifsc ?? "")
     .replace(/\s/g, "")
     .toUpperCase();
 
-  if (!/^\d{6,18}$/.test(idNumber)) {
-    return json(400, { error: "id_number must be 6-18 digits" });
+  if (!/^\d{9,18}$/.test(accountNumber)) {
+    return json(400, {
+      error: "account_number must be 9-18 digits",
+      error_code: "INVALID_ACCOUNT",
+      message: "account_number must be 9-18 digits",
+    });
   }
   if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
-    return json(400, { error: "ifsc is invalid" });
-  }
-
-  const token = Deno.env.get("SUREPASS_BANK_VERIFY_TOKEN") ?? "";
-  if (!token) {
-    return json(500, {
-      error: "Missing SUREPASS_BANK_VERIFY_TOKEN secret",
+    return json(400, {
+      error: "ifsc is invalid",
+      error_code: "INVALID_IFSC",
+      message: "ifsc is invalid",
     });
   }
 
+  const apiKey = String(Deno.env.get("PARTNER_KYC_API_KEY") ?? "").trim();
+  if (!apiKey) {
+    return json(500, { error: "Missing PARTNER_KYC_API_KEY secret" });
+  }
+
+  const endpoint = `${partnerBaseUrl()}/bank/verify`;
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetch(BANK_VERIFY_URL, {
+    upstreamResponse = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: token,
+        "x-api-key": apiKey,
       },
       body: JSON.stringify({
-        id_number: idNumber,
+        account_number: accountNumber,
         ifsc,
-        ifsc_details: true,
       }),
     });
   } catch {
@@ -69,18 +83,68 @@ serve(async (req) => {
     upstreamBody = null;
   }
 
-  if (!upstreamResponse.ok) {
-    const message =
-      (upstreamBody?.message as string | undefined) ||
-      `Provider request failed (${upstreamResponse.status})`;
-    return json(502, { error: message, upstream: upstreamBody ?? rawText });
+  const status = upstreamResponse.status;
+  const errorCode = String(upstreamBody?.error_code ?? "").trim() || null;
+  const message =
+    String(upstreamBody?.message ?? upstreamBody?.error ?? "").trim() ||
+    `Provider request failed (${status})`;
+
+  if (status === 400 || status === 422) {
+    return json(status, {
+      error: message,
+      error_code: errorCode,
+      message,
+      upstream: upstreamBody,
+    });
   }
 
-  const data = (upstreamBody?.data as Record<string, unknown> | undefined) ?? {};
+  if (status === 429) {
+    return json(429, {
+      error: message,
+      message,
+      limit: upstreamBody?.limit ?? null,
+      reset: upstreamBody?.reset ?? null,
+      upstream: upstreamBody,
+    });
+  }
+
+  if (status === 401) {
+    return json(502, {
+      error: "Bank verification provider authentication failed",
+      upstream: upstreamBody,
+    });
+  }
+
+  if (!upstreamResponse.ok) {
+    return json(502, {
+      error: message,
+      error_code: errorCode,
+      message,
+      upstream: upstreamBody ?? rawText,
+    });
+  }
+
+  const data =
+    (upstreamBody?.data as Record<string, unknown> | undefined) ?? {};
+  const accountExists = data?.account_exists;
+  // Soft degradation: Partner returns 200 with account_exists: null when
+  // upstream is unavailable — treat as manual_review, do not hard-fail.
+  const manualReview =
+    Boolean(upstreamBody?.manual_review) ||
+    accountExists === null ||
+    accountExists === undefined;
+
+  const warning = String(upstreamBody?.warning ?? "").trim() ||
+    (manualReview && accountExists !== true
+      ? "Bank verification could not be completed. Flagged for manual review."
+      : null);
+
   return json(200, {
     ok: true,
     data,
-    success: Boolean(upstreamBody?.success),
-    messageCode: String(upstreamBody?.message_code ?? "").trim() || null,
+    success: Boolean(upstreamBody?.success ?? true),
+    manual_review: accountExists === true ? Boolean(upstreamBody?.manual_review) : manualReview,
+    warning,
+    messageCode: null,
   });
 });
