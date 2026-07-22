@@ -160,8 +160,15 @@ async function fetchSheetBundle(sheetId) {
     marksByRow.get(m.row_id).push(m);
   }
 
+  const { data: grants, error: gErr } = await supabaseAdmin
+    .from('attendance_edit_grants')
+    .select('user_id')
+    .eq('sheet_id', sheetId);
+  if (gErr) throw gErr;
+
   return {
     sheet,
+    grant_user_ids: (grants ?? []).map((g) => g.user_id),
     rows: (rows ?? []).map((r) => ({
       ...r,
       day_marks: (marksByRow.get(r.id) ?? []).map((m) => ({
@@ -172,8 +179,60 @@ async function fetchSheetBundle(sheetId) {
   };
 }
 
-function assertUnlocked(sheet) {
-  if (sheet?.locked) {
+async function clearEditGrants(sheetId) {
+  const { error } = await supabaseAdmin.from('attendance_edit_grants').delete().eq('sheet_id', sheetId);
+  if (error) throw error;
+}
+
+async function loadEligiblePms(client) {
+  if (!client?.program_manager_id) return [];
+  const { data: pm, error } = await supabaseAdmin
+    .from('users')
+    .select('id, name, email, role')
+    .eq('id', client.program_manager_id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!pm) return [];
+  return [
+    {
+      id: pm.id,
+      name: pm.name || '',
+      email: pm.email || '',
+      role_label: 'Program Manager'
+    }
+  ];
+}
+
+function sheetEditScope(sheet) {
+  return String(sheet?.edit_scope || 'NONE').toUpperCase();
+}
+
+function canUserEditSheet(sheet, access, grantUserIds = []) {
+  if (!sheet || sheet.locked) return false;
+  if (access.isPl) return true;
+  if (!access.isPm) return false;
+  const scope = sheetEditScope(sheet);
+  if (scope === 'ALL_PMS') return true;
+  if (scope === 'SHARED') {
+    return (grantUserIds ?? []).includes(access.user.id);
+  }
+  return false; // PL_ONLY or NONE
+}
+
+function buildCapabilities(sheet, access, grantUserIds = []) {
+  const locked = Boolean(sheet?.locked);
+  const fullyLocked = locked && sheetEditScope(sheet) === 'NONE';
+  const canEdit = canUserEditSheet(sheet, access, grantUserIds);
+  return {
+    can_edit: canEdit,
+    can_lock: access.isPl && !locked,
+    can_unlock: access.isPl && fullyLocked,
+    can_request_edit: access.isPm && locked && !canEdit
+  };
+}
+
+function assertCanEdit(sheet, access, grantUserIds = []) {
+  if (!canUserEditSheet(sheet, access, grantUserIds)) {
     const err = new Error('Attendance sheet is locked. Unlock it before editing.');
     err.status = 423;
     throw err;
@@ -222,28 +281,30 @@ router.get('/', async (req, res, next) => {
     if (error) throw error;
 
     if (!sheet) {
+      const eligiblePms = await loadEligiblePms(access.client);
       return res.json({
         sheet: null,
         rows: [],
         client: access.client,
         role: access.user.role,
+        eligible_pms: eligiblePms,
+        grant_user_ids: [],
         can_edit: true,
         can_lock: access.isPl,
-        can_unlock: access.isPl,
-        can_request_edit: access.isPm
+        can_unlock: false,
+        can_request_edit: false
       });
     }
 
     const bundle = await fetchSheetBundle(sheet.id);
-    const locked = Boolean(bundle.sheet.locked);
+    const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
+    const eligiblePms = await loadEligiblePms(access.client);
     res.json({
       ...bundle,
       client: access.client,
       role: access.user.role,
-      can_edit: !locked,
-      can_lock: access.isPl && !locked,
-      can_unlock: access.isPl && locked,
-      can_request_edit: access.isPm && locked
+      eligible_pms: eligiblePms,
+      ...caps
     });
   } catch (err) {
     next(err);
@@ -367,8 +428,11 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       .eq('attendance_month', attendanceMonth)
       .maybeSingle();
     if (exErr) throw exErr;
-    if (existing?.locked) {
-      return res.status(423).json({ error: 'Attendance sheet is locked. Unlock it before uploading.' });
+    if (existing) {
+      const existingBundle = await fetchSheetBundle(existing.id);
+      if (!canUserEditSheet(existing, access, existingBundle?.grant_user_ids ?? [])) {
+        return res.status(423).json({ error: 'Attendance sheet is locked. Unlock it before uploading.' });
+      }
     }
 
     const empCodes = rowsToUse.map((r) => r.emp_code);
@@ -447,6 +511,7 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
           locked: false,
           ever_locked: false,
           unlock_request_status: 'NONE',
+          edit_scope: 'ALL_PMS',
           contract_code: metaToUse?.contract_code,
           entity: metaToUse?.entity,
           cycle_type: metaToUse?.cycle_type,
@@ -536,6 +601,8 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
     });
 
     const bundle = await fetchSheetBundle(sheetId);
+    const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
+    const eligiblePms = await loadEligiblePms(access.client);
     res.status(skipped.length || allErrors.length ? 207 : 200).json({
       imported: matched.length,
       skipped: skipped.length,
@@ -543,10 +610,8 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       ...bundle,
       client: access.client,
       role: access.user.role,
-      can_edit: !bundle.sheet.locked,
-      can_lock: access.isPl && !bundle.sheet.locked,
-      can_unlock: access.isPl && bundle.sheet.locked,
-      can_request_edit: access.isPm && bundle.sheet.locked
+      eligible_pms: eligiblePms,
+      ...caps
     });
   } catch (err) {
     next(err);
@@ -563,7 +628,7 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
     const code = normalizeAttendanceCode(req.body?.code);
     if (!code || !isValidAttendanceCode(code)) {
       return res.status(400).json({
-        error: 'Invalid attendance code. Use NH/FH for holidays; OC is not allowed. A = Absent LOP.'
+        error: 'Invalid attendance code. Use NH/FH for holidays or P-NH/P-FH for present on holiday; OC is not allowed. A = Absent LOP.'
       });
     }
 
@@ -575,7 +640,15 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
       .maybeSingle();
     if (error) throw error;
     if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
-    assertUnlocked(sheet);
+    const { data: grantsForPatch } = await supabaseAdmin
+      .from('attendance_edit_grants')
+      .select('user_id')
+      .eq('sheet_id', sheet.id);
+    assertCanEdit(
+      sheet,
+      access,
+      (grantsForPatch ?? []).map((g) => g.user_id)
+    );
 
     const markDate = String(req.params.date).slice(0, 10);
 
@@ -673,7 +746,15 @@ router.post('/:sheetId/submit', async (req, res, next) => {
       .maybeSingle();
     if (error) throw error;
     if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
-    assertUnlocked(sheet);
+    const { data: grantsForSubmit } = await supabaseAdmin
+      .from('attendance_edit_grants')
+      .select('user_id')
+      .eq('sheet_id', sheet.id);
+    assertCanEdit(
+      sheet,
+      access,
+      (grantsForSubmit ?? []).map((g) => g.user_id)
+    );
 
     const wasSubmitted = sheet.status === 'SUBMITTED';
     const now = new Date().toISOString();
@@ -747,13 +828,16 @@ router.post('/:sheetId/lock', async (req, res, next) => {
     if (sheet.locked) return res.status(400).json({ error: 'Sheet is already locked.' });
 
     const now = new Date().toISOString();
+    await clearEditGrants(sheet.id);
     const { data: updated, error: upErr } = await supabaseAdmin
       .from('attendance_sheets')
       .update({
+        status: 'SUBMITTED',
         locked: true,
         locked_at: now,
         locked_by: req.user.id,
         ever_locked: true,
+        edit_scope: 'NONE',
         unlock_request_status: 'NONE',
         unlock_requested_at: null,
         unlock_requested_by: null,
@@ -769,7 +853,7 @@ router.post('/:sheetId/lock', async (req, res, next) => {
       action: 'LOCK',
       actorUserId: req.user.id,
       actorRole: access.user.role,
-      message: 'Attendance locked by Payroll Lead'
+      message: 'Attendance locked by Payroll Lead; edit grants cleared'
     });
 
     res.json({ sheet: updated });
@@ -845,13 +929,29 @@ router.post('/:sheetId/request-edit', async (req, res, next) => {
   }
 });
 
-// Unlock — PL only
+// Unlock — PL only, scoped
 router.post('/:sheetId/unlock', async (req, res, next) => {
   try {
     const clientId = req.params.clientId;
     const access = await resolveClientAccess(req, clientId);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
     if (!access.isPl) return res.status(403).json({ error: 'Only Payroll Lead can unlock attendance.' });
+
+    const rawScope = String(req.body?.scope ?? '').trim().toUpperCase();
+    const scopeMap = {
+      PL_ONLY: 'PL_ONLY',
+      ONLY_ME: 'PL_ONLY',
+      ALL_PMS: 'ALL_PMS',
+      EVERYONE: 'ALL_PMS',
+      SHARED: 'SHARED',
+      SHARE: 'SHARED'
+    };
+    const editScope = scopeMap[rawScope];
+    if (!editScope) {
+      return res.status(400).json({
+        error: 'scope is required: PL_ONLY | ALL_PMS | SHARED'
+      });
+    }
 
     const { data: sheet, error } = await supabaseAdmin
       .from('attendance_sheets')
@@ -861,17 +961,53 @@ router.post('/:sheetId/unlock', async (req, res, next) => {
       .maybeSingle();
     if (error) throw error;
     if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
-    if (!sheet.locked) return res.status(400).json({ error: 'Sheet is not locked.' });
+    if (!sheet.locked || sheetEditScope(sheet) !== 'NONE') {
+      return res.status(400).json({ error: 'Sheet is not fully locked.' });
+    }
+
+    const eligible = await loadEligiblePms(access.client);
+    const eligibleIds = new Set(eligible.map((p) => p.id));
+    let grantIds = [];
+
+    if (editScope === 'SHARED') {
+      const incoming = Array.isArray(req.body?.user_ids)
+        ? req.body.user_ids
+        : Array.isArray(req.body?.userIds)
+          ? req.body.userIds
+          : [];
+      grantIds = [...new Set(incoming.map((id) => String(id || '').trim()).filter(Boolean))];
+      if (!grantIds.length) {
+        return res.status(400).json({ error: 'user_ids required for SHARED unlock.' });
+      }
+      for (const id of grantIds) {
+        if (!eligibleIds.has(id)) {
+          return res.status(400).json({
+            error: 'One or more selected users are not Program Managers for this client.'
+          });
+        }
+      }
+    } else if (editScope === 'ALL_PMS') {
+      grantIds = [...eligibleIds];
+    }
 
     const now = new Date().toISOString();
-    const requestorId = sheet.unlock_requested_by || access.client.program_manager_id;
+    await clearEditGrants(sheet.id);
+
+    if (editScope === 'SHARED' && grantIds.length) {
+      const { error: gInsErr } = await supabaseAdmin.from('attendance_edit_grants').insert(
+        grantIds.map((user_id) => ({ sheet_id: sheet.id, user_id }))
+      );
+      if (gInsErr) throw gInsErr;
+    }
 
     const { data: updated, error: upErr } = await supabaseAdmin
       .from('attendance_sheets')
       .update({
+        status: 'DRAFT',
         locked: false,
         locked_at: null,
         locked_by: null,
+        edit_scope: editScope,
         unlock_request_status: 'GRANTED',
         updated_at: now
       })
@@ -885,28 +1021,38 @@ router.post('/:sheetId/unlock', async (req, res, next) => {
       action: 'UNLOCK',
       actorUserId: req.user.id,
       actorRole: access.user.role,
-      message: 'Attendance unlocked by Payroll Lead'
+      afterJson: { edit_scope: editScope, user_ids: grantIds },
+      message: `Attendance unlocked (${editScope}) by Payroll Lead`
     });
 
-    if (requestorId) {
-      const { data: pm } = await supabaseAdmin
-        .from('users')
-        .select('id, name, email')
-        .eq('id', requestorId)
-        .maybeSingle();
-      if (pm?.email) {
+    // Email PM(s) when they receive edit access
+    if (editScope === 'ALL_PMS' || editScope === 'SHARED') {
+      const notifyIds =
+        editScope === 'ALL_PMS'
+          ? [...eligibleIds]
+          : grantIds;
+      if (notifyIds.length) {
+        const { data: pms } = await supabaseAdmin
+          .from('users')
+          .select('id, name, email')
+          .in('id', notifyIds);
         const link = attendanceLink(clientId, 'PROGRAM_MANAGER');
-        await invokeAttendanceEmail({
-          toEmail: pm.email,
-          toName: pm.name,
-          subject: `Edit access granted — ${access.client.client_name} attendance`,
-          html: `<p>Hi ${pm.name || 'there'},</p><p>Payroll Lead unlocked attendance for <strong>${access.client.client_name}</strong>. You can edit and resubmit.</p><p><a href="${link}">Open attendance</a></p>`,
-          text: `Edit access granted for ${access.client.client_name}. Open: ${link}`
-        });
+        for (const pm of pms ?? []) {
+          if (!pm?.email) continue;
+          await invokeAttendanceEmail({
+            toEmail: pm.email,
+            toName: pm.name,
+            subject: `Edit access granted — ${access.client.client_name} attendance`,
+            html: `<p>Hi ${pm.name || 'there'},</p><p>Payroll Lead granted you edit access for attendance on <strong>${access.client.client_name}</strong>. You can edit and resubmit.</p><p><a href="${link}">Open attendance</a></p>`,
+            text: `Edit access granted for ${access.client.client_name}. Open: ${link}`
+          });
+        }
       }
     }
 
-    res.json({ sheet: updated });
+    const bundle = await fetchSheetBundle(sheet.id);
+    const caps = buildCapabilities(updated, access, bundle.grant_user_ids);
+    res.json({ sheet: updated, grant_user_ids: bundle.grant_user_ids, ...caps });
   } catch (err) {
     next(err);
   }

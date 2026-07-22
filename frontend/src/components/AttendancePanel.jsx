@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import {
   LEGEND_LABELS,
   LEGEND_TOTAL_COLUMNS,
   codeCellClass,
-  displayCode
+  displayCode,
+  holidayFlagBorderClass,
+  isPresentOnHolidayCode
 } from '../lib/attendanceLegend';
 
-const EDITABLE_CODES = ['P', 'W', 'NH', 'FH', 'HD', 'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO', 'A', 'R', 'T', '-'];
+const EDITABLE_CODES = [
+  'P', 'W', 'NH', 'FH', 'P-NH', 'P-FH', 'HD',
+  'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO', 'A', 'R', 'T', '-'
+];
 
 const LEAVE_TYPE_OPTIONS = [
   { value: '', label: 'All Types' },
@@ -21,6 +26,8 @@ const LEAVE_TYPE_OPTIONS = [
   { value: 'A', label: 'A — Absent LOP' },
   { value: 'NH', label: 'NH — National Holiday' },
   { value: 'FH', label: 'FH — Festival Holiday' },
+  { value: 'P-NH', label: 'P-NH — Present on National Holiday' },
+  { value: 'P-FH', label: 'P-FH — Present on Festive Holiday' },
   { value: 'HD', label: 'HD — Half day' },
   { value: 'W', label: 'W — Week off' },
   { value: 'P', label: 'P — Present' }
@@ -99,8 +106,15 @@ export default function AttendancePanel({ clientId, role }) {
   const [search, setSearch] = useState('');
   const [leaveType, setLeaveType] = useState('');
   const [sort, setSort] = useState({ key: null, direction: 'asc' });
+  const [calendarView, setCalendarView] = useState('expanded'); // 'expanded' | 'collapsed'
+  const [unlockMenuOpen, setUnlockMenuOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareSearch, setShareSearch] = useState('');
+  const [shareSelectedIds, setShareSelectedIds] = useState(() => new Set());
+  const unlockMenuRef = useRef(null);
   const [editingCell, setEditingCell] = useState(null); // { rowId, date }
-  const [uploadSkipModal, setUploadSkipModal] = useState(null); // { imported, skipped, errors }
+  const [uploadSkipWarning, setUploadSkipWarning] = useState(null); // { imported, skipped, errors, failed?, message? }
+  const [uploadSkipModalOpen, setUploadSkipModalOpen] = useState(false);
 
   const sheet = payload?.sheet ?? null;
   const rows = useMemo(() => payload?.rows ?? [], [payload]);
@@ -132,6 +146,18 @@ export default function AttendancePanel({ clientId, role }) {
   }, [sheet?.attendance_month, month, dayDates]);
 
   const client = payload?.client ?? null;
+  const eligiblePms = useMemo(() => payload?.eligible_pms ?? [], [payload]);
+
+  useEffect(() => {
+    if (!unlockMenuOpen) return undefined;
+    const onDocClick = (e) => {
+      if (unlockMenuRef.current && !unlockMenuRef.current.contains(e.target)) {
+        setUnlockMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [unlockMenuOpen]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -171,6 +197,11 @@ export default function AttendancePanel({ clientId, role }) {
     setToast(msg);
     setTimeout(() => setToast(null), 3500);
   };
+
+  useEffect(() => {
+    setUploadSkipWarning(null);
+    setUploadSkipModalOpen(false);
+  }, [clientId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -231,18 +262,20 @@ export default function AttendancePanel({ clientId, role }) {
       const skippedCount = Number(result.skipped ?? 0);
       const errorList = Array.isArray(result.errors) ? result.errors : [];
       if (skippedCount > 0 || errorList.some((x) => x?.emp_code || x?.error)) {
-        setUploadSkipModal({
+        setUploadSkipWarning({
           imported: Number(result.imported ?? 0),
           skipped: skippedCount,
           errors: errorList
         });
+        showToast(`Imported ${result.imported ?? 0} rows (${skippedCount} skipped)`);
       } else {
+        setUploadSkipWarning(null);
         showToast(`Imported ${result.imported ?? 0} rows`);
       }
     } catch (err) {
       setError(err.message);
       if (err.details && Array.isArray(err.details) && err.details.length) {
-        setUploadSkipModal({
+        setUploadSkipWarning({
           imported: 0,
           skipped: err.details.length,
           errors: err.details,
@@ -255,36 +288,33 @@ export default function AttendancePanel({ clientId, role }) {
     }
   };
 
-  const refreshAfterAction = async (nextSheet) => {
-    setPayload((prev) => {
-      if (!prev) return prev;
-      const locked = Boolean(nextSheet.locked);
-      return {
-        ...prev,
-        sheet: nextSheet,
-        can_edit: !locked,
-        can_lock: isPl && !locked,
-        can_unlock: isPl && locked,
-        can_request_edit: !isPl && locked
-      };
-    });
-    if (nextSheet?.id) {
+  const refreshAfterAction = async () => {
+    const data = await api.getAttendance({ clientId, month });
+    setPayload(data);
+    if (data?.sheet?.id) {
       try {
-        const logRows = await api.getAttendanceLogs({ clientId, sheetId: nextSheet.id });
+        const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
         setLogs(Array.isArray(logRows) ? logRows : []);
       } catch {
         /* ignore */
       }
+    } else {
+      setLogs([]);
     }
+  };
+
+  const showSkipWarningPopup = () => {
+    if (uploadSkipWarning) setUploadSkipModalOpen(true);
   };
 
   const onSubmit = async () => {
     if (!sheet?.id || !canEdit) return;
+    showSkipWarningPopup();
     setBusy(true);
     setError(null);
     try {
-      const { sheet: next } = await api.submitAttendance({ clientId, sheetId: sheet.id });
-      await refreshAfterAction(next);
+      await api.submitAttendance({ clientId, sheetId: sheet.id });
+      await refreshAfterAction();
       showToast(sheet.status === 'SUBMITTED' ? 'Attendance resubmitted' : 'Attendance submitted');
     } catch (err) {
       setError(err.message);
@@ -295,11 +325,12 @@ export default function AttendancePanel({ clientId, role }) {
 
   const onLock = async () => {
     if (!sheet?.id || !canLock) return;
+    showSkipWarningPopup();
     setBusy(true);
     setError(null);
     try {
-      const { sheet: next } = await api.lockAttendance({ clientId, sheetId: sheet.id });
-      await refreshAfterAction(next);
+      await api.lockAttendance({ clientId, sheetId: sheet.id });
+      await refreshAfterAction();
       showToast('Attendance locked');
     } catch (err) {
       setError(err.message);
@@ -308,19 +339,37 @@ export default function AttendancePanel({ clientId, role }) {
     }
   };
 
-  const onUnlock = async () => {
+  const onUnlockWithScope = async (scope, userIds) => {
     if (!sheet?.id || !canUnlock) return;
     setBusy(true);
     setError(null);
+    setUnlockMenuOpen(false);
     try {
-      const { sheet: next } = await api.unlockAttendance({ clientId, sheetId: sheet.id });
-      await refreshAfterAction(next);
-      showToast('Attendance unlocked');
+      await api.unlockAttendance({
+        clientId,
+        sheetId: sheet.id,
+        scope,
+        userIds
+      });
+      await refreshAfterAction();
+      setShareModalOpen(false);
+      setShareSelectedIds(new Set());
+      setShareSearch('');
+      const label =
+        scope === 'PL_ONLY' ? 'Unlocked for you only' : scope === 'ALL_PMS' ? 'Unlocked for everyone' : 'Edit access shared';
+      showToast(label);
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const openShareModal = () => {
+    setUnlockMenuOpen(false);
+    setShareSearch('');
+    setShareSelectedIds(new Set(eligiblePms.map((p) => p.id)));
+    setShareModalOpen(true);
   };
 
   const onRequestEdit = async () => {
@@ -329,8 +378,8 @@ export default function AttendancePanel({ clientId, role }) {
     setBusy(true);
     setError(null);
     try {
-      const { sheet: next } = await api.requestAttendanceEdit({ clientId, sheetId: sheet.id });
-      await refreshAfterAction(next);
+      await api.requestAttendanceEdit({ clientId, sheetId: sheet.id });
+      await refreshAfterAction();
       showToast('Edit access requested — Payroll Lead notified');
     } catch (err) {
       setError(err.message);
@@ -403,26 +452,26 @@ export default function AttendancePanel({ clientId, role }) {
         </div>
       )}
 
-      {uploadSkipModal && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/50 px-4">
+      {uploadSkipModalOpen && uploadSkipWarning && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 px-4 pointer-events-none">
           <div
             role="dialog"
-            aria-modal="true"
+            aria-modal="false"
             aria-labelledby="attendance-skip-title"
-            className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl"
+            className="pointer-events-auto w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl"
           >
             <h3 id="attendance-skip-title" className="text-lg font-semibold text-slate-900">
-              {uploadSkipModal.failed ? 'Upload incomplete' : 'Some rows were not uploaded'}
+              {uploadSkipWarning.failed ? 'Upload incomplete' : 'Some rows were not uploaded'}
             </h3>
             <p className="mt-2 text-sm text-slate-600">
-              {uploadSkipModal.message
-                ? uploadSkipModal.message
-                : `${uploadSkipModal.skipped} row(s) from the CSV were skipped and were not uploaded.`}
-              {uploadSkipModal.imported > 0
-                ? ` ${uploadSkipModal.imported} matching row(s) were imported successfully.`
+              {uploadSkipWarning.message
+                ? uploadSkipWarning.message
+                : `${uploadSkipWarning.skipped} row(s) from the CSV were skipped and were not uploaded.`}
+              {uploadSkipWarning.imported > 0
+                ? ` ${uploadSkipWarning.imported} matching row(s) were imported successfully.`
                 : ''}
             </p>
-            {Array.isArray(uploadSkipModal.errors) && uploadSkipModal.errors.length > 0 && (
+            {Array.isArray(uploadSkipWarning.errors) && uploadSkipWarning.errors.length > 0 && (
               <div className="mt-4 max-h-56 overflow-auto rounded-lg border border-slate-200">
                 <table className="min-w-full text-sm">
                   <thead className="sticky top-0 bg-slate-50 text-slate-600">
@@ -432,7 +481,7 @@ export default function AttendancePanel({ clientId, role }) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {uploadSkipModal.errors.slice(0, 100).map((err, idx) => (
+                    {uploadSkipWarning.errors.slice(0, 100).map((err, idx) => (
                       <tr key={`${err?.emp_code || 'row'}-${idx}`}>
                         <td className="px-3 py-2 font-mono text-slate-800">
                           {err?.emp_code || (err?.row != null ? `Row ${err.row}` : '—')}
@@ -449,7 +498,7 @@ export default function AttendancePanel({ clientId, role }) {
             <div className="mt-5 flex justify-end">
               <button
                 type="button"
-                onClick={() => setUploadSkipModal(null)}
+                onClick={() => setUploadSkipModalOpen(false)}
                 className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
               >
                 Proceed
@@ -457,6 +506,29 @@ export default function AttendancePanel({ clientId, role }) {
             </div>
           </div>
         </div>
+      )}
+
+      {shareModalOpen && (
+        <ShareEditAccessModal
+          busy={busy}
+          search={shareSearch}
+          onSearchChange={setShareSearch}
+          people={eligiblePms}
+          selectedIds={shareSelectedIds}
+          onToggle={(id) => {
+            setShareSelectedIds((prev) => {
+              const next = new Set(prev);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            });
+          }}
+          onClose={() => {
+            if (busy) return;
+            setShareModalOpen(false);
+          }}
+          onSend={() => onUnlockWithScope('SHARED', [...shareSelectedIds])}
+        />
       )}
 
       <div className="flex flex-wrap items-end justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -477,7 +549,13 @@ export default function AttendancePanel({ clientId, role }) {
               <span className={`rounded-full px-2.5 py-0.5 font-medium ${
                 sheet.locked ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-700'
               }`}>
-                {sheet.locked ? 'Locked' : 'Unlocked'}
+                {sheet.locked
+                  ? 'Locked'
+                  : sheet.edit_scope === 'PL_ONLY'
+                    ? 'Unlocked (PL only)'
+                    : sheet.edit_scope === 'SHARED'
+                      ? 'Unlocked (shared)'
+                      : 'Unlocked'}
               </span>
               {sheet.unlock_request_status === 'PENDING' && (
                 <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 font-medium text-indigo-800">
@@ -495,7 +573,11 @@ export default function AttendancePanel({ clientId, role }) {
               type="month"
               className="ml-2 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
               value={month}
-              onChange={(e) => setMonth(e.target.value)}
+              onChange={(e) => {
+                setUploadSkipWarning(null);
+                setUploadSkipModalOpen(false);
+                setMonth(e.target.value);
+              }}
             />
           </label>
           <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-white ${
@@ -604,28 +686,52 @@ export default function AttendancePanel({ clientId, role }) {
                 </select>
               </label>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {sheet && isPl && canLock && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={onLock}
-                  className="rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-60"
-                >
-                  Lock
-                </button>
+                <LockToggleButton locked disabled={busy} onClick={onLock} />
               )}
               {sheet && isPl && canUnlock && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={onUnlock}
-                  className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
-                >
-                  Unlock
-                </button>
+                <div className="relative" ref={unlockMenuRef}>
+                  <UnlockMenuButton
+                    disabled={busy}
+                    open={unlockMenuOpen}
+                    onToggle={() => setUnlockMenuOpen((v) => !v)}
+                  />
+                  {unlockMenuOpen && (
+                    <div className="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onUnlockWithScope('PL_ONLY')}
+                        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-slate-800 hover:bg-slate-50"
+                      >
+                        <LockIcon className="h-4 w-4 text-slate-700" />
+                        Only me
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onUnlockWithScope('ALL_PMS')}
+                        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-slate-800 hover:bg-slate-50"
+                      >
+                        <GlobeIcon className="h-4 w-4 text-slate-700" />
+                        Everyone
+                      </button>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={openShareModal}
+                        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm text-slate-800 hover:bg-slate-50"
+                      >
+                        <UserPlusIcon className="h-4 w-4 text-slate-700" />
+                        Share edit access
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
-              {sheet && !isPl && sheet.locked && (
+              {sheet && !isPl && canRequestEdit && (
                 <button
                   type="button"
                   disabled={busy || sheet.unlock_request_status === 'PENDING'}
@@ -648,7 +754,33 @@ export default function AttendancePanel({ clientId, role }) {
             </div>
           </div>
 
+          {sheet && (
+            <div className="flex justify-end">
+              <CalendarViewToggle value={calendarView} onChange={setCalendarView} />
+            </div>
+          )}
+
           {sheet && <LegendBar />}
+
+          {uploadSkipWarning && (
+            <button
+              type="button"
+              onClick={() => setUploadSkipModalOpen(true)}
+              className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 hover:bg-amber-100"
+            >
+              <span className="font-semibold">
+                {uploadSkipWarning.failed ? 'Upload incomplete' : 'Some rows were not uploaded'}
+              </span>
+              <span className="mt-0.5 block text-amber-800/90">
+                {uploadSkipWarning.message
+                  ? uploadSkipWarning.message
+                  : `${uploadSkipWarning.skipped} row(s) skipped`}
+                {uploadSkipWarning.imported > 0 ? ` · ${uploadSkipWarning.imported} imported` : ''}
+                {' · '}
+                <span className="underline">View details</span>
+              </span>
+            </button>
+          )}
 
           <div className="max-h-[70vh] overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
             <table className="min-w-max border-separate border-spacing-0 text-xs">
@@ -691,14 +823,15 @@ export default function AttendancePanel({ clientId, role }) {
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">Status</th>
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">Amt. Type</th>
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium">Contract</th>
-                  {gridDayDates.map((d) => {
-                    const label = dayHeaderLabel(d);
-                    return (
-                      <th key={d} className={`min-w-[2.75rem] whitespace-nowrap ${dayHeaderClass(d)}`}>
-                        {label.text}
-                      </th>
-                    );
-                  })}
+                  {calendarView === 'expanded' &&
+                    gridDayDates.map((d) => {
+                      const label = dayHeaderLabel(d);
+                      return (
+                        <th key={d} className={`min-w-[2.75rem] whitespace-nowrap ${dayHeaderClass(d)}`}>
+                          {label.text}
+                        </th>
+                      );
+                    })}
                   {LEGEND_TOTAL_COLUMNS.map((col) => (
                     <th key={`t-${col.code}`} className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium text-slate-700">
                       {col.label}
@@ -713,7 +846,12 @@ export default function AttendancePanel({ clientId, role }) {
                 {!sheet ? (
                   <tr>
                     <td
-                      colSpan={11 + gridDayDates.length + LEGEND_TOTAL_COLUMNS.length + 3}
+                      colSpan={
+                        11 +
+                        (calendarView === 'expanded' ? gridDayDates.length : 0) +
+                        LEGEND_TOTAL_COLUMNS.length +
+                        3
+                      }
                       className="border-b border-slate-100 px-4 py-16"
                     >
                       <EmptyAttendanceState busy={busy} onUpload={onUpload} />
@@ -741,42 +879,55 @@ export default function AttendancePanel({ clientId, role }) {
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 font-mono text-slate-700">
                         {sheet?.contract_code || '—'}
                       </td>
-                      {gridDayDates.map((d) => {
-                        const code = markFor(row, d);
-                        const isEditing =
-                          editingCell?.rowId === row.id && editingCell?.date === d;
-                        return (
-                          <td key={`${row.id}-${d}`} className={dayBodyClass(d)}>
-                            {isEditing && canEdit ? (
-                              <select
-                                autoFocus
-                                className="w-14 rounded border border-indigo-300 bg-white py-0.5 text-xs"
-                                value={code}
-                                onChange={(e) => onChangeCell(row.id, d, e.target.value)}
-                                onBlur={() => setEditingCell(null)}
-                              >
-                                {EDITABLE_CODES.map((c) => (
-                                  <option key={c} value={c}>
-                                    {c === 'A' ? 'A (Absent LOP)' : c === 'NH' ? 'NH' : c === 'FH' ? 'FH' : c}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={!canEdit}
-                                title={LEGEND_LABELS[code] || code}
-                                onClick={() => canEdit && setEditingCell({ rowId: row.id, date: d })}
-                                className={`inline-flex min-w-[1.75rem] items-center justify-center rounded px-1 py-0.5 ${codeCellClass(code)} ${
-                                  canEdit ? 'cursor-pointer hover:ring-1 hover:ring-indigo-300' : 'cursor-default'
-                                }`}
-                              >
-                                {displayCode(code)}
-                              </button>
-                            )}
-                          </td>
-                        );
-                      })}
+                      {calendarView === 'expanded' &&
+                        gridDayDates.map((d) => {
+                          const code = markFor(row, d);
+                          const isEditing =
+                            editingCell?.rowId === row.id && editingCell?.date === d;
+                          return (
+                            <td key={`${row.id}-${d}`} className={dayBodyClass(d)}>
+                              {isEditing && canEdit ? (
+                                <select
+                                  autoFocus
+                                  className="w-14 rounded border border-indigo-300 bg-white py-0.5 text-xs"
+                                  value={code}
+                                  onChange={(e) => onChangeCell(row.id, d, e.target.value)}
+                                  onBlur={() => setEditingCell(null)}
+                                >
+                                  {EDITABLE_CODES.map((c) => (
+                                    <option key={c} value={c}>
+                                      {c === 'A'
+                                        ? 'A (Absent LOP)'
+                                        : c === 'P-NH'
+                                          ? 'P-NH (Present NH)'
+                                          : c === 'P-FH'
+                                            ? 'P-FH (Present FH)'
+                                            : c}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={!canEdit}
+                                  title={LEGEND_LABELS[code] || code}
+                                  onClick={() => canEdit && setEditingCell({ rowId: row.id, date: d })}
+                                  className={`relative inline-flex min-w-[2rem] items-center justify-center overflow-hidden rounded px-1 py-0.5 ${codeCellClass(code)} ${
+                                    canEdit ? 'cursor-pointer hover:ring-1 hover:ring-indigo-300' : 'cursor-default'
+                                  }`}
+                                >
+                                  {isPresentOnHolidayCode(code) && (
+                                    <span
+                                      aria-hidden
+                                      className={`pointer-events-none absolute bottom-0 left-0 h-0 w-0 border-b-[7px] border-r-[7px] ${holidayFlagBorderClass(code)}`}
+                                    />
+                                  )}
+                                  {displayCode(code)}
+                                </button>
+                              )}
+                            </td>
+                          );
+                        })}
                       {LEGEND_TOTAL_COLUMNS.map((col) => (
                         <td key={`${row.id}-tot-${col.code}`} className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-slate-700">
                           {Number(row.legend_totals?.[col.code] ?? 0)}
@@ -821,11 +972,311 @@ function UploadIcon({ className = 'h-4 w-4' }) {
   );
 }
 
+function LockIcon({ className = 'h-3.5 w-3.5' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <path
+        fillRule="evenodd"
+        d="M5 8V6a5 5 0 0 1 10 0v2h.5A1.5 1.5 0 0 1 17 9.5v7A1.5 1.5 0 0 1 15.5 18h-11A1.5 1.5 0 0 1 3 16.5v-7A1.5 1.5 0 0 1 4.5 8H5Zm2-2a3 3 0 0 1 6 0v2H7V6Zm3 6.25a1.25 1.25 0 0 0-.75 2.25V16h1.5v-1.5a1.25 1.25 0 0 0-.75-2.25Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
+function UnlockIcon({ className = 'h-3.5 w-3.5' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M7 8V6a3 3 0 0 1 5.76-1.2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <rect x="3.5" y="8" width="13" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M10 11.25v2.5"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/** Pill lock/unlock control matching StaffingGo toggle design. */
+function LockToggleButton({ locked, disabled, onClick }) {
+  if (locked) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        title="Lock attendance"
+        className="inline-flex h-9 items-center gap-2 rounded-full bg-[#D4A017] pl-1.5 pr-4 text-sm font-semibold text-white shadow-sm hover:bg-[#C49212] disabled:opacity-60"
+      >
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#D4A017]">
+          <LockIcon />
+        </span>
+        Locked
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      title="Unlock attendance"
+      className="inline-flex h-9 items-center gap-2 rounded-full bg-[#7B8A9A] pl-4 pr-1.5 text-sm font-semibold text-white shadow-sm hover:bg-[#6C7A8A] disabled:opacity-60"
+    >
+      Unlocked
+      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#7B8A9A]">
+        <UnlockIcon />
+      </span>
+    </button>
+  );
+}
+
+function UnlockMenuButton({ disabled, open, onToggle }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onToggle}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      title="Unlock attendance"
+      className="inline-flex h-9 items-center gap-2 rounded-full bg-[#7B8A9A] pl-4 pr-2 text-sm font-semibold text-white shadow-sm hover:bg-[#6C7A8A] disabled:opacity-60"
+    >
+      Unlocked
+      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#7B8A9A]">
+        <UnlockIcon />
+      </span>
+      <ChevronDownIcon className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
+    </button>
+  );
+}
+
+function ChevronDownIcon({ className = 'h-4 w-4' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <path
+        fillRule="evenodd"
+        d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.24a.75.75 0 0 1-1.06 0L5.21 8.29a.75.75 0 0 1 .02-1.08Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
+function GlobeIcon({ className = 'h-4 w-4' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M3 10h14M10 3c2.2 2.2 3.3 4.4 3.3 7S12.2 14.8 10 17C7.8 14.8 6.7 12.6 6.7 10S7.8 5.2 10 3Z" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function UserPlusIcon({ className = 'h-4 w-4' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M8 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M2.5 16.5c.6-2.3 2.6-3.5 5.5-3.5s4.9 1.2 5.5 3.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path d="M14.5 7v4M12.5 9h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SearchIcon({ className = 'h-4 w-4' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M13.5 13.5 17 17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function initialsFromName(name) {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase();
+}
+
+function ShareEditAccessModal({
+  busy,
+  search,
+  onSearchChange,
+  people,
+  selectedIds,
+  onToggle,
+  onClose,
+  onSend
+}) {
+  const q = search.trim().toLowerCase();
+  const filtered = !q
+    ? people
+    : people.filter(
+        (p) =>
+          String(p.name || '').toLowerCase().includes(q) ||
+          String(p.email || '').toLowerCase().includes(q)
+      );
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/50 px-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-edit-title"
+        className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h3 id="share-edit-title" className="text-lg font-semibold text-slate-900">
+              Share edit access
+            </h3>
+            <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-sky-500 px-1.5 text-xs font-semibold text-white">
+              {people.length}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="relative mt-4">
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search program managers…"
+            className="w-full rounded-xl border border-sky-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-800 outline-none ring-sky-100 focus:ring-2"
+          />
+        </div>
+
+        <ul className="mt-4 max-h-64 space-y-2 overflow-auto">
+          {filtered.length === 0 ? (
+            <li className="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500">
+              No program managers found for this client.
+            </li>
+          ) : (
+            filtered.map((person) => {
+              const selected = selectedIds.has(person.id);
+              return (
+                <li
+                  key={person.id}
+                  className="flex items-center gap-3 rounded-xl border border-slate-100 px-3 py-2.5"
+                >
+                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-sm font-semibold text-rose-700">
+                    {initialsFromName(person.name)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-slate-900">{person.name || '—'}</p>
+                    <p className="truncate text-xs text-slate-500">
+                      {person.role_label || 'Program Manager'}
+                      {person.email ? ` · ${person.email}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onToggle(person.id)}
+                    className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                      selected
+                        ? 'bg-slate-900 text-white'
+                        : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {selected ? 'Selected' : 'Select'}
+                  </button>
+                </li>
+              );
+            })
+          )}
+        </ul>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onClose}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={busy || selectedIds.size === 0}
+            onClick={onSend}
+            className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {busy ? 'Sending…' : 'Send Access'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SortIndicator({ active, direction }) {
   return (
     <span aria-hidden="true" className={active ? 'text-indigo-600' : 'text-slate-400'}>
       {active ? (direction === 'asc' ? '▲' : '▼') : '↕'}
     </span>
+  );
+}
+
+function CalendarViewToggle({ value, onChange }) {
+  const options = [
+    { id: 'expanded', label: 'Expanded' },
+    { id: 'collapsed', label: 'Collapsed' }
+  ];
+  return (
+    <div
+      role="group"
+      aria-label="Calendar view"
+      className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5"
+    >
+      {options.map((opt) => {
+        const active = value === opt.id;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => onChange(opt.id)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              active
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -876,6 +1327,8 @@ function LegendBar() {
     { code: 'W', label: 'Week off' },
     { code: 'NH', label: 'National Holiday' },
     { code: 'FH', label: 'Festival Holiday' },
+    { code: 'P-NH', label: 'Present on National Holiday', flag: true },
+    { code: 'P-FH', label: 'Present on Festive Holiday', flag: true },
     { code: 'HD', label: 'Half day' },
     { code: 'EL/SL/CL…', label: 'Leave', cls: 'bg-violet-100 text-violet-900' },
     { code: 'A', label: 'Absent LOP' },
@@ -885,7 +1338,17 @@ function LegendBar() {
     <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
       {items.map((it) => (
         <span key={it.code} className="inline-flex items-center gap-1.5 text-xs text-slate-600">
-          <span className={`rounded px-1.5 py-0.5 font-semibold ${it.cls || codeCellClass(it.code === 'EL/SL/CL…' ? 'EL' : it.code.split('/')[0])}`}>
+          <span
+            className={`relative inline-flex overflow-hidden rounded px-1.5 py-0.5 font-semibold ${
+              it.cls || codeCellClass(it.code === 'EL/SL/CL…' ? 'EL' : it.code.split('/')[0])
+            }`}
+          >
+            {it.flag && (
+              <span
+                aria-hidden
+                className={`pointer-events-none absolute bottom-0 left-0 h-0 w-0 border-b-[6px] border-r-[6px] ${holidayFlagBorderClass(it.code)}`}
+              />
+            )}
             {it.code}
           </span>
           {it.label}

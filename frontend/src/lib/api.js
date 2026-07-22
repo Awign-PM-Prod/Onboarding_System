@@ -369,10 +369,16 @@ export const api = {
       `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/lock`,
       { method: 'POST', body: JSON.stringify({}) }
     ),
-  unlockAttendance: ({ clientId, sheetId }) =>
+  unlockAttendance: ({ clientId, sheetId, scope, userIds }) =>
     request(
       `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/unlock`,
-      { method: 'POST', body: JSON.stringify({}) }
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          scope,
+          user_ids: userIds || undefined
+        })
+      }
     ),
   requestAttendanceEdit: ({ clientId, sheetId }) =>
     request(

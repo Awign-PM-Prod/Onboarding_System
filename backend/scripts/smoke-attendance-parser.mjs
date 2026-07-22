@@ -17,6 +17,9 @@ const text = readFileSync(samplePath, 'utf8');
 assert.equal(normalizeAttendanceCode('oc'), null);
 assert.equal(normalizeAttendanceCode('NH'), 'NH');
 assert.equal(normalizeAttendanceCode('FH'), 'FH');
+assert.equal(normalizeAttendanceCode('P-NH'), 'P-NH');
+assert.equal(normalizeAttendanceCode('pnh'), 'P-NH');
+assert.equal(normalizeAttendanceCode('P_FH'), 'P-FH');
 assert.equal(normalizeAttendanceCode('a'), 'A');
 
 assert.equal(normalizeEmployeeStatus('active'), 'Active');

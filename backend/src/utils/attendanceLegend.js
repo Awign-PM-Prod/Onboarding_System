@@ -5,6 +5,8 @@ export const LEGEND_CODES = [
   'W',
   'NH',
   'FH',
+  'P-NH',
+  'P-FH',
   'HD',
   'EL',
   'SL',
@@ -24,6 +26,8 @@ export const LEGEND_LABELS = {
   W: 'Week off',
   NH: 'National Holiday',
   FH: 'Festival Holiday',
+  'P-NH': 'Present on National Holiday',
+  'P-FH': 'Present on Festive Holiday',
   HD: 'Half day',
   EL: 'Earned Leave',
   SL: 'Sick Leave',
@@ -43,6 +47,8 @@ export const LEGEND_STYLE_FAMILY = {
   W: 'paid',
   NH: 'holiday',
   FH: 'holiday',
+  'P-NH': 'present_holiday',
+  'P-FH': 'present_holiday',
   HD: 'half',
   EL: 'leave',
   SL: 'leave',
@@ -59,11 +65,21 @@ export const LEGEND_STYLE_FAMILY = {
 
 const VALID_SET = new Set(LEGEND_CODES);
 
+/** Map common CSV aliases to canonical codes. */
+function aliasAttendanceCode(s) {
+  const compact = s.replace(/[\s_]+/g, '');
+  if (compact === 'PNH' || compact === 'P-NH') return 'P-NH';
+  if (compact === 'PFH' || compact === 'P-FH') return 'P-FH';
+  return null;
+}
+
 export function normalizeAttendanceCode(raw) {
   const s = String(raw ?? '').trim().toUpperCase();
   if (!s) return null;
   if (s === 'OC') return null; // legacy — reject
   if (VALID_SET.has(s)) return s;
+  const aliased = aliasAttendanceCode(s);
+  if (aliased) return aliased;
   // allow lowercase dash already handled; empty dash variants
   if (s === '—' || s === '–') return '-';
   return null;
