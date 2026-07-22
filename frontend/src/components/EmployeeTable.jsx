@@ -1,7 +1,9 @@
 import {
   employeeStatusBadgeClass,
+  formatEmployeeStatusLabel,
   resolveEmployeeStatusLabel,
 } from '../lib/employeeStatusBadge';
+import { formatDesignationLabel } from '../lib/formatLabels';
 
 function formatCtc(type, value) {
   if (!type || value === null || value === undefined || value === '') return '-';
@@ -173,7 +175,7 @@ export default function EmployeeTable({
                     {missingRoleDetails ? (
                       <span className="font-medium text-rose-600">Not Assigned</span>
                     ) : (
-                      r.designation || '-'
+                      formatDesignationLabel(r.designation) || '-'
                     )}
                   </td>
                 )}
@@ -188,7 +190,7 @@ export default function EmployeeTable({
                         onboardingInitiated: r.onboarding_initiated,
                       })}
                     >
-                      {statusLabel}
+                      {formatEmployeeStatusLabel(statusLabel)}
                     </span>
                   </td>
                 )}

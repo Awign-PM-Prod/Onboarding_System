@@ -1,5 +1,6 @@
 import { useState } from 'react';
-
+import { formatDesignationLabel } from '../lib/formatLabels';
+import ModalOverlay from './ModalOverlay';
 const empty = {
   designation: '',
   date_of_joining: '',
@@ -52,8 +53,8 @@ export default function RoleDetailsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg w-full max-w-lg shadow-lg">
+    <ModalOverlay onClose={onClose}>
+      <div className="mx-auto w-full max-w-lg rounded-lg bg-white shadow-lg">
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
           <h3 className="font-semibold text-slate-900">{title}</h3>
           <button onClick={onClose} className="text-slate-500 hover:text-slate-700" aria-label="Close">x</button>
@@ -68,11 +69,13 @@ export default function RoleDetailsModal({
               onChange={(e) => set({ designation: e.target.value })}
             >
               {designations.length === 0 && <option value="">No designations found</option>}
-              {designations.map((d) => <option key={d} value={d}>{d}</option>)}
+              {designations.map((d) => (
+                <option key={d} value={d}>{formatDesignationLabel(d)}</option>
+              ))}
             </select>
           </Field>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Date of Joining" error={fieldErrors.date_of_joining}>
               <input
                 className="input"
@@ -87,18 +90,19 @@ export default function RoleDetailsModal({
                 <option value="ANNUAL">Annual</option>
               </select>
             </Field>
+            <Field label="CTC Value" error={fieldErrors.ctc_value}>
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                placeholder="0"
+                value={form.ctc_value}
+                onChange={(e) => set({ ctc_value: e.target.value })}
+              />
+            </Field>
           </div>
-
-          <Field label="CTC Value" error={fieldErrors.ctc_value}>
-            <input
-              className="input"
-              type="number"
-              min="0"
-              step="1"
-              value={form.ctc_value}
-              onChange={(e) => set({ ctc_value: e.target.value })}
-            />
-          </Field>
 
           {showSendOnboardingOption && (
             <label className="flex items-start gap-2 text-sm text-slate-700">
@@ -130,10 +134,9 @@ export default function RoleDetailsModal({
           </div>
         </form>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }
-
 function Field({ label, error, children }) {
   return (
     <div>

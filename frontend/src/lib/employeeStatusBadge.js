@@ -1,5 +1,7 @@
 /** Shared employee / form status badge helpers */
 
+export { formatEmployeeStatusLabel } from './formatLabels';
+
 export function isPmApprovedReview(row) {
   return String(row?.form_review_status ?? '').trim().toUpperCase() === 'APPROVED';
 }

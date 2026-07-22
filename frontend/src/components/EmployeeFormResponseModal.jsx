@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import ModalOverlay from './ModalOverlay';
 
 const HIDDEN_KEYS = new Set([
   'id',
@@ -430,13 +431,7 @@ export default function EmployeeFormResponseModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center p-4 sm:items-center" role="dialog" aria-modal="true">
-      <button
-        type="button"
-        className="absolute inset-0 bg-slate-900/50 transition-opacity"
-        aria-label="Close dialog"
-        onClick={onClose}
-      />
+    <ModalOverlay onClose={onClose} align="bottom" backdropClassName="bg-slate-900/50">
       <div className="relative flex max-h-[min(90vh,760px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:px-6">
           <div className="min-w-0 flex-1">
@@ -671,6 +666,6 @@ export default function EmployeeFormResponseModal({
           </div>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

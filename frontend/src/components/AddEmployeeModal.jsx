@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../lib/api';
+import ModalOverlay from './ModalOverlay';
 
 const empty = {
   name: '',
@@ -104,7 +105,7 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4">
+    <ModalOverlay onClose={onClose}>
       <div className="bg-white rounded-lg w-full max-w-lg shadow-lg">
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
           <h3 className="font-semibold text-slate-900">Add Available Employee</h3>
@@ -119,7 +120,7 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
         </div>
         {formBody}
       </div>
-    </div>
+    </ModalOverlay>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { detectMobileOs } from '../lib/detectMobileOs';
+import ModalOverlay from './ModalOverlay';
 
 export const UAN_VIDEOS = {
   creation: {
@@ -72,33 +73,13 @@ function IconExternal({ className }) {
 function YoutubeVideoModal({ open, onClose, title, url }) {
   const embedUrl = youtubeEmbedUrl(url);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open, onClose]);
-
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 px-4"
-      onClick={onClose}
-      role="presentation"
-    >
+    <ModalOverlay onClose={onClose} backdropClassName="bg-slate-900/60">
       <div
         className="w-full max-w-3xl rounded-xl bg-white p-4 shadow-2xl sm:p-5"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
+        role="document"
         aria-label={title}
       >
         <div className="mb-3 flex items-center justify-between gap-3">
@@ -129,7 +110,7 @@ function YoutubeVideoModal({ open, onClose, title, url }) {
           </p>
         )}
       </div>
-    </div>
+    </ModalOverlay>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api';
+import ModalOverlay from './ModalOverlay';
 import {
   LEGEND_LABELS,
   LEGEND_TOTAL_COLUMNS,
@@ -453,10 +454,13 @@ export default function AttendancePanel({ clientId, role }) {
       )}
 
       {uploadSkipModalOpen && uploadSkipWarning && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 px-4 pointer-events-none">
+        <ModalOverlay
+          className="pointer-events-none"
+          backdropClassName="bg-slate-900/40"
+          onClose={() => setUploadSkipModalOpen(false)}
+        >
           <div
-            role="dialog"
-            aria-modal="false"
+            role="document"
             aria-labelledby="attendance-skip-title"
             className="pointer-events-auto w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl"
           >
@@ -505,7 +509,7 @@ export default function AttendancePanel({ clientId, role }) {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {shareModalOpen && (
@@ -1138,10 +1142,9 @@ function ShareEditAccessModal({
       );
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/50 px-4">
+    <ModalOverlay onClose={onClose} backdropClassName="bg-slate-900/50">
       <div
-        role="dialog"
-        aria-modal="true"
+        role="document"
         aria-labelledby="share-edit-title"
         className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
       >
@@ -1236,7 +1239,7 @@ function ShareEditAccessModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }
 

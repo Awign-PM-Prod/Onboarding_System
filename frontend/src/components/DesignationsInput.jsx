@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { formatDesignationLabel } from '../lib/formatLabels';
 
 /** Predefined designations Payroll Lead can multi-select when creating/editing a client. */
 export const DESIGNATION_OPTIONS = [
@@ -127,7 +128,7 @@ export default function DesignationsInput({ value = [], onChange }) {
             key={tag}
             className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-sm text-indigo-700"
           >
-            {tag}
+            {formatDesignationLabel(tag)}
             <span
               role="button"
               tabIndex={0}
@@ -185,7 +186,7 @@ export default function DesignationsInput({ value = [], onChange }) {
                       onChange={() => toggle(opt)}
                       className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                     />
-                    <span>{opt}</span>
+                    <span>{formatDesignationLabel(opt)}</span>
                   </label>
                 </li>
               );

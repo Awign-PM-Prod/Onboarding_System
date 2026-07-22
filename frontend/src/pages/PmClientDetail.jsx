@@ -8,38 +8,23 @@ import BulkUploadModal from '../components/BulkUploadModal';
 import RoleDetailsModal from '../components/RoleDetailsModal';
 import PmClientDashboard from '../components/PmClientDashboard';
 import AttendancePanel from '../components/AttendancePanel';
+import ModalOverlay from '../components/ModalOverlay';
 import { api } from '../lib/api';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
 import BackToClientsLink from '../components/BackToClientsLink';
+import {
+  formatContractDate,
+  formatDesignationLabel,
+  formatEmployeeStatusLabel,
+} from '../lib/formatLabels';
+import {
+  DIRECTORY_STATUS_OPTIONS,
+  TESTING_FORM_STATUS_OPTIONS,
+  TESTING_JOINING_STATUS_OPTIONS,
+  TESTING_REJECTED_BY_OPTIONS,
+} from '../lib/pmFilterOptions';
 
 const PAGE_SIZE = 50;
-const TESTING_FORM_STATUS_OPTIONS = [
-  'NOT_SENT',
-  'AVAILABLE',
-  'PENDING',
-  'ROLE_ASSIGNED',
-  'FORM_SENT',
-  'RESPONDED',
-  'REQUEST CORRECTION',
-  'PM APPROVED',
-  'PL APPROVED',
-  'Form Submitted',
-];
-
-const TESTING_JOINING_STATUS_OPTIONS = [
-  { value: '__NONE__', label: 'Not set' },
-  { value: 'JOINED', label: 'Joined' },
-  { value: 'NOT_JOINED', label: 'Not Joined' },
-  { value: 'JOINED_OTHER_DATE', label: 'Joined on other date' },
-  { value: 'JOINED_ABSCONDED', label: 'Joined and absconded' },
-];
-
-const TESTING_REJECTED_BY_OPTIONS = [
-  { value: 'PM', label: 'PM' },
-  { value: 'PL', label: 'PL' },
-];
-
-/** Form statuses on Testing → Employees that have a submitted response to export. */
 const TESTING_FORM_CSV_EXPORT_STATUSES = new Set([
   'RESPONDED',
   'REQUEST CORRECTION',
@@ -48,38 +33,6 @@ const TESTING_FORM_CSV_EXPORT_STATUSES = new Set([
   'PL APPROVED',
   'Form Submitted',
 ]);
-
-const DIRECTORY_STATUS_OPTIONS = [
-  'AVAILABLE',
-  'PENDING',
-  'ROLE_ASSIGNED',
-  'FORM_SENT',
-  'Form Submitted',
-  'Submitted',
-  'SUBMITTED',
-  'CORRECTION_REQUESTED',
-  'Correction Requested',
-  'APPROVED',
-  'PM APPROVED',
-  'REJECTED',
-  'PM Approved',
-  'PM Rejected',
-  'PENDING_PAYROLL_LEAD',
-  'Pending Payroll Review',
-  'PAYROLL_APPROVED',
-  'PAYROLL_REJECTED',
-  'Payroll Approved',
-  'Payroll Rejected',
-  'PL APPROVED',
-  'JOINED',
-  'Joined',
-  'NOT_JOINED',
-  'Not Joined',
-  'JOINED_OTHER_DATE',
-  'Joined on other date',
-  'JOINED_ABSCONDED',
-  'Joined and absconded'
-];
 
 function buildOnboardingInitiateToast(prefix, result) {
   const updated = Number(result?.updated ?? 0);
@@ -1191,13 +1144,13 @@ export default function PmClientDetail() {
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contract period</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <span className="min-w-0 rounded-md border border-slate-200/90 bg-slate-100 px-2.5 py-1 text-center text-xs font-medium tabular-nums text-emerald-700 break-words sm:text-left">
-                      {client.contract_start_date}
+                      {formatContractDate(client.contract_start_date)}
                     </span>
                     <span className="text-slate-300" aria-hidden>
                       →
                     </span>
                     <span className="min-w-0 rounded-md border border-slate-200/90 bg-slate-100 px-2.5 py-1 text-center text-xs font-medium tabular-nums text-red-700 break-words sm:text-left">
-                      {client.contract_end_date}
+                      {formatContractDate(client.contract_end_date)}
                     </span>
                   </div>
                 </div>
@@ -1210,7 +1163,7 @@ export default function PmClientDetail() {
                         key={d}
                         className="bg-slate-100 text-center text-xs font-medium text-slate-800 break-words rounded-md border border-slate-200/90 px-2.5 py-1 min-w-0 sm:text-left"
                       >
-                        {d}
+                        {formatDesignationLabel(d)}
                       </span>
                     ))}
                   </div>
@@ -1355,7 +1308,7 @@ export default function PmClientDetail() {
                     <option value="">All statuses</option>
                     {directoryStatusOptions.map((status) => (
                       <option key={status} value={status}>
-                        {status}
+                        {formatEmployeeStatusLabel(status)}
                       </option>
                     ))}
                   </select>
@@ -1545,7 +1498,7 @@ export default function PmClientDetail() {
                       <option value="">All form statuses</option>
                       {TESTING_FORM_STATUS_OPTIONS.map((status) => (
                         <option key={status} value={status}>
-                          {status}
+                          {formatEmployeeStatusLabel(status)}
                         </option>
                       ))}
                     </select>
@@ -1727,7 +1680,7 @@ export default function PmClientDetail() {
                 >
                   <option value="">All designations</option>
                   {(client?.designations ?? []).map((d) => (
-                    <option key={d} value={d}>{d}</option>
+                    <option key={d} value={d}>{formatDesignationLabel(d)}</option>
                   ))}
                 </select>
               </div>
@@ -2035,7 +1988,7 @@ export default function PmClientDetail() {
         )}
 
         {testingJoiningModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+          <ModalOverlay onClose={closeTestingBulkJoiningModal} backdropClassName="bg-slate-900/50">
             <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
               <h3 className="text-lg font-semibold text-slate-900">Update Joining Status (Bulk)</h3>
               <p className="mt-1 text-sm text-slate-600">
@@ -2094,7 +2047,7 @@ export default function PmClientDetail() {
                 </button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
         {bulkRoleModalOpen && (
           <RoleDetailsModal
@@ -2122,7 +2075,13 @@ export default function PmClientDetail() {
           />
         )}
         {(transferModalEmployee || testingBulkTransferModalOpen) && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+          <ModalOverlay
+            onClose={() => {
+              setTransferModalEmployee(null);
+              setTestingBulkTransferModalOpen(false);
+            }}
+            backdropClassName="bg-slate-900/50"
+          >
             <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
               <h3 className="text-lg font-semibold text-slate-900">
                 {testingBulkTransferModalOpen ? 'Transfer Employees (Bulk)' : 'Transfer Employee'}
@@ -2203,7 +2162,7 @@ export default function PmClientDetail() {
                 </button>
               </div>
             </div>
-          </div>
+          </ModalOverlay>
         )}
         <EmployeeFormResponseModal
           open={responseModalOpen}

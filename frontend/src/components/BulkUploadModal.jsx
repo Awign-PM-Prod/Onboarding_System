@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Papa from 'papaparse';
 import readXlsxFile from 'read-excel-file/browser';
 import { api } from '../lib/api';
+import ModalOverlay from './ModalOverlay';
 
 const TEMPLATE_HEADERS = [
   'name',
@@ -407,7 +408,7 @@ export default function BulkUploadModal({ clientId, onClose, onDone, embedded = 
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4">
+    <ModalOverlay onClose={onClose}>
       <div className="bg-white rounded-lg w-full max-w-2xl shadow-lg max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
           <h3 className="font-semibold text-slate-900">Bulk Upload Available Employees</h3>
@@ -415,6 +416,6 @@ export default function BulkUploadModal({ clientId, onClose, onDone, embedded = 
         </div>
         {formInner}
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

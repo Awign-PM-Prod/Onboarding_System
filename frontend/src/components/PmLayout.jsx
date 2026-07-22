@@ -11,6 +11,7 @@ import CollapsibleAppSidebar, {
   readSidebarCollapsed,
   writeSidebarCollapsed
 } from './CollapsibleAppSidebar';
+import ModalOverlay from './ModalOverlay';
 
 function IconMenu({ className }) {
   return (
@@ -30,7 +31,7 @@ function IconClose({ className }) {
 
 function JoiningStatusReminderModal({ title, rows, onClose, onNext }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 px-4">
+    <ModalOverlay onClose={onClose} backdropClassName="bg-slate-900/50">
       <div className="w-full max-w-2xl rounded-xl bg-white p-5 shadow-2xl">
         <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
         <p className="mt-1 text-sm text-slate-600">Please update their status after confirmations.</p>
@@ -73,7 +74,7 @@ function JoiningStatusReminderModal({ title, rows, onClose, onNext }) {
           )}
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }
 
