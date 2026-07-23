@@ -5,6 +5,8 @@ export const JOB_APP_FORM_EXPORT_FIELDS = [
   'name',
   'mobile',
   'email',
+  'email_verified',
+  'pd_secondary_mobile',
   'aadhaar_number',
   'aad_profile_photo',
   'aad_name',
@@ -70,6 +72,8 @@ function columnLabel(key) {
   if (key === 'pd_emergency_contact_name') return 'Emergency Contact Name';
   if (key === 'pd_emergency_contact_relation') return 'Emergency Contact Relation';
   if (key === 'pd_alternate_number') return 'Emergency Contact Number';
+  if (key === 'pd_secondary_mobile') return 'Alternate Mobile Number';
+  if (key === 'email_verified') return 'Email Verified';
   if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
   if (key === 'pd_current_address') return 'Current Address';
   if (key === 'kyc_bank_ifsc_details') return 'Bank Branch (IFSC)';

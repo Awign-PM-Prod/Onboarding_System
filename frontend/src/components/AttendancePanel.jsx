@@ -4,8 +4,10 @@ import ModalOverlay from './ModalOverlay';
 import {
   LEGEND_LABELS,
   LEGEND_TOTAL_COLUMNS,
+  LEAVE_SUMMARY_COLUMNS,
   codeCellClass,
   displayCode,
+  formatLeaveSummaryCell,
   holidayFlagBorderClass,
   isPresentOnHolidayCode
 } from '../lib/attendanceLegend';
@@ -844,6 +846,14 @@ export default function AttendancePanel({ clientId, role }) {
                   <th className="border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium">Paid Days</th>
                   <th className="border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium">LOP</th>
                   <th className="border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium">Not Considered</th>
+                  {LEAVE_SUMMARY_COLUMNS.map((colKey) => (
+                    <th
+                      key={`leave-${colKey}`}
+                      className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium text-slate-700"
+                    >
+                      {colKey}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -854,7 +864,8 @@ export default function AttendancePanel({ clientId, role }) {
                         11 +
                         (calendarView === 'expanded' ? gridDayDates.length : 0) +
                         LEGEND_TOTAL_COLUMNS.length +
-                        3
+                        3 +
+                        LEAVE_SUMMARY_COLUMNS.length
                       }
                       className="border-b border-slate-100 px-4 py-16"
                     >
@@ -942,6 +953,14 @@ export default function AttendancePanel({ clientId, role }) {
                       <td className="border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-slate-600">
                         {row.not_considered ?? '—'}
                       </td>
+                      {LEAVE_SUMMARY_COLUMNS.map((colKey) => (
+                        <td
+                          key={`${row.id}-leave-${colKey}`}
+                          className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-slate-700"
+                        >
+                          {formatLeaveSummaryCell(colKey, row, index)}
+                        </td>
+                      ))}
                     </tr>
                   ))
                 )}

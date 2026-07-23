@@ -339,23 +339,6 @@ export default function CollapsibleAppSidebar({
         ref={settingsRef}
         className={`relative z-20 shrink-0 border-t border-white/10 ${collapsed ? 'px-2 py-3' : 'px-3 py-4'}`}
       >
-        {settingsOpen && collapsed && (
-          <div className="absolute bottom-full left-full z-50 mb-2 ml-2 w-44 overflow-hidden rounded-lg border border-slate-700/80 bg-[#1e2438] shadow-2xl">
-            <div className="px-4 py-3">
-              <p className="truncate text-sm font-semibold text-white">{profile?.name ?? 'Profile'}</p>
-            </div>
-            <div className="border-t border-white/10" aria-hidden />
-            <button
-              type="button"
-              onClick={onSignOut}
-              className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-rose-400 transition hover:bg-white/5"
-            >
-              <IconLogout className="h-4 w-4 shrink-0" />
-              Logout
-            </button>
-          </div>
-        )}
-
         {settingsOpen && !collapsed && (
           <div className="absolute bottom-full left-3 right-3 mb-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-xs text-slate-300 shadow-xl">
             <p className="truncate font-medium text-white">{profile?.name}</p>
@@ -374,6 +357,24 @@ export default function CollapsibleAppSidebar({
 
         {collapsed ? (
           <div className="flex flex-col items-stretch gap-2">
+            {settingsOpen && (
+              <div className="overflow-hidden rounded-lg border border-slate-700/80 bg-[#1e2438] shadow-lg">
+                <div className="px-2 py-2">
+                  <p className="truncate text-center text-[11px] font-semibold text-white" title={profile?.name ?? 'Profile'}>
+                    {profile?.name ?? 'Profile'}
+                  </p>
+                </div>
+                <div className="border-t border-white/10" aria-hidden />
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  className="flex w-full items-center justify-center gap-1.5 px-2 py-2.5 text-[11px] font-medium text-rose-400 transition hover:bg-white/5"
+                >
+                  <IconLogout className="h-4 w-4 shrink-0" />
+                  Logout
+                </button>
+              </div>
+            )}
             <span
               className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white ring-2 ring-indigo-400/30"
               aria-hidden

@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 
 const MOBILE_DIGITS_REGEX = /\D/g;
 const TEN_DIGIT_REGEX = /^\d{10}$/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TWELVE_DIGIT_REGEX = /^\d{12}$/;
 const SIX_DIGIT_REGEX = /^\d{6}$/;
 
@@ -35,6 +36,10 @@ function normalizeMobile(raw) {
   const digits = String(raw ?? '').replace(MOBILE_DIGITS_REGEX, '');
   if (digits.length >= 10) return digits.slice(-10);
   return digits;
+}
+
+function normalizeEmail(raw) {
+  return String(raw ?? '').trim().toLowerCase();
 }
 
 function normalizeAadhaar(raw) {
@@ -101,6 +106,7 @@ function buildPersonalDraft(f) {
         : '';
   return {
     email: f.email ?? '',
+    pd_secondary_mobile: f.pd_secondary_mobile ? String(f.pd_secondary_mobile) : '',
     pd_alternate_number: f.pd_alternate_number ? String(f.pd_alternate_number) : '',
     pd_emergency_contact_name: f.pd_emergency_contact_name ?? '',
     pd_emergency_contact_relation: f.pd_emergency_contact_relation ?? '',
@@ -294,6 +300,7 @@ const STEP_OPTIONAL_FIELDS = {
 const STEP_ALL_FIELDS = {
   personal: [
     'email',
+    'pd_secondary_mobile',
     'pd_father_name',
     'pd_mother_name',
     'pd_spouse_name',
@@ -348,6 +355,120 @@ function IconCheckCircle({ className }) {
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden>
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
+  );
+}
+
+function ContactVerificationField({
+  label,
+  required = false,
+  value,
+  onValueChange,
+  verified,
+  inputType = 'text',
+  inputMode,
+  maxLength,
+  placeholder,
+  hint,
+  otp,
+  onOtpChange,
+  otpSent,
+  onSendOtp,
+  onVerifyOtp,
+  sendingOtp,
+  verifyingOtp,
+  error,
+  normalizeInput,
+}) {
+  const displayValue = value ?? '';
+  const normalizedValue = typeof normalizeInput === 'function' ? normalizeInput(displayValue) : String(displayValue).trim();
+  const valueValid =
+    inputType === 'email' ? EMAIL_REGEX.test(normalizedValue) : TEN_DIGIT_REGEX.test(normalizedValue);
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <label className="mb-1.5 block text-sm font-medium text-slate-800">
+        {label} {required && <span className="text-rose-500">*</span>}
+      </label>
+      {hint && <p className="mb-2 text-xs text-slate-500">{hint}</p>}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+        <input
+          type={inputType}
+          inputMode={inputMode}
+          maxLength={maxLength}
+          autoComplete={inputType === 'email' ? 'email' : 'tel'}
+          className={`${fieldClass(false)} sm:flex-1`}
+          placeholder={placeholder}
+          value={displayValue}
+          onChange={(e) => onValueChange(typeof normalizeInput === 'function' ? normalizeInput(e.target.value) : e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={onSendOtp}
+          disabled={!valueValid || sendingOtp || verified}
+          className="shrink-0 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {sendingOtp ? 'Sending…' : verified ? 'Verified' : otpSent ? 'Resend OTP' : 'Send OTP'}
+        </button>
+      </div>
+      {verified && (
+        <div className="mt-3 flex items-center gap-2 text-sm font-medium text-emerald-700">
+          <IconCheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
+          Verified
+        </div>
+      )}
+      {!verified && otpSent && (
+        <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/80 p-4">
+          <label className="mb-2 block text-sm font-medium text-slate-800">Enter OTP</label>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              autoComplete="one-time-code"
+              className="w-full max-w-xs rounded-lg border border-slate-300 bg-white px-4 py-3 text-center text-lg tracking-[0.25em] text-slate-900 tabular-nums"
+              placeholder="6-digit OTP"
+              value={otp}
+              onChange={(e) => onOtpChange(normalizeOtp(e.target.value))}
+            />
+            <button
+              type="button"
+              onClick={onVerifyOtp}
+              disabled={!SIX_DIGIT_REGEX.test(otp) || verifyingOtp}
+              className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {verifyingOtp ? 'Verifying…' : 'Verify OTP'}
+            </button>
+          </div>
+          {import.meta.env.DEV && (
+            <p className="mt-2 text-xs text-slate-500">In development, the demo OTP is 123123.</p>
+          )}
+        </div>
+      )}
+      {error && <p className="mt-2 text-sm text-rose-600">{error}</p>}
+    </div>
+  );
+}
+
+function AlternateMobileField({ label, required = false, value, onChange }) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-slate-800">
+        {label} {required && <span className="text-rose-500">*</span>}
+      </label>
+      <p className="mb-2 text-xs text-slate-500">
+        Use a second number we can reach you on if your primary mobile is unavailable.
+      </p>
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={10}
+        autoComplete="tel"
+        className={fieldClass(false)}
+        placeholder="10-digit alternate mobile number"
+        value={value}
+        onChange={(e) => onChange(normalizeMobile(e.target.value))}
+      />
+    </div>
   );
 }
 
@@ -2057,6 +2178,14 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   const [licenseError, setLicenseError] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [emailVerified, setEmailVerified] = useState(
+    () => jobForm.email_verified === true && EMAIL_REGEX.test(normalizeEmail(jobForm.email))
+  );
+  const [emailOtp, setEmailOtp] = useState('');
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailVerifying, setEmailVerifying] = useState(false);
+  const [emailVerifyError, setEmailVerifyError] = useState('');
 
   useEffect(() => {
     const base = buildPersonalDraft(jobForm);
@@ -2064,6 +2193,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       const visible = correction.visibleFields;
       setDraft({
         email: visible.has('email') ? '' : base.email,
+        pd_secondary_mobile: visible.has('pd_secondary_mobile') ? '' : base.pd_secondary_mobile,
         pd_father_name: visible.has('pd_father_name') ? '' : base.pd_father_name,
         pd_mother_name: visible.has('pd_mother_name') ? '' : base.pd_mother_name,
         pd_spouse_name: visible.has('pd_spouse_name') ? '' : base.pd_spouse_name,
@@ -2091,6 +2221,14 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
     }
     setLicenseError('');
     setLicenseRemoving(false);
+    setEmailOtp('');
+    setEmailOtpSent(false);
+    setEmailVerifyError('');
+    setEmailVerified(
+      jobForm.email_verified === true &&
+        EMAIL_REGEX.test(normalizeEmail(base.email)) &&
+        !(correction?.active && correction.visibleFields.has('email'))
+    );
   }, [jobForm, correction]);
 
   const dobIso = jobForm.aad_dob ? String(jobForm.aad_dob).slice(0, 10) : '';
@@ -2147,7 +2285,9 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   };
 
   const requiredOk =
-    (!isRequired('email', true) || String(draft.email).trim()) &&
+    (!isRequired('email', true) || (EMAIL_REGEX.test(normalizeEmail(draft.email)) && emailVerified)) &&
+    (!isRequired('pd_secondary_mobile', true) ||
+      TEN_DIGIT_REGEX.test(normalizeMobile(draft.pd_secondary_mobile))) &&
     (!isRequired('pd_father_name', true) || fatherName) &&
     (!isRequired('pd_mother_name', true) || motherName) &&
     (!isRequired('pd_spouse_name', true) || !isMarried || spouseName) &&
@@ -2162,6 +2302,46 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
     (!isRequired('pd_marital_status', true) || String(draft.pd_marital_status).trim()) &&
     (!isRequired('pd_driving_license', true) || Boolean(dl)) &&
     (!isRequired('pd_driving_license_url', true) || licenseImageOk);
+
+  const handleSendEmailOtp = async () => {
+    const email = normalizeEmail(draft.email);
+    if (!EMAIL_REGEX.test(email) || emailSending) return;
+    setEmailSending(true);
+    setEmailVerifyError('');
+    try {
+      await api.sendEmailOtp({ mobile, employeeId, email });
+      setEmailOtpSent(true);
+      setEmailOtp('');
+      setEmailVerified(false);
+    } catch (err) {
+      setEmailVerifyError(err.message || 'Could not send email OTP.');
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  const handleVerifyEmailOtp = async () => {
+    const email = normalizeEmail(draft.email);
+    if (!EMAIL_REGEX.test(email) || !SIX_DIGIT_REGEX.test(emailOtp) || emailVerifying) return;
+    setEmailVerifying(true);
+    setEmailVerifyError('');
+    try {
+      const result = await api.verifyEmailOtp({ mobile, employeeId, email, otp: emailOtp });
+      if (result?.form) {
+        setDraft((d) => ({
+          ...d,
+          email: normalizeEmail(result.form.email ?? email),
+        }));
+      }
+      setEmailVerified(true);
+      setEmailOtpSent(false);
+      setEmailOtp('');
+    } catch (err) {
+      setEmailVerifyError(err.message || 'Could not verify email OTP.');
+    } finally {
+      setEmailVerifying(false);
+    }
+  };
 
   const handleLicenseFile = async (e) => {
     const file = e.target.files?.[0];
@@ -2214,8 +2394,43 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
     setError('');
     try {
       const alt = String(draft.pd_alternate_number).replace(/\D/g, '');
+      const secondaryMobile = normalizeMobile(draft.pd_secondary_mobile);
+      const email = normalizeEmail(draft.email);
+      if (isRequired('email', true)) {
+        if (!EMAIL_REGEX.test(email)) {
+          setError('Please enter a valid email address.');
+          setSaving(false);
+          return;
+        }
+        if (!emailVerified) {
+          setError('Please verify your email address before continuing.');
+          setSaving(false);
+          return;
+        }
+      }
+      if (isRequired('pd_secondary_mobile', true)) {
+        if (!TEN_DIGIT_REGEX.test(secondaryMobile)) {
+          setError('Alternate mobile number must be 10 digits.');
+          setSaving(false);
+          return;
+        }
+        if (secondaryMobile === normalizeMobile(mobile)) {
+          setError('Alternate mobile must be different from your primary mobile number.');
+          setSaving(false);
+          return;
+        }
+      }
       if (alt.length !== 10) {
         setError('Emergency contact number must be 10 digits.');
+        setSaving(false);
+        return;
+      }
+      if (
+        isRequired('pd_secondary_mobile', true) &&
+        TEN_DIGIT_REGEX.test(secondaryMobile) &&
+        secondaryMobile === alt
+      ) {
+        setError('Alternate mobile must be different from emergency contact number.');
         setSaving(false);
         return;
       }
@@ -2279,7 +2494,8 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         mobile,
         employee_id: employeeId || null,
         patch_step: 'personal',
-        email: String(draft.email).trim(),
+        email,
+        pd_secondary_mobile: secondaryMobile,
         pd_father_name: fatherName,
         pd_mother_name: motherName,
         pd_spouse_name: isMarried ? spouseName : null,
@@ -2311,19 +2527,38 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         </div>
         <div className="space-y-4">
           {shouldShow('email') && (
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
-                Email Address {isRequired('email', true) && <span className="text-rose-500">*</span>}
-              </label>
-              <input
-                type="email"
-                autoComplete="email"
-                className={fieldClass(false)}
-                placeholder="example@example.com"
-                value={draft.email}
-                onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
-              />
-            </div>
+            <ContactVerificationField
+              label="Email Address"
+              required={isRequired('email', true)}
+              value={draft.email}
+              onValueChange={(next) => {
+                setDraft((d) => ({ ...d, email: next }));
+                setEmailVerified(false);
+                setEmailOtpSent(false);
+                setEmailOtp('');
+                setEmailVerifyError('');
+              }}
+              verified={emailVerified}
+              inputType="email"
+              placeholder="example@example.com"
+              otp={emailOtp}
+              onOtpChange={setEmailOtp}
+              otpSent={emailOtpSent}
+              onSendOtp={handleSendEmailOtp}
+              onVerifyOtp={handleVerifyEmailOtp}
+              sendingOtp={emailSending}
+              verifyingOtp={emailVerifying}
+              error={emailVerifyError}
+              normalizeInput={normalizeEmail}
+            />
+          )}
+          {shouldShow('pd_secondary_mobile') && (
+            <AlternateMobileField
+              label="Alternate Mobile Number"
+              required={isRequired('pd_secondary_mobile', true)}
+              value={draft.pd_secondary_mobile}
+              onChange={(next) => setDraft((d) => ({ ...d, pd_secondary_mobile: next }))}
+            />
           )}
           {(shouldShow('pd_father_name') || shouldShow('pd_mother_name') || (isMarried && shouldShow('pd_spouse_name'))) && (
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
@@ -2674,19 +2909,36 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         </div>
         <h3 className="mb-4 text-lg font-semibold text-slate-900">Personal Details</h3>
         <div className="space-y-4">
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
-              Email Address <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="email"
-              autoComplete="email"
-              className={fieldClass(false)}
-              placeholder="example@example.com"
-              value={draft.email}
-              onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
-            />
-          </div>
+          <ContactVerificationField
+            label="Email Address"
+            required
+            value={draft.email}
+            onValueChange={(next) => {
+              setDraft((d) => ({ ...d, email: next }));
+              setEmailVerified(false);
+              setEmailOtpSent(false);
+              setEmailOtp('');
+              setEmailVerifyError('');
+            }}
+            verified={emailVerified}
+            inputType="email"
+            placeholder="example@example.com"
+            otp={emailOtp}
+            onOtpChange={setEmailOtp}
+            otpSent={emailOtpSent}
+            onSendOtp={handleSendEmailOtp}
+            onVerifyOtp={handleVerifyEmailOtp}
+            sendingOtp={emailSending}
+            verifyingOtp={emailVerifying}
+            error={emailVerifyError}
+            normalizeInput={normalizeEmail}
+          />
+          <AlternateMobileField
+            label="Alternate Mobile Number"
+            required
+            value={draft.pd_secondary_mobile}
+            onChange={(next) => setDraft((d) => ({ ...d, pd_secondary_mobile: next }))}
+          />
           <div>
             <label className="mb-1.5 block text-sm font-medium text-slate-800">
               Father&apos;s Name <span className="text-rose-500">*</span>
@@ -3100,6 +3352,14 @@ export default function OnboardingForm() {
       if (!TEN_DIGIT_REGEX.test(String(jobFormRow?.pd_alternate_number ?? ''))) {
         visibleFields.add('pd_alternate_number');
         requiredFields.add('pd_alternate_number');
+      }
+      if (!TEN_DIGIT_REGEX.test(String(jobFormRow?.pd_secondary_mobile ?? ''))) {
+        visibleFields.add('pd_secondary_mobile');
+        requiredFields.add('pd_secondary_mobile');
+      }
+      if (jobFormRow?.email_verified !== true || !EMAIL_REGEX.test(normalizeEmail(jobFormRow?.email))) {
+        visibleFields.add('email');
+        requiredFields.add('email');
       }
       const sameAsAad = jobFormRow?.pd_current_address_same_as_aadhaar;
       const sameAsAadChoice =

@@ -37,6 +37,7 @@ const MAX_SUBMISSION_ATTEMPTS = 3;
 
 const CORRECTION_FIELD_SET = new Set([
   'email',
+  'pd_secondary_mobile',
   'pd_father_name',
   'pd_mother_name',
   'pd_spouse_name',
@@ -250,14 +251,21 @@ const PAN_VERIFY_EDGE_FUNCTION =
   process.env.PAN_VERIFY_EDGE_FUNCTION || 'pan-verify';
 const KYC_DOC_VALIDATE_EDGE_FUNCTION =
   process.env.KYC_DOC_VALIDATE_EDGE_FUNCTION || 'kyc-document-validate';
+const SEND_EMAIL_OTP_EDGE_FUNCTION =
+  process.env.SEND_EMAIL_OTP_EDGE_FUNCTION || 'send-email-otp';
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Fixed demo OTP for onboarding status login until SMS integration. */
 const DEMO_STATUS_OTP = '123123';
 /** Fixed demo OTP for Aadhaar resume flow until SMS integration. */
 const DEMO_AADHAAR_RESUME_OTP = '123123';
+/** Fixed demo OTP for contact verification (email / alternate mobile) in non-production. */
+const DEMO_CONTACT_OTP = '123123';
 const STATUS_SESSION_TTL_MS = 60 * 60 * 1000;
 
 /** @type {Map<string, { otp: string, expires: number }>} */
 const statusOtpBySession = new Map();
+/** @type {Map<string, { otp: string, expires: number, target: string }>} */
+const contactOtpBySession = new Map();
 /** @type {Map<string, { otp: string, expires: number }>} */
 const aadhaarResumeOtpBySession = new Map();
 /** @type {Map<string, { employeeId: string, mobile: string, expires: number }>} */
@@ -269,6 +277,87 @@ function sessionKey(employeeId, mobile) {
 
 function createStatusSessionToken(employeeId, mobile) {
   return `status_${employeeId}_${mobile}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function contactOtpKey(employeeId, channel) {
+  return `${employeeId}:${channel}`;
+}
+
+function generateContactOtp() {
+  if (process.env.NODE_ENV !== 'production') {
+    return DEMO_CONTACT_OTP;
+  }
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function normalizeEmail(raw) {
+  return String(raw ?? '').trim().toLowerCase();
+}
+
+async function invokeSendEmailOtpEdge({ email, otp, name }) {
+  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to invoke edge functions.');
+  }
+
+  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(SEND_EMAIL_OTP_EDGE_FUNCTION)}`;
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email, otp, name: name || '' }),
+  });
+
+  const raw = await resp.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
+  if (!resp.ok) {
+    const msg = body?.error || body?.message || `Edge function failed (${resp.status})`;
+    const err = new Error(msg);
+    err.details = body?.upstream ?? body ?? null;
+    throw err;
+  }
+  return body ?? {};
+}
+
+async function assertOnboardingFormEditable(emp, mobile) {
+  const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
+    .from('job_app_form')
+    .select('review_status, submission_status, editable_fields')
+    .eq('employee_id', emp.id)
+    .eq('mobile', mobile)
+    .maybeSingle();
+  if (formCurrentErr) throw formCurrentErr;
+  if (!formCurrent) {
+    const err = new Error('Application form not found or mobile mismatch.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (formCurrent.review_status === 'REJECTED') {
+    const err = new Error('Application is rejected and cannot be edited.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (formCurrent.review_status === 'APPROVED') {
+    const err = new Error('Application is approved and cannot be edited.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
+  if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
+    const err = new Error('Application is already submitted and under review.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return formCurrent;
 }
 
 async function invokeAadhaarSendOtpEdge({ uid }) {
@@ -1294,6 +1383,126 @@ router.post('/status/verify-otp', async (req, res, next) => {
   }
 });
 
+router.post('/email/send-otp', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const email = normalizeEmail(req.body?.email);
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    await assertOnboardingFormEditable(row, mobile);
+
+    const otp = generateContactOtp();
+    try {
+      await invokeSendEmailOtpEdge({ email, otp, name: row.name ?? '' });
+    } catch (err) {
+      if (process.env.NODE_ENV === 'production') {
+        throw err;
+      }
+      console.warn(`[public/onboarding] Email OTP edge send failed; using demo OTP for ${email}:`, err?.message || err);
+    }
+
+    const key = contactOtpKey(row.id, 'email');
+    contactOtpBySession.set(key, { otp, expires: Date.now() + OTP_TTL_MS, target: email });
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[public/onboarding] Email verification OTP for employee ${row.id} (${email}): ${otp}`);
+    }
+
+    const now = new Date().toISOString();
+    const { error: updErr } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        email,
+        email_verified: false,
+        updated_at: now,
+      })
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile);
+    if (updErr) throw updErr;
+
+    return res.json({ ok: true });
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
+router.post('/email/verify-otp', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const email = normalizeEmail(req.body?.email);
+    const otpIn = String(req.body?.otp ?? '').replace(/\D/g, '');
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+    if (!/^\d{6}$/.test(otpIn)) {
+      return res.status(400).json({ error: 'OTP must be 6 digits' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    await assertOnboardingFormEditable(row, mobile);
+
+    const key = contactOtpKey(row.id, 'email');
+    const entry = contactOtpBySession.get(key);
+    if (!entry || Date.now() > entry.expires) {
+      return res.status(400).json({ error: 'OTP expired or not found. Request a new OTP.' });
+    }
+    if (normalizeEmail(entry.target) !== email) {
+      return res.status(400).json({ error: 'Email does not match the address OTP was sent to. Request a new OTP.' });
+    }
+    if (entry.otp !== otpIn) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+    contactOtpBySession.delete(key);
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        email,
+        email_verified: true,
+        updated_at: now,
+      })
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile)
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
+    }
+
+    return res.json({ verified: true, form: await formWithClientFlags(data) });
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
 router.post('/driving-license-upload', (req, res, next) => {
   licenseUpload.single('file')(req, res, (err) => {
     if (err) {
@@ -2277,6 +2486,23 @@ router.patch('/job-app-form', async (req, res, next) => {
 
     const emergencyName = String(body.pd_emergency_contact_name ?? '').trim();
     const emergencyRelation = String(body.pd_emergency_contact_relation ?? '').trim();
+    const emailIn = normalizeEmail(body.email);
+    const secondaryMobileIn = normalizeMobile(body.pd_secondary_mobile);
+    const emailFinal =
+      correctionMode && !editableFields.has('email') ? normalizeEmail(formCurrent.email) : emailIn;
+    const secondaryMobileFinal =
+      correctionMode && !editableFields.has('pd_secondary_mobile')
+        ? normalizeMobile(formCurrent.pd_secondary_mobile)
+        : secondaryMobileIn;
+    if (!EMAIL_REGEX.test(emailFinal)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+    if (!TEN_DIGIT_REGEX.test(secondaryMobileFinal)) {
+      return res.status(400).json({ error: 'Alternate mobile number must be 10 digits.' });
+    }
+    if (secondaryMobileFinal === mobile) {
+      return res.status(400).json({ error: 'Alternate mobile must be different from your primary mobile number.' });
+    }
     const fatherName = String(body.pd_father_name ?? '').trim();
     const motherName = String(body.pd_mother_name ?? '').trim();
     const spouseNameRaw = String(body.pd_spouse_name ?? '').trim();
@@ -2321,7 +2547,19 @@ router.patch('/job-app-form', async (req, res, next) => {
     if (altern.length !== 10) {
       return res.status(400).json({ error: 'Emergency contact number must be 10 digits.' });
     }
+    if (secondaryMobileFinal === altern) {
+      return res.status(400).json({ error: 'Alternate mobile must be different from emergency contact number.' });
+    }
     const alternNorm = altern;
+
+    const requiresEmailVerification = !correctionMode || editableFields.has('email');
+    if (requiresEmailVerification) {
+      if (formCurrent.email_verified !== true || normalizeEmail(formCurrent.email) !== emailFinal) {
+        return res.status(400).json({ error: 'Please verify your email address before continuing.' });
+      }
+    } else if (!formCurrent.email_verified || !EMAIL_REGEX.test(normalizeEmail(formCurrent.email))) {
+      return res.status(400).json({ error: 'Email verification is required before continuing.' });
+    }
 
     const dl = String(body.pd_driving_license ?? '').trim();
     const licenseUrl = clientOnboardingFlags.require_license_upload
@@ -2378,7 +2616,10 @@ router.patch('/job-app-form', async (req, res, next) => {
 
     /** Personal step: sync pd_city / pd_age from Aadhaar snapshot (not sent by client). */
     const update = {
-      email: String(body.email ?? '').trim() || null,
+      email: emailFinal,
+      email_verified: true,
+      pd_secondary_mobile: secondaryMobileFinal,
+      pd_secondary_mobile_verified: false,
       pd_father_name: fatherName,
       pd_mother_name: motherName,
       pd_spouse_name: isMarried ? spouseNameRaw : null,

@@ -200,6 +200,9 @@ const REVIEWABLE_JOB_FORM_FIELDS = [
   'name',
   'mobile',
   'email',
+  'email_verified',
+  'pd_secondary_mobile',
+  'pd_secondary_mobile_verified',
   'aadhaar_number',
   'aad_profile_photo',
   'aad_care_of',
@@ -238,6 +241,8 @@ const REVIEWABLE_JOB_FORM_FIELDS = [
   'bp_police_verification_url'
 ];
 const CORRECTION_EDITABLE_FIELDS = new Set([
+  'email',
+  'pd_secondary_mobile',
   'pd_alternate_number',
   'pd_emergency_contact_name',
   'pd_emergency_contact_relation',
@@ -298,6 +303,9 @@ function normalizeRejectedFields(raw) {
 function buildReinitiateFormResetPayload(nowIso) {
   return {
     email: null,
+    email_verified: false,
+    pd_secondary_mobile: null,
+    pd_secondary_mobile_verified: false,
     aadhaar_number: null,
     aadhaar_verified: false,
     aad_otp_session_id: null,

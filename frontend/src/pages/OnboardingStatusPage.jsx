@@ -9,6 +9,7 @@ const ORDERED_FIELDS = [
   'name',
   'mobile',
   'email',
+  'email_verified',
   'aadhaar_number',
   'aad_profile_photo',
   'aad_name',
@@ -21,6 +22,7 @@ const ORDERED_FIELDS = [
   'aad_pincode',
   'pd_emergency_contact_name',
   'pd_emergency_contact_relation',
+  'pd_secondary_mobile',
   'pd_alternate_number',
   'pd_current_address_same_as_aadhaar',
   'pd_current_address',
@@ -60,6 +62,7 @@ function prettifyKey(key) {
   if (key === 'pd_emergency_contact_name') return 'Emergency Contact Name';
   if (key === 'pd_emergency_contact_relation') return 'Emergency Contact Relation';
   if (key === 'pd_alternate_number') return 'Emergency Contact Number';
+  if (key === 'pd_secondary_mobile') return 'Alternate Mobile Number';
   if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
   if (key === 'pd_current_address') return 'Current Address';
   return String(key).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());

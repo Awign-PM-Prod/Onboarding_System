@@ -183,16 +183,26 @@ const NON_DAY_COMPACT = new Set([
   'rhtaken',
   'mltaken',
   'pltaken',
+  'nhtaken',
+  'fhtaken',
   'elleft',
   'clleft',
   'slleft',
+  'nhleft',
+  'fhleft',
+  'coleft',
+  'rhleft',
+  'mlleft',
+  'plleft',
   'el',
   'cl',
   'sl',
   'co',
   'rh',
   'ml',
-  'pl'
+  'pl',
+  'nh',
+  'fh'
 ]);
 
 function looksLikeAttendanceCode(raw) {
@@ -636,13 +646,21 @@ export function parseAmsAttendanceCsv(text, options = {}) {
       EL_taken: numOrNull(col(row, colMap, 'EL Taken', 'EL')),
       CL_taken: numOrNull(col(row, colMap, 'CL Taken', 'CL')),
       SL_taken: numOrNull(col(row, colMap, 'SL Taken', 'SL')),
+      NH_taken: numOrNull(col(row, colMap, 'NH Taken', 'NH')),
+      FH_taken: numOrNull(col(row, colMap, 'FH Taken', 'FH')),
       CO_taken: numOrNull(col(row, colMap, 'CO Taken', 'CO')),
       RH_taken: numOrNull(col(row, colMap, 'RH Taken', 'RH')),
       ML_taken: numOrNull(col(row, colMap, 'ML Taken', 'ML')),
       PL_taken: numOrNull(col(row, colMap, 'PL Taken', 'PL')),
       EL_left: numOrNull(col(row, colMap, 'EL Left')),
       CL_left: numOrNull(col(row, colMap, 'CL Left')),
-      SL_left: numOrNull(col(row, colMap, 'SL Left'))
+      SL_left: numOrNull(col(row, colMap, 'SL Left')),
+      NH_left: numOrNull(col(row, colMap, 'NH Left')),
+      FH_left: numOrNull(col(row, colMap, 'FH Left')),
+      CO_left: numOrNull(col(row, colMap, 'CO Left')),
+      RH_left: numOrNull(col(row, colMap, 'RH Left')),
+      ML_left: numOrNull(col(row, colMap, 'ML Left')),
+      PL_left: numOrNull(col(row, colMap, 'PL Left'))
     };
 
     const legend_totals = computeLegendTotals(dayMarks.map((d) => d.code));

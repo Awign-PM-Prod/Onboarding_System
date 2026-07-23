@@ -48,6 +48,92 @@ export const LEGEND_TOTAL_COLUMNS = [
   { code: '-', label: '-' }
 ];
 
+/** Leave balance columns shown after Not Considered in the attendance grid. */
+export const LEAVE_SUMMARY_COLUMNS = [
+  'EL',
+  'CL',
+  'SL',
+  'NH',
+  'FH',
+  'CO',
+  'RH',
+  'ML',
+  'PL',
+];
+
+/**
+ * Static demo leave values (no calculation). Cycles by row index.
+ * NH/FH use plain x/y; other types use (taken/total).
+ */
+export const DUMMY_LEAVE_DISPLAY_ROWS = [
+  {
+    EL: '(5/15)',
+    CL: '(2/12)',
+    SL: '(3/10)',
+    NH: '3/3',
+    FH: '5/5',
+    CO: '(1/2)',
+    RH: '(2/2)',
+    ML: '(0/1)',
+    PL: '(0/1)',
+  },
+  {
+    EL: '(8/15)',
+    CL: '(5/12)',
+    SL: '(2/10)',
+    NH: '3/3',
+    FH: '4/5',
+    CO: '(0/2)',
+    RH: '(1/2)',
+    ML: '(1/1)',
+    PL: '(0/1)',
+  },
+  {
+    EL: '(3/15)',
+    CL: '(1/12)',
+    SL: '(4/10)',
+    NH: '3/3',
+    FH: '5/5',
+    CO: '(1/2)',
+    RH: '(2/2)',
+    ML: '(0/1)',
+    PL: '(1/1)',
+  },
+  {
+    EL: '(6/15)',
+    CL: '(3/12)',
+    SL: '(1/10)',
+    NH: '3/3',
+    FH: '4/5',
+    CO: '(0/2)',
+    RH: '(1/2)',
+    ML: '(1/1)',
+    PL: '(0/1)',
+  },
+];
+
+export function normalizeAttendanceGender(gender) {
+  const value = String(gender ?? '').trim().toUpperCase();
+  if (value === 'M' || value === 'MALE') return 'male';
+  if (value === 'F' || value === 'FEMALE') return 'female';
+  return 'unknown';
+}
+
+/**
+ * Display static dummy leave values. ML hidden for males; PL hidden for females.
+ * No values are derived from day marks or leave_summary.
+ */
+export function formatLeaveSummaryCell(colKey, row, rowIndex = 0) {
+  const gender = normalizeAttendanceGender(row?.gender);
+
+  if (colKey === 'ML' && gender === 'male') return '—';
+  if (colKey === 'PL' && gender === 'female') return '—';
+
+  const template =
+    DUMMY_LEAVE_DISPLAY_ROWS[Math.abs(Number(rowIndex) || 0) % DUMMY_LEAVE_DISPLAY_ROWS.length];
+  return template[colKey] ?? '—';
+}
+
 export function isPresentOnHolidayCode(code) {
   const c = String(code ?? '').toUpperCase();
   return c === 'P-NH' || c === 'P-FH';

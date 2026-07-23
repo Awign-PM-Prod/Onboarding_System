@@ -257,6 +257,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ mobile, employee_id: employeeId || null, otp })
     }),
+  sendEmailOtp: ({ mobile, employeeId, email }) =>
+    request('/api/public/onboarding/email/send-otp', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, employee_id: employeeId || null, email })
+    }),
+  verifyEmailOtp: ({ mobile, employeeId, email, otp }) =>
+    request('/api/public/onboarding/email/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, employee_id: employeeId || null, email, otp })
+    }),
   verifyPan: ({ mobile, employeeId, panNumber }) =>
     request('/api/public/onboarding/pan/verify', {
       method: 'POST',
