@@ -2497,11 +2497,13 @@ router.patch('/job-app-form', async (req, res, next) => {
     if (!EMAIL_REGEX.test(emailFinal)) {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
-    if (!TEN_DIGIT_REGEX.test(secondaryMobileFinal)) {
-      return res.status(400).json({ error: 'Alternate mobile number must be 10 digits.' });
-    }
-    if (secondaryMobileFinal === mobile) {
-      return res.status(400).json({ error: 'Alternate mobile must be different from your primary mobile number.' });
+    if (secondaryMobileFinal) {
+      if (!TEN_DIGIT_REGEX.test(secondaryMobileFinal)) {
+        return res.status(400).json({ error: 'Alternate mobile number must be 10 digits.' });
+      }
+      if (secondaryMobileFinal === mobile) {
+        return res.status(400).json({ error: 'Alternate mobile must be different from your primary mobile number.' });
+      }
     }
     const fatherName = String(body.pd_father_name ?? '').trim();
     const motherName = String(body.pd_mother_name ?? '').trim();
@@ -2547,7 +2549,7 @@ router.patch('/job-app-form', async (req, res, next) => {
     if (altern.length !== 10) {
       return res.status(400).json({ error: 'Emergency contact number must be 10 digits.' });
     }
-    if (secondaryMobileFinal === altern) {
+    if (secondaryMobileFinal && secondaryMobileFinal === altern) {
       return res.status(400).json({ error: 'Alternate mobile must be different from emergency contact number.' });
     }
     const alternNorm = altern;
@@ -2618,7 +2620,7 @@ router.patch('/job-app-form', async (req, res, next) => {
     const update = {
       email: emailFinal,
       email_verified: true,
-      pd_secondary_mobile: secondaryMobileFinal,
+      pd_secondary_mobile: secondaryMobileFinal || null,
       pd_secondary_mobile_verified: false,
       pd_father_name: fatherName,
       pd_mother_name: motherName,

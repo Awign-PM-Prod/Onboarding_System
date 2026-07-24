@@ -292,7 +292,7 @@ const STEP_PREFIX_RULES = {
   photo: ['bp_']
 };
 const STEP_OPTIONAL_FIELDS = {
-  personal: [],
+  personal: ['pd_secondary_mobile'],
   qualification: ['qual_additional_certificates_url'],
   kyc: [],
   photo: ['bp_esic_number', 'bp_police_verification_url']
@@ -2286,7 +2286,8 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
 
   const requiredOk =
     (!isRequired('email', true) || (EMAIL_REGEX.test(normalizeEmail(draft.email)) && emailVerified)) &&
-    (!isRequired('pd_secondary_mobile', true) ||
+    (!isRequired('pd_secondary_mobile', false) ||
+      !normalizeMobile(draft.pd_secondary_mobile) ||
       TEN_DIGIT_REGEX.test(normalizeMobile(draft.pd_secondary_mobile))) &&
     (!isRequired('pd_father_name', true) || fatherName) &&
     (!isRequired('pd_mother_name', true) || motherName) &&
@@ -2408,7 +2409,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           return;
         }
       }
-      if (isRequired('pd_secondary_mobile', true)) {
+      if (secondaryMobile || isRequired('pd_secondary_mobile', false)) {
         if (!TEN_DIGIT_REGEX.test(secondaryMobile)) {
           setError('Alternate mobile number must be 10 digits.');
           setSaving(false);
@@ -2419,18 +2420,14 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           setSaving(false);
           return;
         }
+        if (secondaryMobile === alt) {
+          setError('Alternate mobile must be different from emergency contact number.');
+          setSaving(false);
+          return;
+        }
       }
       if (alt.length !== 10) {
         setError('Emergency contact number must be 10 digits.');
-        setSaving(false);
-        return;
-      }
-      if (
-        isRequired('pd_secondary_mobile', true) &&
-        TEN_DIGIT_REGEX.test(secondaryMobile) &&
-        secondaryMobile === alt
-      ) {
-        setError('Alternate mobile must be different from emergency contact number.');
         setSaving(false);
         return;
       }
@@ -2555,7 +2552,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           {shouldShow('pd_secondary_mobile') && (
             <AlternateMobileField
               label="Alternate Mobile Number"
-              required={isRequired('pd_secondary_mobile', true)}
+              required={isRequired('pd_secondary_mobile', false)}
               value={draft.pd_secondary_mobile}
               onChange={(next) => setDraft((d) => ({ ...d, pd_secondary_mobile: next }))}
             />
@@ -2935,7 +2932,6 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           />
           <AlternateMobileField
             label="Alternate Mobile Number"
-            required
             value={draft.pd_secondary_mobile}
             onChange={(next) => setDraft((d) => ({ ...d, pd_secondary_mobile: next }))}
           />
@@ -3352,10 +3348,6 @@ export default function OnboardingForm() {
       if (!TEN_DIGIT_REGEX.test(String(jobFormRow?.pd_alternate_number ?? ''))) {
         visibleFields.add('pd_alternate_number');
         requiredFields.add('pd_alternate_number');
-      }
-      if (!TEN_DIGIT_REGEX.test(String(jobFormRow?.pd_secondary_mobile ?? ''))) {
-        visibleFields.add('pd_secondary_mobile');
-        requiredFields.add('pd_secondary_mobile');
       }
       if (jobFormRow?.email_verified !== true || !EMAIL_REGEX.test(normalizeEmail(jobFormRow?.email))) {
         visibleFields.add('email');
