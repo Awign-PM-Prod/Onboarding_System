@@ -175,6 +175,12 @@ const NON_DAY_COMPACT = new Set([
   'totaldays',
   'remarks',
   'remark',
+  'incentive',
+  'incentiveamount',
+  'incentives',
+  'addonincentive',
+  'addonincentives',
+  'addonincentiveamount',
   'eltaken',
   'eltaken',
   'cltaken',
@@ -700,6 +706,9 @@ export function parseAmsAttendanceCsv(text, options = {}) {
       leave_summary,
       legend_totals,
       remarks: strOrNull(col(row, colMap, 'Remarks', 'Remark')),
+      addon_incentive: numOrNull(
+        col(row, colMap, 'Add-on Incentive', 'Add-on Incentives', 'Addon Incentive', 'Addon Incentives')
+      ),
       day_marks: dayMarks
     });
   }

@@ -8,7 +8,9 @@
     "dev": "nodemon --exec \"node --use-system-ca\" src/index.js",
     "start": "node --use-system-ca src/index.js",
     "seed": "node --use-system-ca scripts/seed.mjs",
-    "smoke:attendance": "node scripts/smoke-attendance-parser.mjs"
+    "smoke:attendance": "node scripts/smoke-attendance-parser.mjs",
+    "smoke:calculator": "node scripts/smoke-attendance-calculator.mjs",
+    "smoke:policy": "node scripts/smoke-client-policy.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.0",

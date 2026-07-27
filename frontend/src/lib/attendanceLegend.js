@@ -1,5 +1,7 @@
 /** Shared attendance legend constants for frontend */
 
+import { annualLeaveAllowanceFromPolicy } from './clientPolicy.js';
+
 export const LEGEND_CODES = [
   'P', 'W', 'NH', 'FH', 'P-NH', 'P-FH', 'HD',
   'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO',
@@ -61,57 +63,6 @@ export const LEAVE_SUMMARY_COLUMNS = [
   'PL',
 ];
 
-/**
- * Static demo leave values (no calculation). Cycles by row index.
- * NH/FH use plain x/y; other types use (taken/total).
- */
-export const DUMMY_LEAVE_DISPLAY_ROWS = [
-  {
-    EL: '(5/15)',
-    CL: '(2/12)',
-    SL: '(3/10)',
-    NH: '3/3',
-    FH: '5/5',
-    CO: '(1/2)',
-    RH: '(2/2)',
-    ML: '(0/1)',
-    PL: '(0/1)',
-  },
-  {
-    EL: '(8/15)',
-    CL: '(5/12)',
-    SL: '(2/10)',
-    NH: '3/3',
-    FH: '4/5',
-    CO: '(0/2)',
-    RH: '(1/2)',
-    ML: '(1/1)',
-    PL: '(0/1)',
-  },
-  {
-    EL: '(3/15)',
-    CL: '(1/12)',
-    SL: '(4/10)',
-    NH: '3/3',
-    FH: '5/5',
-    CO: '(1/2)',
-    RH: '(2/2)',
-    ML: '(0/1)',
-    PL: '(1/1)',
-  },
-  {
-    EL: '(6/15)',
-    CL: '(3/12)',
-    SL: '(1/10)',
-    NH: '3/3',
-    FH: '4/5',
-    CO: '(0/2)',
-    RH: '(1/2)',
-    ML: '(1/1)',
-    PL: '(0/1)',
-  },
-];
-
 export function normalizeAttendanceGender(gender) {
   const value = String(gender ?? '').trim().toUpperCase();
   if (value === 'M' || value === 'MALE') return 'male';
@@ -120,18 +71,47 @@ export function normalizeAttendanceGender(gender) {
 }
 
 /**
- * Display static dummy leave values. ML hidden for males; PL hidden for females.
- * No values are derived from day marks or leave_summary.
+ * Format leave summary from computed row.leave_summary.
+ * ML hidden for males; PL hidden for females.
+ * When policyAllowance is passed, annual totals come from the policy form.
  */
-export function formatLeaveSummaryCell(colKey, row, rowIndex = 0) {
+export function formatLeaveSummaryCell(colKey, row, policyAllowance = null) {
   const gender = normalizeAttendanceGender(row?.gender);
 
   if (colKey === 'ML' && gender === 'male') return '—';
   if (colKey === 'PL' && gender === 'female') return '—';
 
-  const template =
-    DUMMY_LEAVE_DISPLAY_ROWS[Math.abs(Number(rowIndex) || 0) % DUMMY_LEAVE_DISPLAY_ROWS.length];
-  return template[colKey] ?? '—';
+  const ls = row?.leave_summary ?? {};
+  const takenKey = `${colKey}_taken`;
+  const leftKey = `${colKey}_left`;
+  const annualKey = `${colKey}_annual`;
+  const taken = ls[takenKey];
+  const left = ls[leftKey];
+  const annualFromSummary = ls[annualKey];
+  const annualFromPolicy = policyAllowance
+    ? annualLeaveAllowanceFromPolicy(policyAllowance, colKey)
+    : null;
+  const annual =
+    annualFromPolicy != null ? annualFromPolicy : annualFromSummary;
+
+  if (colKey === 'NH' || colKey === 'FH') {
+    const allowed = ls[`${colKey}_allowed`];
+    if (allowed != null && taken != null) {
+      return `${taken}/${allowed}`;
+    }
+    if (left != null && taken != null) {
+      return `${taken}/${Number(taken) + Number(left)}`;
+    }
+    return '—';
+  }
+
+  if (annual != null) {
+    return `(${taken ?? 0}/${annual})`;
+  }
+
+  if (taken == null && left == null) return '—';
+  const total = Number(taken ?? 0) + Number(left ?? 0);
+  return `(${taken ?? 0}/${total})`;
 }
 
 export function isPresentOnHolidayCode(code) {
@@ -171,4 +151,16 @@ export function displayCode(code) {
   const c = String(code ?? '').toUpperCase();
   if (c === 'A') return 'A';
   return c || '-';
+}
+
+/** Count occurrences of each legend code in day marks (draft preview). */
+export function computeLegendTotals(codes) {
+  const totals = Object.fromEntries(LEGEND_TOTAL_COLUMNS.map((col) => [col.code, 0]));
+  for (const raw of codes ?? []) {
+    const c = String(raw ?? '').trim().toUpperCase();
+    if (c && Object.prototype.hasOwnProperty.call(totals, c)) {
+      totals[c] += 1;
+    }
+  }
+  return totals;
 }

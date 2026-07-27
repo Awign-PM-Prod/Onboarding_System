@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { formatDesignationLabel } from '../lib/formatLabels';
+import { displayNumericValue } from '../lib/numericInput';
 import ModalOverlay from './ModalOverlay';
 const empty = {
   designation: '',
@@ -93,13 +94,23 @@ export default function RoleDetailsModal({
             <Field label="CTC Value" error={fieldErrors.ctc_value}>
               <input
                 className="input"
-                type="number"
-                min="0"
-                step="1"
-                inputMode="numeric"
+                type="text"
+                inputMode="decimal"
                 placeholder="0"
-                value={form.ctc_value}
-                onChange={(e) => set({ ctc_value: e.target.value })}
+                value={displayNumericValue(form.ctc_value)}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') {
+                    set({ ctc_value: '' });
+                    return;
+                  }
+                  if (/^\d*\.?\d*$/.test(raw)) set({ ctc_value: raw });
+                }}
+                onBlur={() => {
+                  if (form.ctc_value === '') return;
+                  const n = Number(form.ctc_value);
+                  if (Number.isFinite(n)) set({ ctc_value: String(n) });
+                }}
               />
             </Field>
           </div>

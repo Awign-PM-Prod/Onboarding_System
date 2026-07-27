@@ -66,7 +66,24 @@ async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   };
   const res = await fetchWithTimeout(apiUrl(path), { ...options, headers }, timeoutMs);
   const text = await res.text();
-  const body = text ? JSON.parse(text) : null;
+  let body = null;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      const isHtml = /^\s*</.test(text);
+      const wrongDevPort =
+        import.meta.env.DEV &&
+        BASE_URL.includes('localhost:8088') &&
+        isHtml;
+      const hint = wrongDevPort
+        ? 'VITE_API_BASE_URL points at the Vite dev server (8088). Use http://localhost:8089 or leave it empty to use the dev proxy.'
+        : isHtml
+          ? 'The API returned HTML instead of JSON. Confirm the backend is running (port 8089) and restart it after code updates.'
+          : text.slice(0, 120);
+      throw new Error(`Request failed (${res.status}): ${hint}`);
+    }
+  }
   if (!res.ok) {
     const err = new Error(body?.error || `Request failed (${res.status})`);
     err.status = res.status;
@@ -114,11 +131,22 @@ export const api = {
   me: () => request('/api/me'),
   listProgramManagers: () => request('/api/program-managers'),
   listClients: () => request('/api/clients'),
+  getClient: (id) => request(`/api/clients/${encodeURIComponent(id)}`),
+  saveClientPolicy: (id, payload) =>
+    request(`/api/clients/${encodeURIComponent(id)}/policy`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  listClientPolicyChanges: (id) =>
+    request(`/api/clients/${encodeURIComponent(id)}/policy-changes`),
   getPayrollDashboardStats: () => request('/api/clients/dashboard-stats'),
   createClient: (payload) =>
     request('/api/clients', { method: 'POST', body: JSON.stringify(payload) }),
   updateClient: (id, payload) =>
     request(`/api/clients/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  assignClientProgramManager: (id, payload) =>
+    request(`/api/clients/${id}/program-manager`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  listClientPmTransfers: (id) => request(`/api/clients/${id}/pm-transfers`),
 
   listPmClients: () => request('/api/pm/clients'),
   getPmDashboardStats: () => request('/api/pm/clients/dashboard-stats'),
@@ -368,6 +396,32 @@ export const api = {
     request(
       `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/rows/${encodeURIComponent(rowId)}/days/${encodeURIComponent(date)}`,
       { method: 'PATCH', body: JSON.stringify({ code }) }
+    ),
+  saveAttendanceRows: ({ clientId, sheetId, rows }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/rows`,
+      { method: 'PATCH', body: JSON.stringify({ rows }) },
+      ATTENDANCE_GET_TIMEOUT_MS
+    ),
+  exportAttendanceCsv: ({ clientId, sheetId, type }) =>
+    fileRequest(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/export?type=${encodeURIComponent(type)}`
+    ),
+  exportAttendanceTemplate: ({ clientId, month }) =>
+    fileRequest(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/export?month=${encodeURIComponent(month)}&type=template`
+    ),
+  recomputeAttendance: ({ clientId, sheetId }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/recompute`,
+      { method: 'POST', body: JSON.stringify({}) },
+      ATTENDANCE_GET_TIMEOUT_MS
+    ),
+  recomputeAllAttendance: ({ clientId }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/recompute-all`,
+      { method: 'POST', body: JSON.stringify({}) },
+      ATTENDANCE_GET_TIMEOUT_MS
     ),
   submitAttendance: ({ clientId, sheetId }) =>
     request(

@@ -16,6 +16,8 @@ import PayrollClientFinalApprovedEmployeesPage from './pages/PayrollClientFinalA
 import PayrollClientRejectedEmployeesPage from './pages/PayrollClientRejectedEmployeesPage';
 import PayrollClientIdentityNumbersPage from './pages/PayrollClientIdentityNumbersPage';
 import PayrollClientAttendancePage from './pages/PayrollClientAttendancePage';
+import PayrollClientPolicyPage from './pages/PayrollClientPolicyPage';
+import PayrollClientAssignPmPage from './pages/PayrollClientAssignPmPage';
 import PayrollHeadDashboardHome from './pages/PayrollHeadDashboardHome';
 import PayrollHeadClientsPage from './pages/PayrollHeadClientsPage';
 import OnboardingForm from './pages/OnboardingForm';
@@ -72,6 +74,8 @@ export default function App() {
         <Route path="rejected-employees" element={<PayrollClientRejectedEmployeesPage />} />
         <Route path="identity-numbers" element={<PayrollClientIdentityNumbersPage />} />
         <Route path="attendance" element={<PayrollClientAttendancePage />} />
+        <Route path="policy" element={<PayrollClientPolicyPage />} />
+        <Route path="assign-pm" element={<PayrollClientAssignPmPage />} />
       </Route>
 
       <Route

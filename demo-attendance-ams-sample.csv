@@ -1,3 +1,7 @@
 Emp Code,Employee Name,Mobile,Gender,Location,Designation,DOJ,Status,Amt. Type,Monthly Amt,Contract Code,Entity,Cycle Type,Payroll Cycle,Payroll Month,1-Apr-26,2-Apr-26,3-Apr-26,4-Apr-26,5-Apr-26,6-Apr-26,7-Apr-26,Paid Days,LOP,Not Considered,Total Days,EL Taken,CL Taken,SL Taken,Remarks
+ATT001,Arjun Engineer,9900022201,M,Bangalore,Engineer,2026-01-15,Active,MONTHLY,45000,ATT-TEST,Awign,Monthly,Cycle-1,Apr-26,P,P,NH,A,W,W,P,4,1,0,7,0,0,0,Engineer sample
+ATT002,Meera Operator,9900022202,F,Bangalore,Operator,2026-01-15,Active,MONTHLY,32000,ATT-TEST,Awign,Monthly,Cycle-1,Apr-26,P,NH,P,P,W,W,HD,4.5,0,0,7,0,0,0,Operator sample
+ATT003,Kiran Inspector,9900022203,M,Bangalore,Inspector,2026-01-15,Active,MONTHLY,38000,ATT-TEST,Awign,Monthly,Cycle-1,Apr-26,P,P,P,EL,W,W,P,5,0,0,7,1,0,0,Inspector sample
+ATT004,Divya Supervisor,9900022204,F,Bangalore,Supervisor,2026-01-15,Active,MONTHLY,52000,ATT-TEST,Awign,Monthly,Cycle-1,Apr-26,P,P,P,P,W,W,P,5,0,0,7,0,0,0,Supervisor sample
 T016394,Anita Rao,9900011122,F,Bangalore,Field Executive,2026-05-05,Active,MONTHLY,35000,ACM-001,Awign,Monthly,Cycle-1,Apr-26,P,P,NH,A,W,W,P,4,1,0,7,0,0,0,Sample row
-T016395,Vikram Desai,9900011123,M,Bangalore,Field Executive,2026-05-06,Active,MONTHLY,33000,ACM-001,Awign,Monthly,Cycle-1,Apr-26,P,FH,P,P,W,W,HD,4.5,0,0,7,0,0,0,Sample row
+T016395,Vikram Desai,9900011123,M,Bangalore,Field Executive,2026-05-06,Active,MONTHLY,33000,ACM-001,Awign,Monthly,Cycle-1,Apr-26,P,NH,P,P,W,W,HD,4.5,0,0,7,0,0,0,Sample row

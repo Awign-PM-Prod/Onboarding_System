@@ -3,10 +3,19 @@ import multer from 'multer';
 import { supabaseAdmin } from '../supabase.js';
 import { parseAmsAttendanceCsv } from '../utils/amsAttendanceParser.js';
 import {
-  computeLegendTotals,
   isValidAttendanceCode,
   normalizeAttendanceCode
 } from '../utils/attendanceLegend.js';
+import {
+  fetchYtdTakenByEmployee,
+  loadClientPolicyForResponse,
+  recalculateAllAttendanceSheetsForClient,
+  recalculateRowSummary,
+  recalculateSheetRows
+} from '../utils/attendanceRecalc.js';
+import { mergeYtdTaken } from '../utils/attendanceCalculator.js';
+import { getPayrollPeriod, payrollCycleLabel } from '../utils/clientPolicy.js';
+import { buildAttendanceExportCsv, exportFilename } from '../utils/attendanceExport.js';
 
 const router = Router({ mergeParams: true });
 
@@ -50,6 +59,49 @@ async function resolveClientAccess(req, clientId) {
   req.user.role = user.role;
   req.user.profile = user;
   return { ok: true, client, user, isPm, isPl };
+}
+
+function formatMarkLabel(code) {
+  return code ?? '(empty)';
+}
+
+function buildDayMarkChangeMessage(empCode, changes, maxLen = 500) {
+  const parts = changes.map(({ markDate, before, after }) =>
+    `${markDate} ${formatMarkLabel(before)}→${formatMarkLabel(after)}`
+  );
+  let message = `${empCode}: ${parts.join('; ')}`;
+  if (message.length > maxLen) {
+    const kept = [];
+    let len = `${empCode}: `.length;
+    for (const part of parts) {
+      const next = kept.length ? `; ${part}` : part;
+      if (len + next.length + 12 > maxLen) break;
+      kept.push(part);
+      len += next.length;
+    }
+    const remaining = parts.length - kept.length;
+    message = `${empCode}: ${kept.join('; ')}${remaining > 0 ? `; …and ${remaining} more` : ''}`;
+  }
+  return message;
+}
+
+function buildRowFieldChangeMessage(empCode, beforeFields, rowUpdate) {
+  const parts = [];
+  if (beforeFields.addon_incentive !== rowUpdate.addon_incentive) {
+    parts.push(`addon incentive ${formatMarkLabel(beforeFields.addon_incentive)}→${formatMarkLabel(rowUpdate.addon_incentive)}`);
+  }
+  if (beforeFields.remarks !== rowUpdate.remarks) {
+    if (beforeFields.remarks === rowUpdate.remarks) {
+      // no-op
+    } else if (!beforeFields.remarks && rowUpdate.remarks) {
+      parts.push('remarks added');
+    } else if (beforeFields.remarks && !rowUpdate.remarks) {
+      parts.push('remarks cleared');
+    } else {
+      parts.push('remarks updated');
+    }
+  }
+  return parts.length ? `${empCode}: ${parts.join('; ')}` : `${empCode}: row fields updated`;
 }
 
 async function writeLog({
@@ -282,10 +334,12 @@ router.get('/', async (req, res, next) => {
 
     if (!sheet) {
       const eligiblePms = await loadEligiblePms(access.client);
+      const client_policy = await loadClientPolicyForResponse(clientId);
       return res.json({
         sheet: null,
         rows: [],
         client: access.client,
+        client_policy,
         role: access.user.role,
         eligible_pms: eligiblePms,
         grant_user_ids: [],
@@ -299,13 +353,114 @@ router.get('/', async (req, res, next) => {
     const bundle = await fetchSheetBundle(sheet.id);
     const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
     const eligiblePms = await loadEligiblePms(access.client);
+    const client_policy = await loadClientPolicyForResponse(clientId);
     res.json({
       ...bundle,
       client: access.client,
+      client_policy,
       role: access.user.role,
       eligible_pms: eligiblePms,
       ...caps
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST recompute all sheets for client (e.g. after policy change)
+router.post('/recompute-all', async (req, res, next) => {
+  try {
+    const clientId = req.params.clientId;
+    const access = await resolveClientAccess(req, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    const result = await recalculateAllAttendanceSheetsForClient(clientId);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET export template for a month before any sheet has been uploaded
+router.get('/export', async (req, res, next) => {
+  try {
+    const clientId = req.params.clientId;
+    const access = await resolveClientAccess(req, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    const type = String(req.query.type ?? 'template').toLowerCase();
+    if (type !== 'template') {
+      return res.status(400).json({ error: 'Only template export is available before CSV upload' });
+    }
+
+    const monthDate = monthParamToDate(req.query.month);
+    if (!monthDate) {
+      return res.status(400).json({ error: 'month query param required (YYYY-MM)' });
+    }
+
+    const { data: existingSheet, error: sheetErr } = await supabaseAdmin
+      .from('attendance_sheets')
+      .select('id')
+      .eq('client_id', clientId)
+      .eq('attendance_month', monthDate)
+      .maybeSingle();
+    if (sheetErr) throw sheetErr;
+    if (existingSheet?.id) {
+      return res.status(400).json({
+        error: 'Attendance sheet already exists for this month. Use sheet export instead.'
+      });
+    }
+
+    const { data: employees, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, emp_code, name, mobile, designation, date_of_joining, ctc_type')
+      .eq('client_id', clientId)
+      .not('emp_code', 'is', null)
+      .order('name', { ascending: true });
+    if (empErr) throw empErr;
+
+    const client_policy = await loadClientPolicyForResponse(clientId);
+    const monthYmVal = monthYm(monthDate);
+    const period = getPayrollPeriod(client_policy?.attendance_policy, monthYmVal);
+
+    const sheet = {
+      attendance_month: monthDate,
+      contract_code: access.client.contract_code,
+      payroll_cycle: payrollCycleLabel(client_policy?.attendance_policy),
+      payroll_start_date: period?.start ?? null,
+      payroll_end_date: period?.end ?? null
+    };
+
+    const rows = (employees ?? []).map((emp) => ({
+      emp_code: String(emp.emp_code ?? '').trim(),
+      employee_name_snapshot: emp.name ?? '',
+      mobile: emp.mobile ?? '',
+      designation: emp.designation ?? '',
+      doj: emp.date_of_joining ?? null,
+      amt_type: emp.ctc_type ?? '',
+      day_marks: [],
+      legend_totals: {},
+      leave_summary: {}
+    }));
+
+    if (!rows.length) {
+      rows.push({
+        emp_code: '',
+        employee_name_snapshot: '',
+        mobile: '',
+        designation: '',
+        doj: null,
+        amt_type: '',
+        day_marks: [],
+        legend_totals: {},
+        leave_summary: {}
+      });
+    }
+
+    const csv = buildAttendanceExportCsv({ sheet, rows, type: 'template' });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(sheet, 'template')}"`);
+    return res.send(csv);
   } catch (err) {
     next(err);
   }
@@ -551,7 +706,8 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       total_days: row.total_days,
       legend_totals: row.legend_totals,
       leave_summary: row.leave_summary,
-      remarks: row.remarks
+      remarks: row.remarks,
+      addon_incentive: row.addon_incentive
     }));
 
     let insertedRows = [];
@@ -586,6 +742,25 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       if (dmErr) throw dmErr;
     }
 
+    const bundleBeforeRecalc = await fetchSheetBundle(sheetId);
+    const { payrollMeta, defaultMarksApplied } = await recalculateSheetRows(
+      bundleBeforeRecalc.sheet,
+      bundleBeforeRecalc.rows,
+      clientId
+    );
+
+    const sheetMetaUpdate = {
+      payroll_cycle: metaToUse?.payroll_cycle || payrollMeta.payroll_cycle,
+      payroll_start_date: metaToUse?.payroll_start_date || payrollMeta.payroll_start_date,
+      payroll_end_date: metaToUse?.payroll_end_date || payrollMeta.payroll_end_date,
+      updated_at: new Date().toISOString()
+    };
+    await supabaseAdmin.from('attendance_sheets').update(sheetMetaUpdate).eq('id', sheetId);
+
+    const uploadMessage = defaultMarksApplied > 0
+      ? `Uploaded ${matched.length} rows (${defaultMarksApplied} default week-off/holiday mark(s) applied)`
+      : `Uploaded ${matched.length} rows`;
+
     await writeLog({
       sheetId,
       action: 'UPLOAD',
@@ -595,25 +770,255 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
         imported: matched.length,
         skipped: skipped.length,
         day_marks: dayMarkPayloads.length,
+        default_marks_applied: defaultMarksApplied,
         filename: req.file.originalname
       },
-      message: `Uploaded ${matched.length} rows`
+      message: uploadMessage
     });
 
     const bundle = await fetchSheetBundle(sheetId);
     const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
     const eligiblePms = await loadEligiblePms(access.client);
+    const client_policy = await loadClientPolicyForResponse(clientId);
     res.status(skipped.length || allErrors.length ? 207 : 200).json({
       imported: matched.length,
       skipped: skipped.length,
       errors: [...allErrors, ...skipped],
       ...bundle,
       client: access.client,
+      client_policy,
       role: access.user.role,
       eligible_pms: eligiblePms,
       ...caps
     });
   } catch (err) {
+    next(err);
+  }
+});
+
+// GET export CSV
+router.get('/:sheetId/export', async (req, res, next) => {
+  try {
+    const clientId = req.params.clientId;
+    const access = await resolveClientAccess(req, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    const type = String(req.query.type ?? 'data').toLowerCase();
+    const allowed = new Set(['data', 'template', 'incentive', 'leave']);
+    if (!allowed.has(type)) {
+      return res.status(400).json({ error: 'type must be data, template, incentive, or leave' });
+    }
+
+    const { data: sheet, error } = await supabaseAdmin
+      .from('attendance_sheets')
+      .select('*')
+      .eq('id', req.params.sheetId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
+
+    const bundle = await fetchSheetBundle(sheet.id);
+    const csv = buildAttendanceExportCsv({
+      sheet: bundle.sheet,
+      rows: bundle.rows,
+      type
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(sheet, type)}"`);
+    return res.send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH batch save row changes (day marks, incentive, remarks)
+router.patch('/:sheetId/rows', async (req, res, next) => {
+  try {
+    const clientId = req.params.clientId;
+    const access = await resolveClientAccess(req, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    const changes = req.body?.rows;
+    if (!Array.isArray(changes) || changes.length === 0) {
+      return res.status(400).json({ error: 'rows array is required' });
+    }
+
+    const { data: sheet, error } = await supabaseAdmin
+      .from('attendance_sheets')
+      .select('*')
+      .eq('id', req.params.sheetId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
+
+    const { data: grantsForPatch } = await supabaseAdmin
+      .from('attendance_edit_grants')
+      .select('user_id')
+      .eq('sheet_id', sheet.id);
+    assertCanEdit(
+      sheet,
+      access,
+      (grantsForPatch ?? []).map((g) => g.user_id)
+    );
+
+    const client_policy = await loadClientPolicyForResponse(clientId);
+    const monthYmVal = monthYm(sheet.attendance_month);
+    const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
+
+    for (const change of changes) {
+      const rowId = change?.row_id;
+      if (!rowId) continue;
+
+      const { data: row, error: rowErr } = await supabaseAdmin
+        .from('attendance_rows')
+        .select('*')
+        .eq('id', rowId)
+        .eq('sheet_id', sheet.id)
+        .maybeSingle();
+      if (rowErr) throw rowErr;
+      if (!row) continue;
+
+      const beforeFields = {
+        incentive: row.incentive,
+        addon_incentive: row.addon_incentive,
+        remarks: row.remarks
+      };
+      const dayMarkChanges = [];
+
+      if (Array.isArray(change.day_marks)) {
+        for (const dm of change.day_marks) {
+          const markDate = String(dm?.mark_date ?? '').slice(0, 10);
+          const code = normalizeAttendanceCode(dm?.code);
+          if (!markDate || !code || !isValidAttendanceCode(code)) continue;
+
+          const { data: existingMark, error: mErr } = await supabaseAdmin
+            .from('attendance_day_marks')
+            .select('*')
+            .eq('row_id', row.id)
+            .eq('mark_date', markDate)
+            .maybeSingle();
+          if (mErr) throw mErr;
+
+          const beforeCode = existingMark?.code ?? null;
+          dayMarkChanges.push({ markDate, before: beforeCode, after: code });
+
+          if (existingMark) {
+            const { error: uErr } = await supabaseAdmin
+              .from('attendance_day_marks')
+              .update({ code })
+              .eq('id', existingMark.id);
+            if (uErr) throw uErr;
+          } else {
+            const { error: cErr } = await supabaseAdmin
+              .from('attendance_day_marks')
+              .insert({ row_id: row.id, mark_date: markDate, code });
+            if (cErr) throw cErr;
+          }
+        }
+      }
+
+      const rowUpdate = { updated_at: new Date().toISOString() };
+      if (change.addon_incentive !== undefined) {
+        const n = change.addon_incentive === null || change.addon_incentive === ''
+          ? null
+          : Number(change.addon_incentive);
+        rowUpdate.addon_incentive = Number.isFinite(n) ? n : null;
+      }
+      if (change.remarks !== undefined) {
+        const s = String(change.remarks ?? '').trim();
+        rowUpdate.remarks = s || null;
+      }
+
+      const { data: allMarks, error: allErr } = await supabaseAdmin
+        .from('attendance_day_marks')
+        .select('mark_date, code')
+        .eq('row_id', row.id);
+      if (allErr) throw allErr;
+
+      const ytdMap = row.employee_id
+        ? await fetchYtdTakenByEmployee(clientId, year, monthYmVal, [row.employee_id])
+        : new Map();
+      const summary = await recalculateRowSummary({
+        row,
+        dayMarks: allMarks ?? [],
+        policyBundle: client_policy,
+        monthYm: monthYmVal,
+        ytdTaken: ytdMap.get(row.employee_id) ?? mergeYtdTaken([])
+      });
+
+      Object.assign(rowUpdate, {
+        paid_days: summary.paid_days,
+        lop: summary.lop,
+        not_considered: summary.not_considered,
+        total_days: summary.total_days,
+        legend_totals: summary.legend_totals,
+        leave_summary: summary.leave_summary,
+        incentive: summary.incentive
+      });
+
+      const { error: totErr } = await supabaseAdmin
+        .from('attendance_rows')
+        .update(rowUpdate)
+        .eq('id', row.id);
+      if (totErr) throw totErr;
+
+      const fieldChanged =
+        (change.addon_incentive !== undefined && beforeFields.addon_incentive !== rowUpdate.addon_incentive)
+        || (change.remarks !== undefined && beforeFields.remarks !== rowUpdate.remarks);
+
+      if (dayMarkChanges.length) {
+        await writeLog({
+          sheetId: sheet.id,
+          rowId: row.id,
+          action: 'CELL_CHANGE',
+          actorUserId: req.user.id,
+          actorRole: access.user.role,
+          beforeJson: { day_marks: dayMarkChanges.map((c) => ({ mark_date: c.markDate, code: c.before })) },
+          afterJson: { day_marks: dayMarkChanges.map((c) => ({ mark_date: c.markDate, code: c.after })) },
+          message: buildDayMarkChangeMessage(row.emp_code, dayMarkChanges)
+        });
+      }
+      if (fieldChanged) {
+        await writeLog({
+          sheetId: sheet.id,
+          rowId: row.id,
+          action: 'ROW_FIELD_CHANGE',
+          actorUserId: req.user.id,
+          actorRole: access.user.role,
+          beforeJson: beforeFields,
+          afterJson: {
+            addon_incentive: rowUpdate.addon_incentive,
+            remarks: rowUpdate.remarks
+          },
+          message: buildRowFieldChangeMessage(row.emp_code, beforeFields, rowUpdate)
+        });
+      }
+    }
+
+    if (sheet.status === 'SUBMITTED') {
+      await supabaseAdmin
+        .from('attendance_sheets')
+        .update({ status: 'DRAFT', updated_at: new Date().toISOString() })
+        .eq('id', sheet.id);
+    }
+
+    const bundle = await fetchSheetBundle(sheet.id);
+    const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
+    const eligiblePms = await loadEligiblePms(access.client);
+    res.json({
+      ok: true,
+      ...bundle,
+      client: access.client,
+      client_policy,
+      role: access.user.role,
+      eligible_pms: eligiblePms,
+      ...caps
+    });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   }
 });
@@ -693,14 +1098,36 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
 
     const { data: allMarks, error: allErr } = await supabaseAdmin
       .from('attendance_day_marks')
-      .select('code')
+      .select('mark_date, code')
       .eq('row_id', row.id);
     if (allErr) throw allErr;
-    const legend_totals = computeLegendTotals((allMarks ?? []).map((m) => m.code));
+
+    const client_policy = await loadClientPolicyForResponse(clientId);
+    const monthYmVal = monthYm(sheet.attendance_month);
+    const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
+    const ytdMap = row.employee_id
+      ? await fetchYtdTakenByEmployee(clientId, year, monthYmVal, [row.employee_id])
+      : new Map();
+    const summary = await recalculateRowSummary({
+      row,
+      dayMarks: allMarks ?? [],
+      policyBundle: client_policy,
+      monthYm: monthYmVal,
+      ytdTaken: ytdMap.get(row.employee_id) ?? mergeYtdTaken([])
+    });
 
     const { error: totErr } = await supabaseAdmin
       .from('attendance_rows')
-      .update({ legend_totals, updated_at: new Date().toISOString() })
+      .update({
+        paid_days: summary.paid_days,
+        lop: summary.lop,
+        not_considered: summary.not_considered,
+        total_days: summary.total_days,
+        legend_totals: summary.legend_totals,
+        leave_summary: summary.leave_summary,
+        incentive: summary.incentive,
+        updated_at: new Date().toISOString()
+      })
       .eq('id', row.id);
     if (totErr) throw totErr;
 
@@ -724,7 +1151,82 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
         .eq('id', sheet.id);
     }
 
-    res.json({ ok: true, code, mark_date: markDate, legend_totals });
+    res.json({
+      ok: true,
+      code,
+      mark_date: markDate,
+      legend_totals: summary.legend_totals,
+      paid_days: summary.paid_days,
+      lop: summary.lop,
+      not_considered: summary.not_considered,
+      total_days: summary.total_days,
+      leave_summary: summary.leave_summary,
+      incentive: summary.incentive
+    });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// POST recompute all row summaries from client policy
+router.post('/:sheetId/recompute', async (req, res, next) => {
+  try {
+    const clientId = req.params.clientId;
+    const access = await resolveClientAccess(req, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    const { data: sheet, error } = await supabaseAdmin
+      .from('attendance_sheets')
+      .select('*')
+      .eq('id', req.params.sheetId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
+
+    const { data: grants } = await supabaseAdmin
+      .from('attendance_edit_grants')
+      .select('user_id')
+      .eq('sheet_id', sheet.id);
+    assertCanEdit(sheet, access, (grants ?? []).map((g) => g.user_id));
+
+    const bundle = await fetchSheetBundle(sheet.id);
+    const { payrollMeta, defaultMarksApplied } = await recalculateSheetRows(bundle.sheet, bundle.rows, clientId);
+
+    await supabaseAdmin
+      .from('attendance_sheets')
+      .update({
+        payroll_cycle: payrollMeta.payroll_cycle,
+        payroll_start_date: payrollMeta.payroll_start_date,
+        payroll_end_date: payrollMeta.payroll_end_date,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', sheet.id);
+
+    const recomputeMessage = defaultMarksApplied > 0
+      ? `Recalculated attendance summaries from client policy (${defaultMarksApplied} default week-off/holiday mark(s) applied)`
+      : 'Recalculated attendance summaries from client policy';
+
+    await writeLog({
+      sheetId: sheet.id,
+      action: 'RECOMPUTE',
+      actorUserId: req.user.id,
+      actorRole: access.user.role,
+      message: recomputeMessage
+    });
+
+    const updated = await fetchSheetBundle(sheet.id);
+    const caps = buildCapabilities(updated.sheet, access, updated.grant_user_ids);
+    const client_policy = await loadClientPolicyForResponse(clientId);
+    res.json({
+      ok: true,
+      ...updated,
+      client: access.client,
+      client_policy,
+      role: access.user.role,
+      ...caps
+    });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);

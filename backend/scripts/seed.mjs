@@ -53,6 +53,16 @@ const demoClients = [
     insurance_applicable: false,
     insurance_name: null,
     designations: ['Data Entry Operator', 'Quality Analyst']
+  },
+  {
+    client_name: 'Attendance Test',
+    contract_code: 'ATT-TEST',
+    contract_start_date: '2026-01-01',
+    contract_end_date: '2027-12-31',
+    program_manager_id: PM_RAHUL,
+    insurance_applicable: false,
+    insurance_name: null,
+    designations: ['Engineer', 'Operator', 'Inspector', 'Supervisor']
   }
 ];
 
@@ -63,6 +73,13 @@ const demoEmployees = [
   { name: 'Neha Kulkarni',   mobile: '9900011124', email: 'neha.k@acme.test',       emp_code: 'T016396', designation: 'Supervisor',      date_of_joining: '2026-05-08', ctc_type: 'ANNUAL',  ctc_value: 720000, onboarding_initiated: false, onboarding_status: 'PENDING' },
   { name: 'Ravi Iyer',       mobile: '9900011125', email: 'ravi.iyer@acme.test',    emp_code: 'T016397', designation: 'Team Lead',       date_of_joining: '2026-04-20', ctc_type: 'ANNUAL',  ctc_value: 900000, onboarding_initiated: true,  onboarding_status: 'FORM_SENT' },
   { name: 'Sana Kapoor',     mobile: '9900011126', email: 'sana.kapoor@acme.test',  emp_code: 'T016398', designation: 'Team Lead',       date_of_joining: '2026-04-22', ctc_type: 'ANNUAL',  ctc_value: 850000, onboarding_initiated: true,  onboarding_status: 'FORM_SENT' }
+];
+
+const attendanceTestEmployees = [
+  { name: 'Arjun Engineer',  mobile: '9900022201', email: 'arjun.engineer@att.test',  emp_code: 'ATT001', designation: 'Engineer',   date_of_joining: '2026-01-15', ctc_type: 'MONTHLY', ctc_value: 45000, onboarding_initiated: true, onboarding_status: 'JOINED' },
+  { name: 'Meera Operator',  mobile: '9900022202', email: 'meera.operator@att.test',  emp_code: 'ATT002', designation: 'Operator',   date_of_joining: '2026-01-15', ctc_type: 'MONTHLY', ctc_value: 32000, onboarding_initiated: true, onboarding_status: 'JOINED' },
+  { name: 'Kiran Inspector', mobile: '9900022203', email: 'kiran.inspector@att.test', emp_code: 'ATT003', designation: 'Inspector',  date_of_joining: '2026-01-15', ctc_type: 'MONTHLY', ctc_value: 38000, onboarding_initiated: true, onboarding_status: 'JOINED' },
+  { name: 'Divya Supervisor', mobile: '9900022204', email: 'divya.supervisor@att.test', emp_code: 'ATT004', designation: 'Supervisor', date_of_joining: '2026-01-15', ctc_type: 'MONTHLY', ctc_value: 52000, onboarding_initiated: true, onboarding_status: 'JOINED' }
 ];
 
 async function upsertUser(u) {
@@ -89,6 +106,67 @@ async function ensureAuthUser({ id, email, password, name }) {
   console.log(`  auth user created: ${email}`);
 }
 
+async function ensureClientPolicy(clientId, designations) {
+  const { data: existing, error: findErr } = await admin
+    .from('client_attendance_policies')
+    .select('client_id')
+    .eq('client_id', clientId)
+    .maybeSingle();
+  if (findErr) throw findErr;
+
+  if (!existing) {
+    const { error: pErr } = await admin.from('client_attendance_policies').insert({
+      client_id: clientId,
+      payroll_cycle_start_day: 25,
+      payroll_cycle_end_day: 24,
+      week_off_config: { presets: ['all_sundays'], weekdays: [] },
+      comp_off_applicable: true,
+      comp_off_types: ['CO', 'PAID_CO'],
+      comp_off_rule: 1,
+      paid_comp_off_rule: 1,
+      nh_comp_off_applicable: true,
+      nh_off_rule: 2,
+      nh_pay_rule: 1,
+      fh_comp_off_applicable: true,
+      fh_off_rule: 1.5,
+      fh_pay_rule: 2
+    });
+    if (pErr) throw new Error(`insert policy for ${clientId}: ${pErr.message}`);
+  }
+
+  const { count, error: cErr } = await admin
+    .from('client_leave_allowances')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId);
+  if (cErr) throw cErr;
+  if ((count ?? 0) === 0 && designations?.length) {
+    const rows = designations.map((designation) => ({
+      client_id: clientId,
+      designation,
+      sick_days: 6,
+      paid_days: 12,
+      maternity_days: 180,
+      paternity_days: 15,
+      earned_days: 18
+    }));
+    const { error: aErr } = await admin.from('client_leave_allowances').insert(rows);
+    if (aErr) throw new Error(`insert leave allowances: ${aErr.message}`);
+  }
+
+  const { count: hCount, error: hErr } = await admin
+    .from('client_holidays')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId);
+  if (hErr) throw hErr;
+  if ((hCount ?? 0) === 0) {
+    const { error: hiErr } = await admin.from('client_holidays').insert([
+      { client_id: clientId, holiday_date: '2026-04-03', holiday_type: 'NH' },
+      { client_id: clientId, holiday_date: '2026-04-14', holiday_type: 'NH' }
+    ]);
+    if (hiErr) throw new Error(`insert holidays: ${hiErr.message}`);
+  }
+}
+
 async function ensureClient(c) {
   const { data: existing, error: findErr } = await admin
     .from('clients')
@@ -99,6 +177,7 @@ async function ensureClient(c) {
 
   if (existing) {
     console.log(`  client exists: ${c.contract_code}`);
+    await ensureClientPolicy(existing.id, c.designations);
     return existing.id;
   }
 
@@ -123,6 +202,7 @@ async function ensureClient(c) {
     const { error: dErr } = await admin.from('designations').insert(rows);
     if (dErr) throw new Error(`insert designations for ${c.contract_code}: ${dErr.message}`);
   }
+  await ensureClientPolicy(inserted.id, c.designations);
   console.log(`  client created: ${c.contract_code}`);
   return inserted.id;
 }
@@ -205,6 +285,13 @@ async function run() {
     clientId: clientIds['ACM-001'],
     creatorId: PM_RAHUL,
     employees: demoEmployees
+  });
+
+  console.log('Seeding employees for Attendance Test client...');
+  await ensureEmployeesForClient({
+    clientId: clientIds['ATT-TEST'],
+    creatorId: PM_RAHUL,
+    employees: attendanceTestEmployees
   });
 
   console.log('\nSeed complete. Demo logins (password: 123456):');

@@ -2,6 +2,13 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import DesignationsInput from '../components/DesignationsInput';
+import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyConfigFields';
+import {
+  DEFAULT_ATTENDANCE_POLICY,
+  buildLeaveAllowancesForDesignations,
+  normalizeAttendancePolicyForForm
+} from '../lib/clientPolicy';
+import { emitClientPolicyUpdated } from '../lib/clientPolicyEvents';
 
 const emptyForm = {
   client_name: '',
@@ -13,7 +20,10 @@ const emptyForm = {
   insurance_name: '',
   require_license_upload: true,
   require_qualification_certificate_upload: true,
-  designations: []
+  designations: [],
+  attendance_policy: { ...DEFAULT_ATTENDANCE_POLICY },
+  leave_allowances: [],
+  holidays: []
 };
 
 export default function ClientForm() {
@@ -28,6 +38,8 @@ export default function ClientForm() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [policyChanges, setPolicyChanges] = useState([]);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
     api.listProgramManagers()
@@ -56,7 +68,12 @@ export default function ClientForm() {
           insurance_name: found.insurance_name ?? '',
           require_license_upload: found.require_license_upload !== false,
           require_qualification_certificate_upload: found.require_qualification_certificate_upload !== false,
-          designations: found.designations ?? []
+          designations: found.designations ?? [],
+          attendance_policy: normalizeAttendancePolicyForForm(found.attendance_policy),
+          leave_allowances: (found.leave_allowances?.length
+            ? found.leave_allowances
+            : buildLeaveAllowancesForDesignations(found.designations ?? [])),
+          holidays: found.holidays ?? []
         });
       })
       .catch(err => setError(err.message))
@@ -64,6 +81,14 @@ export default function ClientForm() {
   }, [id, isEdit]);
 
   const set = (patch) => setForm(f => ({ ...f, ...patch }));
+
+  const onDesignationsChange = (designations) => {
+    setForm((f) => ({
+      ...f,
+      designations,
+      leave_allowances: buildLeaveAllowancesForDesignations(designations, f.leave_allowances)
+    }));
+  };
 
   const validate = () => {
     const errs = {};
@@ -88,6 +113,9 @@ export default function ClientForm() {
     if (form.designations.length === 0) {
       errs.designations = 'Add at least one designation';
     }
+    if (form.leave_allowances.length !== form.designations.length) {
+      errs.leave_allowances = 'Leave allowances required for each designation';
+    }
     return errs;
   };
 
@@ -99,17 +127,30 @@ export default function ClientForm() {
 
     setSubmitting(true);
     setError(null);
+    setSaveSuccess(false);
+    setPolicyChanges([]);
     try {
       const payload = {
         ...form,
-        insurance_name: form.insurance_applicable ? form.insurance_name : null
+        attendance_policy: normalizeAttendancePolicyForForm(form.attendance_policy),
+        insurance_name: form.insurance_applicable ? form.insurance_name : null,
+        holidays: (form.holidays ?? []).filter((h) => h.holiday_date)
       };
       if (isEdit) {
-        await api.updateClient(id, payload);
+        const updated = await api.updateClient(id, payload);
+        emitClientPolicyUpdated(id);
+        const changes = updated?.policy_changes ?? [];
+        if (changes.length) {
+          setPolicyChanges(changes);
+          setSaveSuccess(true);
+          window.setTimeout(() => navigate('/dashboard'), 2500);
+        } else {
+          navigate('/dashboard');
+        }
       } else {
         await api.createClient(payload);
+        navigate('/dashboard');
       }
-      navigate('/dashboard');
     } catch (err) {
       setError(err.message);
       if (err.details) setFieldErrors(err.details);
@@ -120,12 +161,12 @@ export default function ClientForm() {
 
   if (loading || pmsLoading) {
     return (
-      <main className="mx-auto max-w-3xl px-6 py-8 text-slate-500">Loading...</main>
+      <main className="mx-auto max-w-5xl px-6 py-8 text-slate-500">Loading...</main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-8">
+    <main className="mx-auto max-w-5xl px-6 py-8">
       <div className="mb-6">
         <Link to="/dashboard" className="text-sm text-indigo-600 hover:text-indigo-800">
           &larr; Back to clients
@@ -138,6 +179,18 @@ export default function ClientForm() {
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
+        </div>
+      )}
+
+      {saveSuccess && policyChanges.length > 0 && (
+        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          <p className="font-medium">Client saved. Policy changes:</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {policyChanges.map((change) => (
+              <li key={change}>{change}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-emerald-700">Returning to dashboard…</p>
         </div>
       )}
 
@@ -227,9 +280,23 @@ export default function ClientForm() {
           <Field label="Designations" error={fieldErrors.designations}>
             <DesignationsInput
               value={form.designations}
-              onChange={designations => set({ designations })}
+              onChange={onDesignationsChange}
             />
           </Field>
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 space-y-5">
+            <h2 className="text-base font-semibold text-slate-900">Project Configuration</h2>
+            <ClientPolicyConfigFields
+              attendancePolicy={form.attendance_policy}
+              leaveAllowances={form.leave_allowances}
+              holidays={form.holidays}
+              fieldErrors={fieldErrors}
+              designations={form.designations}
+              onAttendancePolicyChange={(attendance_policy) => set({ attendance_policy })}
+              onLeaveAllowancesChange={(leave_allowances) => set({ leave_allowances })}
+              onHolidaysChange={(holidays) => set({ holidays })}
+            />
+          </div>
 
           <Field label="Show Driving License Upload in Employee Form" error={fieldErrors.require_license_upload}>
             <div className="flex gap-4 text-sm">

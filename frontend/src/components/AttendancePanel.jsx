@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
 import ModalOverlay from './ModalOverlay';
 import {
@@ -6,11 +7,14 @@ import {
   LEGEND_TOTAL_COLUMNS,
   LEAVE_SUMMARY_COLUMNS,
   codeCellClass,
+  computeLegendTotals,
   displayCode,
   formatLeaveSummaryCell,
   holidayFlagBorderClass,
   isPresentOnHolidayCode
 } from '../lib/attendanceLegend';
+import { isWeekOffDate, findLeaveAllowanceForDesignation } from '../lib/clientPolicy';
+import { CLIENT_POLICY_UPDATED_EVENT } from '../lib/clientPolicyEvents';
 
 const EDITABLE_CODES = [
   'P', 'W', 'NH', 'FH', 'P-NH', 'P-FH', 'HD',
@@ -67,9 +71,25 @@ function daysForMonth(monthYm) {
   return out;
 }
 
-function isWeekendDate(isoDate) {
+function isPolicyOffDate(isoDate, clientPolicy) {
+  const config = clientPolicy?.attendance_policy?.week_off_config;
+  if (config) return isWeekOffDate(isoDate, config);
   const dow = new Date(`${isoDate}T00:00:00Z`).getUTCDay();
   return dow === 0 || dow === 6;
+}
+
+function dayHeaderClass(isoDate, clientPolicy) {
+  if (isPolicyOffDate(isoDate, clientPolicy)) {
+    return 'border-b border-r border-[#F0E0C8] bg-[#FFF6E8] px-1.5 py-2 text-center font-medium text-[#C47A2C]';
+  }
+  return 'border-b border-r border-slate-200 bg-white px-1.5 py-2 text-center font-medium text-slate-700';
+}
+
+function dayBodyClass(isoDate, clientPolicy) {
+  if (isPolicyOffDate(isoDate, clientPolicy)) {
+    return 'border-b border-r border-[#F0E0C8] bg-[#FFFBF3] p-0.5 text-center';
+  }
+  return 'border-b border-r border-slate-100 bg-white p-0.5 text-center';
 }
 
 function toDateKey(raw) {
@@ -78,18 +98,79 @@ function toDateKey(raw) {
   return m ? m[1] : null;
 }
 
-function dayHeaderClass(isoDate) {
-  if (isWeekendDate(isoDate)) {
-    return 'border-b border-r border-[#F0E0C8] bg-[#FFF6E8] px-1.5 py-2 text-center font-medium text-[#C47A2C]';
-  }
-  return 'border-b border-r border-slate-200 bg-white px-1.5 py-2 text-center font-medium text-slate-700';
+function payrollCycleDisplay(sheet, clientPolicy) {
+  if (sheet?.payroll_cycle) return sheet.payroll_cycle;
+  const p = clientPolicy?.attendance_policy;
+  if (!p) return null;
+  return `${p.payroll_cycle_start_day} to ${p.payroll_cycle_end_day}`;
 }
 
-function dayBodyClass(isoDate) {
-  if (isWeekendDate(isoDate)) {
-    return 'border-b border-r border-[#F0E0C8] bg-[#FFFBF3] p-0.5 text-center';
+function cloneRows(rows) {
+  return (rows ?? []).map((r) => ({
+    ...r,
+    day_marks: (r.day_marks ?? []).map((m) => ({ ...m })),
+    legend_totals: { ...(r.legend_totals ?? {}) },
+    leave_summary: { ...(r.leave_summary ?? {}) }
+  }));
+}
+
+function rowFingerprint(row) {
+  const marks = (row.day_marks ?? [])
+    .map((m) => `${toDateKey(m.mark_date)}:${String(m.code ?? '').toUpperCase()}`)
+    .sort()
+    .join('|');
+  return `${row.id}|${marks}|${row.addon_incentive ?? ''}|${row.remarks ?? ''}`;
+}
+
+function buildRowChanges(draftRows, serverRows) {
+  const serverById = new Map(serverRows.map((r) => [r.id, r]));
+  const changes = [];
+  for (const draft of draftRows) {
+    const server = serverById.get(draft.id);
+    if (!server) continue;
+    const patch = { row_id: draft.id };
+    let hasChange = false;
+
+    const draftMarks = (draft.day_marks ?? []).map((m) => ({
+      mark_date: toDateKey(m.mark_date),
+      code: String(m.code ?? '').toUpperCase()
+    }));
+    const serverMarks = (server.day_marks ?? []).map((m) => ({
+      mark_date: toDateKey(m.mark_date),
+      code: String(m.code ?? '').toUpperCase()
+    }));
+    const marksChanged = JSON.stringify(draftMarks) !== JSON.stringify(serverMarks);
+    if (marksChanged) {
+      patch.day_marks = draftMarks;
+      hasChange = true;
+    }
+    if (draft.addon_incentive !== server.addon_incentive) {
+      patch.addon_incentive = draft.addon_incentive ?? null;
+      hasChange = true;
+    }
+    if ((draft.remarks ?? '') !== (server.remarks ?? '')) {
+      patch.remarks = draft.remarks ?? '';
+      hasChange = true;
+    }
+    if (hasChange) changes.push(patch);
   }
-  return 'border-b border-r border-slate-100 bg-white p-0.5 text-center';
+  return changes;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function isPolicyNewerThanSheet(clientPolicy, sheet) {
+  const policyAt = clientPolicy?.policy_updated_at;
+  const sheetAt = sheet?.updated_at;
+  if (!policyAt || !sheetAt) return false;
+  return new Date(policyAt).getTime() > new Date(sheetAt).getTime();
 }
 
 /**
@@ -98,6 +179,7 @@ function dayBodyClass(isoDate) {
  */
 export default function AttendancePanel({ clientId, role }) {
   const isPl = role === 'PAYROLL_LEAD';
+  const location = useLocation();
   const [month, setMonth] = useState(currentMonthValue);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -115,16 +197,34 @@ export default function AttendancePanel({ clientId, role }) {
   const [shareSearch, setShareSearch] = useState('');
   const [shareSelectedIds, setShareSelectedIds] = useState(() => new Set());
   const unlockMenuRef = useRef(null);
+  const exportMenuRef = useRef(null);
+  const policyRecalcKeyRef = useRef(null);
   const [editingCell, setEditingCell] = useState(null); // { rowId, date }
   const [uploadSkipWarning, setUploadSkipWarning] = useState(null); // { imported, skipped, errors, failed?, message? }
   const [uploadSkipModalOpen, setUploadSkipModalOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [draftRows, setDraftRows] = useState([]);
 
   const sheet = payload?.sheet ?? null;
-  const rows = useMemo(() => payload?.rows ?? [], [payload]);
+  const clientPolicy = payload?.client_policy ?? null;
+  const serverRows = useMemo(() => payload?.rows ?? [], [payload]);
+  const rows = draftRows;
   const canEdit = Boolean(payload?.can_edit);
   const canLock = Boolean(payload?.can_lock);
   const canUnlock = Boolean(payload?.can_unlock);
   const canRequestEdit = Boolean(payload?.can_request_edit);
+
+  useEffect(() => {
+    setDraftRows(cloneRows(serverRows));
+  }, [serverRows]);
+
+  const isDirty = useMemo(() => {
+    if (draftRows.length !== serverRows.length) {
+      return draftRows.length > 0 || serverRows.length > 0;
+    }
+    const serverFp = new Map(serverRows.map((r) => [r.id, rowFingerprint(r)]));
+    return draftRows.some((r) => rowFingerprint(r) !== serverFp.get(r.id));
+  }, [draftRows, serverRows]);
 
   const dayDates = useMemo(() => {
     const set = new Set();
@@ -162,6 +262,17 @@ export default function AttendancePanel({ clientId, role }) {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [unlockMenuOpen]);
 
+  useEffect(() => {
+    if (!exportMenuOpen) return undefined;
+    const onDocClick = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [exportMenuOpen]);
+
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const result = rows.filter((r) => {
@@ -189,6 +300,23 @@ export default function AttendancePanel({ clientId, role }) {
     );
   }, [rows, search, leaveType, sort]);
 
+  const footerTotals = useMemo(() => {
+    let paidDays = 0;
+    let lop = 0;
+    let nhFh = 0;
+    for (const row of filteredRows) {
+      paidDays += Number(row.paid_days ?? 0);
+      lop += Number(row.lop ?? 0);
+      nhFh += Number(row.legend_totals?.NH ?? 0) + Number(row.legend_totals?.FH ?? 0);
+    }
+    return {
+      employees: filteredRows.length,
+      paidDays,
+      lop,
+      nhFh
+    };
+  }, [filteredRows]);
+
   const toggleSort = (key) => {
     setSort((current) => ({
       key,
@@ -207,6 +335,10 @@ export default function AttendancePanel({ clientId, role }) {
   }, [clientId]);
 
   useEffect(() => {
+    policyRecalcKeyRef.current = null;
+  }, [clientId, month]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -215,6 +347,7 @@ export default function AttendancePanel({ clientId, role }) {
         const data = await api.getAttendance({ clientId, month });
         if (cancelled) return;
         setPayload(data);
+        setDraftRows(cloneRows(data?.rows ?? []));
         if (data?.sheet?.id) {
           try {
             const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
@@ -237,7 +370,7 @@ export default function AttendancePanel({ clientId, role }) {
     return () => {
       cancelled = true;
     };
-  }, [clientId, month]);
+  }, [clientId, month, location.pathname]);
 
   const onUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -294,6 +427,7 @@ export default function AttendancePanel({ clientId, role }) {
   const refreshAfterAction = async () => {
     const data = await api.getAttendance({ clientId, month });
     setPayload(data);
+    setDraftRows(cloneRows(data?.rows ?? []));
     if (data?.sheet?.id) {
       try {
         const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
@@ -304,7 +438,64 @@ export default function AttendancePanel({ clientId, role }) {
     } else {
       setLogs([]);
     }
+    return data;
   };
+
+  useEffect(() => {
+    if (!sheet?.id || loading || busy || isDirty) return;
+    if (!isPolicyNewerThanSheet(clientPolicy, sheet)) return;
+
+    const recalcKey = `${sheet.id}:${clientPolicy?.policy_updated_at}`;
+    if (policyRecalcKeyRef.current === recalcKey) return;
+    policyRecalcKeyRef.current = recalcKey;
+
+    let cancelled = false;
+    (async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        const data = await api.recomputeAttendance({ clientId, sheetId: sheet.id });
+        if (cancelled) return;
+        setPayload(data);
+        setDraftRows(cloneRows(data?.rows ?? []));
+        showToast('Attendance recalculated from latest client policy');
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    sheet?.id,
+    sheet?.updated_at,
+    clientPolicy?.policy_updated_at,
+    clientId,
+    loading,
+    busy,
+    isDirty
+  ]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || loading || busy || isDirty) return;
+      refreshAfterAction();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [clientId, month, loading, busy, isDirty]);
+
+  useEffect(() => {
+    const onPolicyUpdated = (e) => {
+      if (String(e.detail?.clientId) !== String(clientId)) return;
+      if (loading || busy || isDirty) return;
+      refreshAfterAction();
+    };
+    window.addEventListener(CLIENT_POLICY_UPDATED_EVENT, onPolicyUpdated);
+    return () => window.removeEventListener(CLIENT_POLICY_UPDATED_EVENT, onPolicyUpdated);
+  }, [clientId, loading, busy, isDirty]);
 
   const showSkipWarningPopup = () => {
     if (uploadSkipWarning) setUploadSkipModalOpen(true);
@@ -312,6 +503,10 @@ export default function AttendancePanel({ clientId, role }) {
 
   const onSubmit = async () => {
     if (!sheet?.id || !canEdit) return;
+    if (isDirty) {
+      setError('Save your changes before submitting attendance.');
+      return;
+    }
     showSkipWarningPopup();
     setBusy(true);
     setError(null);
@@ -391,43 +586,99 @@ export default function AttendancePanel({ clientId, role }) {
     }
   };
 
-  const onChangeCell = async (rowId, date, code) => {
+  const onRecompute = async () => {
     if (!sheet?.id || !canEdit) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await api.patchAttendanceDay({
-        clientId,
-        sheetId: sheet.id,
-        rowId,
-        date,
-        code
-      });
-      setPayload((prev) => {
-        if (!prev) return prev;
+      const data = await api.recomputeAttendance({ clientId, sheetId: sheet.id });
+      setPayload(data);
+      setDraftRows(cloneRows(data?.rows ?? []));
+      showToast('Attendance recalculated from client policy');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onChangeCell = (rowId, date, code) => {
+    if (!canEdit) return;
+    const key = toDateKey(date);
+    setDraftRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const marks = [...(r.day_marks ?? [])];
+        const idx = marks.findIndex((m) => toDateKey(m.mark_date) === key);
+        if (idx >= 0) marks[idx] = { ...marks[idx], mark_date: key, code };
+        else marks.push({ mark_date: key, code });
         return {
-          ...prev,
-          sheet: prev.sheet?.status === 'SUBMITTED'
-            ? { ...prev.sheet, status: 'DRAFT' }
-            : prev.sheet,
-          rows: (prev.rows ?? []).map((r) => {
-            if (r.id !== rowId) return r;
-            const marks = [...(r.day_marks ?? [])];
-            const idx = marks.findIndex((m) => m.mark_date === date);
-            if (idx >= 0) marks[idx] = { ...marks[idx], code: result.code };
-            else marks.push({ mark_date: date, code: result.code });
-            return {
-              ...r,
-              day_marks: marks,
-              legend_totals: result.legend_totals ?? r.legend_totals
-            };
-          })
+          ...r,
+          day_marks: marks,
+          legend_totals: computeLegendTotals(marks.map((m) => m.code))
         };
-      });
-      setEditingCell(null);
-      showToast('Cell updated');
+      })
+    );
+    setEditingCell(null);
+  };
+
+  const onChangeAddonIncentive = (rowId, value) => {
+    if (!canEdit) return;
+    setDraftRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, addon_incentive: value === '' ? null : value } : r))
+    );
+  };
+
+  const onChangeRemarks = (rowId, value) => {
+    if (!canEdit) return;
+    setDraftRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, remarks: value } : r))
+    );
+  };
+
+  const onDiscard = () => {
+    setDraftRows(cloneRows(serverRows));
+    setError(null);
+    showToast('Changes discarded');
+  };
+
+  const onSave = async () => {
+    if (!sheet?.id || !canEdit || !isDirty) return;
+    const changes = buildRowChanges(draftRows, serverRows);
+    if (!changes.length) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await api.saveAttendanceRows({ clientId, sheetId: sheet.id, rows: changes });
+      setPayload(data);
+      setDraftRows(cloneRows(data?.rows ?? []));
+      showToast('Changes saved');
       const logRows = await api.getAttendanceLogs({ clientId, sheetId: sheet.id });
       setLogs(Array.isArray(logRows) ? logRows : []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onExport = async (type) => {
+    setExportMenuOpen(false);
+    setBusy(true);
+    setError(null);
+    try {
+      const ym = String(sheet?.attendance_month ?? month).slice(0, 7);
+      const blob = sheet?.id
+        ? await api.exportAttendanceCsv({ clientId, sheetId: sheet.id, type })
+        : await api.exportAttendanceTemplate({ clientId, month: ym });
+      const names = {
+        data: `attendance-data-${ym}.csv`,
+        template: `attendance-template-${ym}.csv`,
+        incentive: `attendance-incentive-${ym}.csv`,
+        leave: `attendance-leave-${ym}.csv`
+      };
+      downloadBlob(blob, names[type] || `attendance-${ym}.csv`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -586,19 +837,16 @@ export default function AttendancePanel({ clientId, role }) {
               }}
             />
           </label>
-          <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-white ${
-            busy || (sheet && !canEdit) ? 'bg-slate-400' : 'bg-blue-600 hover:bg-blue-700'
-          }`}>
-            <UploadIcon className="h-4 w-4" />
-            Upload CSV
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              disabled={busy || (sheet && !canEdit)}
-              onChange={onUpload}
-            />
-          </label>
+          {sheet && canEdit && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onRecompute}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              Recompute
+            </button>
+          )}
           {sheet && (
             <button
               type="button"
@@ -616,10 +864,14 @@ export default function AttendancePanel({ clientId, role }) {
         <Meta label="Client" value={client?.client_name} />
         <Meta label="Entity" value={sheet?.entity} />
         <Meta label="Cycle Type" value={sheet?.cycle_type} />
-        <Meta label="Payroll Cycle" value={sheet?.payroll_cycle} />
+        <Meta label="Payroll Cycle" value={payrollCycleDisplay(sheet, clientPolicy)} />
         <Meta label="Salary Payout Date" value={sheet?.salary_payout_date} />
         <Meta label="Project Manager" value={sheet?.project_manager_name} />
       </div>
+
+      <p className="text-xs text-slate-500">
+        Week-offs and holidays are filled automatically from client policy. Enter only actual attendance (P, A, leave, etc.).
+      </p>
 
       {error && (
         <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
@@ -693,8 +945,11 @@ export default function AttendancePanel({ clientId, role }) {
               </label>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {sheet && sheet.locked && !(isPl && (canLock || canUnlock)) && (
+                <LockedStatusPill />
+              )}
               {sheet && isPl && canLock && (
-                <LockToggleButton locked disabled={busy} onClick={onLock} />
+                <LockToggleButton locked={false} disabled={busy} onClick={onLock} />
               )}
               {sheet && isPl && canUnlock && (
                 <div className="relative" ref={unlockMenuRef}>
@@ -737,6 +992,80 @@ export default function AttendancePanel({ clientId, role }) {
                   )}
                 </div>
               )}
+              {sheet ? (
+                <div className="relative" ref={exportMenuRef}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setExportMenuOpen((v) => !v)}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[#1e293b] px-3 py-2 text-sm font-medium text-white hover:bg-[#0f172a] disabled:opacity-60"
+                  >
+                    <DownloadIcon className="h-4 w-4" />
+                    Export CSV
+                    <ChevronDownIcon className={`h-3.5 w-3.5 opacity-80 ${exportMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {exportMenuOpen && (
+                    <div className="absolute right-0 z-50 mt-2 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onExport('data')}
+                        className="block w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
+                      >
+                        Export Data
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onExport('template')}
+                        className="block w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
+                      >
+                        Export Template
+                      </button>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onExport('incentive')}
+                        className="block w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
+                      >
+                        Export Incentive Details
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onExport('leave')}
+                        className="block w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
+                      >
+                        Export Leave Details
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onExport('template')}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#1e293b] px-3 py-2 text-sm font-medium text-white hover:bg-[#0f172a] disabled:opacity-60"
+                >
+                  <DownloadIcon className="h-4 w-4" />
+                  Export Template
+                </button>
+              )}
+              <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium text-white ${
+                busy || (sheet && !canEdit) ? 'bg-slate-400' : 'bg-[#3b82f6] hover:bg-[#2563eb]'
+              }`}>
+                <UploadIcon className="h-4 w-4" />
+                Upload CSV
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  disabled={busy || (sheet && !canEdit)}
+                  onChange={onUpload}
+                />
+              </label>
               {sheet && !isPl && canRequestEdit && (
                 <button
                   type="button"
@@ -745,16 +1074,6 @@ export default function AttendancePanel({ clientId, role }) {
                   className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
                   {sheet.unlock_request_status === 'PENDING' ? 'Request pending' : 'Request edit access'}
-                </button>
-              )}
-              {sheet && (
-                <button
-                  type="button"
-                  disabled={busy || !canEdit}
-                  onClick={onSubmit}
-                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-                >
-                  {sheet.status === 'SUBMITTED' ? 'Resubmit attendance' : 'Submit attendance'}
                 </button>
               )}
             </div>
@@ -833,7 +1152,7 @@ export default function AttendancePanel({ clientId, role }) {
                     gridDayDates.map((d) => {
                       const label = dayHeaderLabel(d);
                       return (
-                        <th key={d} className={`min-w-[2.75rem] whitespace-nowrap ${dayHeaderClass(d)}`}>
+                        <th key={d} className={`min-w-[2.75rem] whitespace-nowrap ${dayHeaderClass(d, clientPolicy)}`}>
                           {label.text}
                         </th>
                       );
@@ -854,6 +1173,14 @@ export default function AttendancePanel({ clientId, role }) {
                       {colKey}
                     </th>
                   ))}
+                  <th
+                    className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium"
+                    title="From client policy based on paid days"
+                  >
+                    Incentives
+                  </th>
+                  <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium">Add-on Incentives</th>
+                  <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium min-w-[8rem]">Remarks</th>
                 </tr>
               </thead>
               <tbody>
@@ -865,7 +1192,8 @@ export default function AttendancePanel({ clientId, role }) {
                         (calendarView === 'expanded' ? gridDayDates.length : 0) +
                         LEGEND_TOTAL_COLUMNS.length +
                         3 +
-                        LEAVE_SUMMARY_COLUMNS.length
+                        LEAVE_SUMMARY_COLUMNS.length +
+                        3
                       }
                       className="border-b border-slate-100 px-4 py-16"
                     >
@@ -900,7 +1228,7 @@ export default function AttendancePanel({ clientId, role }) {
                           const isEditing =
                             editingCell?.rowId === row.id && editingCell?.date === d;
                           return (
-                            <td key={`${row.id}-${d}`} className={dayBodyClass(d)}>
+                            <td key={`${row.id}-${d}`} className={dayBodyClass(d, clientPolicy)}>
                               {isEditing && canEdit ? (
                                 <select
                                   autoFocus
@@ -958,9 +1286,63 @@ export default function AttendancePanel({ clientId, role }) {
                           key={`${row.id}-leave-${colKey}`}
                           className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-center tabular-nums text-slate-700"
                         >
-                          {formatLeaveSummaryCell(colKey, row, index)}
+                          {formatLeaveSummaryCell(
+                            colKey,
+                            row,
+                            findLeaveAllowanceForDesignation(
+                              clientPolicy?.leave_allowances,
+                              row.designation
+                            )
+                          )}
                         </td>
                       ))}
+                      <td className="border-b border-slate-100 px-2 py-1.5 text-center">
+                        <span
+                          className="tabular-nums text-slate-700"
+                          title={
+                            clientPolicy?.attendance_policy?.incentive_applicable
+                              ? `Policy: ≥ ${clientPolicy.attendance_policy.incentive_min_days ?? 26} consecutive present days → ${clientPolicy.attendance_policy.incentive_value ?? 0}`
+                              : 'Incentive not applicable per client policy'
+                          }
+                        >
+                          {row.incentive ?? '—'}
+                        </span>
+                      </td>
+                      <td className="border-b border-slate-100 px-2 py-1.5 text-center">
+                        {canEdit ? (
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={row.addon_incentive ?? ''}
+                            onChange={(e) => {
+                              const v = e.target.value.trim();
+                              if (v === '') {
+                                onChangeAddonIncentive(row.id, null);
+                                return;
+                              }
+                              const n = Number(v.replace(/,/g, ''));
+                              if (Number.isFinite(n) && n >= 0) onChangeAddonIncentive(row.id, n);
+                            }}
+                            placeholder="Enter value"
+                            className="w-24 rounded border border-slate-200 px-2 py-1 text-center text-xs tabular-nums placeholder:text-slate-400"
+                          />
+                        ) : (
+                          <span className="tabular-nums text-slate-700">{row.addon_incentive ?? '—'}</span>
+                        )}
+                      </td>
+                      <td className="border-b border-slate-100 px-2 py-1.5 min-w-[8rem]">
+                        {canEdit ? (
+                          <input
+                            type="text"
+                            value={row.remarks ?? ''}
+                            onChange={(e) => onChangeRemarks(row.id, e.target.value)}
+                            placeholder="Enter remarks"
+                            className="w-full min-w-[7rem] rounded border border-slate-200 px-2 py-1 text-xs text-slate-800"
+                          />
+                        ) : (
+                          <span className="text-slate-600">{row.remarks || '—'}</span>
+                        )}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -969,11 +1351,58 @@ export default function AttendancePanel({ clientId, role }) {
           </div>
 
           {sheet && (
-            <p className="text-sm text-slate-500">
-              {filteredRows.length} employee{filteredRows.length === 1 ? '' : 's'}
-              {dayDates.length === 0 && ' · No day columns found — re-upload CSV with date headers (e.g. 1-Jul-26)'}
-              {!canEdit && ' · Sheet is locked (unlock required to edit)'}
-            </p>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                <p>
+                  <span className="font-medium">Total employee:</span> {footerTotals.employees}
+                  {' · '}
+                  <span className="font-medium">Total Paid Days:</span> {footerTotals.paidDays}
+                  {' · '}
+                  <span className="font-medium">Total LOP:</span> {footerTotals.lop}
+                  {' · '}
+                  <span className="font-medium">Total NH + FH:</span> {footerTotals.nhFh}
+                  {' · '}
+                  <span className="font-medium">Project:</span> {sheet.contract_code || client?.contract_code || '—'}
+                </p>
+                {canEdit && (
+                  <button
+                    type="button"
+                    disabled={busy || isDirty}
+                    onClick={onSubmit}
+                    className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {sheet.status === 'SUBMITTED' ? 'Resubmit Attendance' : 'Submit Attendance'}
+                  </button>
+                )}
+              </div>
+              {!canEdit && (
+                <p className="text-sm text-slate-500">
+                  Sheet is locked (unlock required to edit)
+                  {dayDates.length === 0 && ' · No day columns found — re-upload CSV with date headers (e.g. 1-Jul-26)'}
+                </p>
+              )}
+            </div>
+          )}
+
+          {sheet && isDirty && canEdit && (
+            <div className="sticky bottom-0 z-50 flex justify-end gap-2 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onDiscard}
+                className="rounded-md border border-red-500 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onSave}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                {busy ? 'Saving…' : 'Save'}
+              </button>
+            </div>
           )}
         </>
       )}
@@ -986,6 +1415,21 @@ function UploadIcon({ className = 'h-4 w-4' }) {
     <svg className={className} viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path
         d="M10 12.5V3.75M10 3.75L6.875 6.875M10 3.75L13.125 6.875M3.75 12.5v2.083c0 .921.746 1.667 1.667 1.667h9.166c.921 0 1.667-.746 1.667-1.667V12.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+
+function DownloadIcon({ className = 'h-4 w-4' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M10 3.75v8.75M10 12.5L6.875 9.375M10 12.5L13.125 9.375M3.75 12.5v2.083c0 .921.746 1.667 1.667 1.667h9.166c.921 0 1.667-.746 1.667-1.667V12.5"
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinecap="round"
@@ -1027,22 +1471,41 @@ function UnlockIcon({ className = 'h-3.5 w-3.5' }) {
   );
 }
 
-/** Pill lock/unlock control matching StaffingGo toggle design. */
+/** Pill lock/unlock toggle matching StaffingGo design. */
+function LockToggleKnob({ children }) {
+  return (
+    <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white">
+      {children}
+    </span>
+  );
+}
+
+function LockedStatusPill({ as: Component = 'span', className = '', children, ...props }) {
+  return (
+    <Component
+      className={`inline-flex h-9 items-center gap-2 rounded-full bg-[#D4A017] pl-4 pr-1.5 text-sm font-semibold text-white shadow-sm ${className}`}
+      {...props}
+    >
+      Locked
+      <LockToggleKnob>
+        <LockIcon className="h-3.5 w-3.5 text-[#D4A017]" />
+      </LockToggleKnob>
+      {children}
+    </Component>
+  );
+}
+
 function LockToggleButton({ locked, disabled, onClick }) {
   if (locked) {
     return (
-      <button
+      <LockedStatusPill
+        as="button"
         type="button"
         disabled={disabled}
         onClick={onClick}
-        title="Lock attendance"
-        className="inline-flex h-9 items-center gap-2 rounded-full bg-[#D4A017] pl-1.5 pr-4 text-sm font-semibold text-white shadow-sm hover:bg-[#C49212] disabled:opacity-60"
-      >
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#D4A017]">
-          <LockIcon />
-        </span>
-        Locked
-      </button>
+        title="Attendance is locked"
+        className="hover:bg-[#C49212] disabled:opacity-60"
+      />
     );
   }
 
@@ -1051,13 +1514,13 @@ function LockToggleButton({ locked, disabled, onClick }) {
       type="button"
       disabled={disabled}
       onClick={onClick}
-      title="Unlock attendance"
-      className="inline-flex h-9 items-center gap-2 rounded-full bg-[#7B8A9A] pl-4 pr-1.5 text-sm font-semibold text-white shadow-sm hover:bg-[#6C7A8A] disabled:opacity-60"
+      title="Lock attendance"
+      className="inline-flex h-9 items-center gap-2 rounded-full bg-emerald-500 pl-1.5 pr-4 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:opacity-60"
     >
+      <LockToggleKnob>
+        <UnlockIcon className="h-3.5 w-3.5 text-emerald-500" />
+      </LockToggleKnob>
       Unlocked
-      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#7B8A9A]">
-        <UnlockIcon />
-      </span>
     </button>
   );
 }
@@ -1070,14 +1533,14 @@ function UnlockMenuButton({ disabled, open, onToggle }) {
       onClick={onToggle}
       aria-haspopup="menu"
       aria-expanded={open}
-      title="Unlock attendance"
-      className="inline-flex h-9 items-center gap-2 rounded-full bg-[#7B8A9A] pl-4 pr-2 text-sm font-semibold text-white shadow-sm hover:bg-[#6C7A8A] disabled:opacity-60"
+      title="Attendance is locked — click to unlock"
+      className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[#D4A017] pl-4 pr-2 text-sm font-semibold text-white shadow-sm hover:bg-[#C49212] disabled:opacity-60"
     >
-      Unlocked
-      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#7B8A9A]">
-        <UnlockIcon />
-      </span>
-      <ChevronDownIcon className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
+      Locked
+      <LockToggleKnob>
+        <LockIcon className="h-3.5 w-3.5 text-[#D4A017]" />
+      </LockToggleKnob>
+      <ChevronDownIcon className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
     </button>
   );
 }

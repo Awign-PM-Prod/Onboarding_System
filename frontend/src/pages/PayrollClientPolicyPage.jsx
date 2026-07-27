@@ -1,0 +1,303 @@
+import { useCallback, useEffect, useState } from 'react';
+import { useLocation, useParams } from 'react-router-dom';
+import { api } from '../lib/api';
+import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyConfigFields';
+import {
+  DEFAULT_ATTENDANCE_POLICY,
+  buildLeaveAllowancesForDesignations,
+  normalizeAttendancePolicyForForm
+} from '../lib/clientPolicy';
+import { emitClientPolicyUpdated } from '../lib/clientPolicyEvents';
+
+function applyClientPolicyState(found, setters) {
+  const {
+    setClient,
+    setAttendancePolicy,
+    setLeaveAllowances,
+    setHolidays
+  } = setters;
+  setClient(found);
+  setDesignations(found.designations ?? []);
+  setAttendancePolicy(normalizeAttendancePolicyForForm(found.attendance_policy));
+  setLeaveAllowances(
+    found.leave_allowances?.length
+      ? found.leave_allowances
+      : buildLeaveAllowancesForDesignations(found.designations ?? [])
+  );
+  setHolidays(found.holidays ?? []);
+}
+
+async function fetchClientForPolicy(id) {
+  try {
+    return await api.getClient(id);
+  } catch {
+    const list = await api.listClients();
+    const found = list.find((c) => c.id === id);
+    if (!found) throw new Error('Client not found');
+    return found;
+  }
+}
+
+export default function PayrollClientPolicyPage() {
+  const { id } = useParams();
+  const location = useLocation();
+  const [client, setClient] = useState(null);
+  const [designations, setDesignations] = useState([]);
+  const [attendancePolicy, setAttendancePolicy] = useState({ ...DEFAULT_ATTENDANCE_POLICY });
+  const [leaveAllowances, setLeaveAllowances] = useState([]);
+  const [holidays, setHolidays] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [saved, setSaved] = useState(false);
+  const [savedRecalcCount, setSavedRecalcCount] = useState(0);
+  const [policyChanges, setPolicyChanges] = useState([]);
+  const [policyHistory, setPolicyHistory] = useState([]);
+  const [showPolicyHistory, setShowPolicyHistory] = useState(false);
+  const [recalcError, setRecalcError] = useState(null);
+
+  const loadClient = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
+    setError(null);
+    try {
+      const found = await fetchClientForPolicy(id);
+      applyClientPolicyState(found, {
+        setClient,
+        setAttendancePolicy,
+        setLeaveAllowances,
+        setHolidays
+      });
+    } catch (err) {
+      setError(err.message);
+      setClient(null);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    loadClient();
+  }, [loadClient, location.pathname]);
+
+  const loadPolicyHistory = useCallback(async () => {
+    try {
+      const rows = await api.listClientPolicyChanges(id);
+      setPolicyHistory(rows ?? []);
+    } catch {
+      setPolicyHistory([]);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (showPolicyHistory) loadPolicyHistory();
+  }, [showPolicyHistory, loadPolicyHistory]);
+
+  const validate = () => {
+    const errs = {};
+    if (!designations.length) {
+      errs.designations = 'At least one role is required';
+    }
+    if (leaveAllowances.length !== designations.length) {
+      errs.leave_allowances = 'Leave allowances required for each designation';
+    }
+    return errs;
+  };
+
+  const onDesignationsChange = (nextDesignations) => {
+    setDesignations(nextDesignations);
+    setLeaveAllowances((prev) =>
+      buildLeaveAllowancesForDesignations(nextDesignations, prev)
+    );
+  };
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!client) return;
+    const errs = validate();
+    setFieldErrors(errs);
+    if (Object.keys(errs).length) return;
+
+    setSubmitting(true);
+    setError(null);
+    setSaved(false);
+    setPolicyChanges([]);
+    setRecalcError(null);
+    try {
+      const policyPayload = normalizeAttendancePolicyForForm({
+        ...attendancePolicy,
+        incentive_applicable: Boolean(attendancePolicy.incentive_applicable)
+          || Number(attendancePolicy.incentive_value) > 0
+      });
+      const policyBody = {
+        designations,
+        attendance_policy: policyPayload,
+        leave_allowances: leaveAllowances,
+        holidays: holidays.filter((h) => h.holiday_date)
+      };
+
+      let updated = null;
+      try {
+        updated = await api.saveClientPolicy(client.id, policyBody);
+      } catch (policyErr) {
+        if (policyErr.status === 404 || policyErr.status === 405) {
+          updated = await api.updateClient(client.id, {
+            client_name: client.client_name,
+            contract_code: client.contract_code,
+            contract_start_date: client.contract_start_date,
+            contract_end_date: client.contract_end_date,
+            program_manager_id: client.program_manager_id,
+            insurance_applicable: client.insurance_applicable,
+            insurance_name: client.insurance_applicable ? client.insurance_name : null,
+            require_license_upload: client.require_license_upload !== false,
+            require_qualification_certificate_upload: client.require_qualification_certificate_upload !== false,
+            designations,
+            ...policyBody
+          });
+        } else {
+          throw policyErr;
+        }
+      }
+
+      if (!updated?.attendance_policy) {
+        throw new Error('Policy save response was incomplete. Refresh the page and try again.');
+      }
+
+      applyClientPolicyState(updated, {
+        setClient,
+        setAttendancePolicy,
+        setLeaveAllowances,
+        setHolidays
+      });
+      emitClientPolicyUpdated(client.id);
+      // Always reload from server so the form matches persisted DB state.
+      await loadClient({ silent: true });
+      setSaved(true);
+      setPolicyChanges(updated?.policy_changes ?? []);
+      setSavedRecalcCount(Number(updated?.attendance_recalculated ?? 0));
+      if (updated?.attendance_recalc_error) {
+        setRecalcError(updated.attendance_recalc_error);
+      }
+    } catch (err) {
+      setError(err.message);
+      if (err.details) setFieldErrors(err.details);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <main className="mx-auto max-w-5xl px-6 py-8 text-slate-500">Loading policy...</main>
+    );
+  }
+
+  if (error && !client) {
+    return (
+      <main className="mx-auto max-w-5xl px-6 py-8">
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="mx-auto max-w-5xl px-6 py-8">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold text-slate-900">Policy Configuration</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          {client.client_name} · {client.contract_code}
+        </p>
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {saved && (
+        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          <p className="font-medium">Policy saved.</p>
+          {policyChanges.length > 0 ? (
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              {policyChanges.map((change) => (
+                <li key={change}>{change}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1">No configuration changes detected.</p>
+          )}
+          {savedRecalcCount > 0 && (
+            <p className="mt-2">
+              Attendance recalculated for {savedRecalcCount} sheet{savedRecalcCount === 1 ? '' : 's'} (paid days, leave balances, incentives).
+            </p>
+          )}
+          {savedRecalcCount === 0 && (
+            <p className="mt-2">Open Attendance to view calculated fields on existing sheets.</p>
+          )}
+        </div>
+      )}
+
+      {recalcError && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Policy was saved, but attendance recalculation failed: {recalcError}. Apply pending database
+          migrations (incentive columns), then use <strong>Recompute</strong> on the attendance sheet.
+        </div>
+      )}
+
+      <form onSubmit={onSubmit} className="rounded-lg border border-slate-200 bg-white p-6">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-slate-900">Project Configuration</h2>
+          <button
+            type="button"
+            onClick={() => setShowPolicyHistory((v) => !v)}
+            className="text-sm text-indigo-600 hover:text-indigo-800"
+          >
+            {showPolicyHistory ? 'Hide policy change history' : 'Policy change history'}
+          </button>
+        </div>
+        {showPolicyHistory && (
+          <div className="mb-5 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+            {policyHistory.length === 0 ? (
+              <p className="text-slate-500">No policy changes recorded yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {policyHistory.map((entry) => (
+                  <li key={entry.id} className="border-b border-slate-200 pb-2 last:border-0 last:pb-0">
+                    <div className="text-xs text-slate-500">
+                      {entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}
+                      {' · '}
+                      {entry.actor_name || entry.actor_email || entry.actor_role || 'System'}
+                    </div>
+                    <div className="mt-1 text-slate-800">{entry.message}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        <ClientPolicyConfigFields
+          attendancePolicy={attendancePolicy}
+          leaveAllowances={leaveAllowances}
+          holidays={holidays}
+          fieldErrors={fieldErrors}
+          designations={designations}
+          showDesignations
+          onDesignationsChange={onDesignationsChange}
+          onAttendancePolicyChange={setAttendancePolicy}
+          onLeaveAllowancesChange={setLeaveAllowances}
+          onHolidaysChange={setHolidays}
+        />
+        <div className="mt-6 flex justify-end">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-60"
+          >
+            {submitting ? 'Saving...' : 'Save Policy'}
+          </button>
+        </div>
+      </form>
+    </main>
+  );
+}
