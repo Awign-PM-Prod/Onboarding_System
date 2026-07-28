@@ -18,6 +18,84 @@ import {
   DEFAULT_ATTENDANCE_POLICY,
   normalizeAttendancePolicy
 } from './clientPolicyCore.js';
+import {
+  BASELINE_POLICY_MONTH,
+  bundleToPolicyJson,
+  monthYmToDate,
+  normalizePolicyBundleFromJson,
+  selectPolicyBundleForMonth
+} from './clientPolicyVersioning.js';
+
+export { BASELINE_POLICY_MONTH, monthYmToDate, selectPolicyBundleForMonth };
+
+/**
+ * Policy bundle effective for a given attendance month (YYYY-MM or YYYY-MM-DD).
+ * Uses versioned snapshots; falls back to live tables when no version matches.
+ */
+export async function fetchClientPolicyBundleForMonth(clientId, monthYm) {
+  const monthDate = monthYmToDate(monthYm);
+  if (!monthDate) return fetchClientPolicyBundle(clientId);
+
+  const { data: versions, error: vErr } = await supabaseAdmin
+    .from('client_policy_versions')
+    .select('policy_json, created_at, effective_from_month')
+    .eq('client_id', clientId)
+    .lte('effective_from_month', monthDate)
+    .order('effective_from_month', { ascending: false });
+  if (vErr) throw vErr;
+
+  const bundle = selectPolicyBundleForMonth(versions ?? [], monthYm, normalizeAttendancePolicy);
+  if (bundle) return bundle;
+
+  return fetchClientPolicyBundle(clientId);
+}
+
+export async function insertClientPolicyVersion(clientId, effectiveFromMonth, bundle, actorUserId = null) {
+  const monthDate = monthYmToDate(effectiveFromMonth) ?? monthYmToDate(BASELINE_POLICY_MONTH);
+  const policyJson = bundleToPolicyJson(bundle);
+  const { error } = await supabaseAdmin
+    .from('client_policy_versions')
+    .upsert(
+      {
+        client_id: clientId,
+        effective_from_month: monthDate,
+        policy_json: policyJson,
+        actor_user_id: actorUserId,
+        created_at: new Date().toISOString()
+      },
+      { onConflict: 'client_id,effective_from_month' }
+    );
+  if (error) {
+    const msg = String(error.message || '');
+    if (msg.includes('client_policy_versions')) {
+      throw new Error(
+        'Policy versioning table is missing. Run migration 20260728120000_client_policy_versions.sql in Supabase.'
+      );
+    }
+    throw error;
+  }
+}
+
+export async function ensureBaselinePolicyVersion(clientId) {
+  const { data: existing, error: findErr } = await supabaseAdmin
+    .from('client_policy_versions')
+    .select('id')
+    .eq('client_id', clientId)
+    .eq('effective_from_month', BASELINE_POLICY_MONTH)
+    .maybeSingle();
+  if (findErr) throw findErr;
+  if (existing) return;
+
+  const bundle = await fetchClientPolicyBundle(clientId);
+  const policyJson = bundleToPolicyJson(bundle);
+  const { error } = await supabaseAdmin.from('client_policy_versions').insert({
+    client_id: clientId,
+    effective_from_month: BASELINE_POLICY_MONTH,
+    policy_json: policyJson,
+    actor_user_id: null
+  });
+  if (error) throw error;
+}
 
 export async function fetchClientPolicyBundle(clientId) {
   const { data: policy, error: pErr } = await supabaseAdmin

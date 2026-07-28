@@ -30,6 +30,14 @@ export default function ClientHolidaysInput({ value, onChange }) {
           + Add holiday
         </button>
       </div>
+      <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
+        <p className="font-medium">National and floating holidays</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5">
+          <li>Add national holiday (NH) dates here. They set NH quotas and NH comp-off eligibility.</li>
+          <li>Floating holidays (FH) are not configured in policy. PMs can still mark FH and P-FH on attendance sheets.</li>
+          <li>Previously saved FH dates were converted to NH.</li>
+        </ul>
+      </div>
       {holidays.length === 0 ? (
         <p className="text-xs text-slate-500">No holidays configured. NH quotas will be zero until dates are added.</p>
       ) : (

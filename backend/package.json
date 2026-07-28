@@ -10,7 +10,11 @@
     "seed": "node --use-system-ca scripts/seed.mjs",
     "smoke:attendance": "node scripts/smoke-attendance-parser.mjs",
     "smoke:calculator": "node scripts/smoke-attendance-calculator.mjs",
-    "smoke:policy": "node scripts/smoke-client-policy.mjs"
+    "smoke:policy": "node scripts/smoke-client-policy.mjs",
+    "smoke:policy-versioning": "node scripts/smoke-policy-versioning.mjs",
+    "smoke:inline-save": "node scripts/smoke-attendance-inline-save.mjs",
+    "smoke:policy-scope": "node scripts/smoke-attendance-policy-scope.mjs",
+    "smoke:paid-days": "node scripts/smoke-attendance-paid-days-delta.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.0",

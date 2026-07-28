@@ -20,8 +20,9 @@ export default function Navbar() {
   return (
     <nav className="bg-white border-b border-slate-200">
       <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
-        <Link to={home} className="font-semibold text-slate-900">
-          Onboarding System
+        <Link to={home} className="flex items-center gap-2 font-semibold text-slate-900">
+          <img src="/logo.png" alt="Staffing-Go logo" className="h-7 w-7 rounded-md" draggable={false} />
+          Staffing-Go
         </Link>
         <div className="flex items-center gap-4 text-sm">
           <div className="text-right">

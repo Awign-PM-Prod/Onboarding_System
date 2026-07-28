@@ -148,6 +148,61 @@ export function annualLeaveAllowanceFromPolicy(allowance, leaveCode) {
   return Math.max(0, Number(allowance[field]) || 0);
 }
 
+function parseIsoDate(iso) {
+  const s = String(iso ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  return new Date(`${s}T00:00:00Z`);
+}
+
+function isoFromParts(year, month, day) {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** Payroll period for a given YYYY-MM anchor month (matches backend clientPolicyCore). */
+export function getPayrollPeriod(policy, monthYm) {
+  const m = String(monthYm ?? '').trim();
+  if (!/^\d{4}-\d{2}$/.test(m)) {
+    return { start: null, end: null };
+  }
+  const year = Number(m.slice(0, 4));
+  const mon = Number(m.slice(5, 7));
+  const startDay = Math.min(31, Math.max(1, Number(policy?.payroll_cycle_start_day) || 1));
+  const endDay = Math.min(31, Math.max(1, Number(policy?.payroll_cycle_end_day) || 31));
+
+  let startYear = year;
+  let startMonth = mon;
+  const endYear = year;
+  const endMonth = mon;
+
+  if (startDay > endDay) {
+    startMonth = mon === 1 ? 12 : mon - 1;
+    startYear = mon === 1 ? year - 1 : year;
+  }
+
+  const clampDay = (y, mo, d) => {
+    const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    return Math.min(d, last);
+  };
+
+  const start = isoFromParts(startYear, startMonth, clampDay(startYear, startMonth, startDay));
+  const end = isoFromParts(endYear, endMonth, clampDay(endYear, endMonth, endDay));
+  return { start, end };
+}
+
+/** Enumerate ISO dates from start to end inclusive. */
+export function datesInPeriod(startIso, endIso) {
+  const start = parseIsoDate(startIso);
+  const end = parseIsoDate(endIso);
+  if (!start || !end || end < start) return [];
+  const out = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    out.push(isoFromParts(cur.getUTCFullYear(), cur.getUTCMonth() + 1, cur.getUTCDate()));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}
+
 /** Normalize policy for forms — keeps incentive on when a value is set. */
 export function normalizeAttendancePolicyForForm(raw) {
   const p = { ...DEFAULT_ATTENDANCE_POLICY, ...(raw ?? {}) };

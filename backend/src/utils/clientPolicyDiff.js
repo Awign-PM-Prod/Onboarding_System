@@ -125,7 +125,10 @@ export function diffClientPolicyBundles(before, after) {
   return changes;
 }
 
-export function summarizePolicyChanges(changes) {
-  if (!changes?.length) return 'Policy saved (no changes detected)';
-  return changes.join('; ');
+export function summarizePolicyChanges(changes, effectiveFromMonth = null) {
+  const prefix = effectiveFromMonth
+    ? `Effective from ${effectiveFromMonth}: `
+    : '';
+  if (!changes?.length) return `${prefix}Policy saved (no changes detected)`;
+  return `${prefix}${changes.join('; ')}`;
 }

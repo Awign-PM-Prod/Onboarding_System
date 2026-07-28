@@ -1,6 +1,11 @@
 import { supabaseAdmin } from '../supabase.js';
 import { computeRowSummary, mergeYtdTaken, suggestDefaultMarks } from './attendanceCalculator.js';
-import { fetchClientPolicyBundle, getPayrollPeriod, payrollCycleLabel } from './clientPolicy.js';
+import {
+  fetchClientPolicyBundle,
+  fetchClientPolicyBundleForMonth,
+  getPayrollPeriod,
+  payrollCycleLabel
+} from './clientPolicy.js';
 
 function monthYm(dateOrYm) {
   const s = String(dateOrYm ?? '');
@@ -45,14 +50,22 @@ async function fetchSheetRowsWithMarks(sheetId) {
 }
 
 /**
- * Recalculate all attendance sheets for a client after policy changes.
+ * Recalculate attendance sheets for a client after policy changes.
+ * @param {string} clientId
+ * @param {{ fromMonthYm?: string }} [options] - only sheets with attendance_month >= fromMonthYm
  */
-export async function recalculateAllAttendanceSheetsForClient(clientId) {
-  const { data: sheets, error } = await supabaseAdmin
+export async function recalculateAllAttendanceSheetsForClient(clientId, options = {}) {
+  const fromMonthDate = options.fromMonthYm ? monthYmToDate(options.fromMonthYm) : null;
+
+  let query = supabaseAdmin
     .from('attendance_sheets')
     .select('id, attendance_month, payroll_cycle, payroll_start_date, payroll_end_date, updated_at')
     .eq('client_id', clientId)
     .order('attendance_month', { ascending: true });
+  if (fromMonthDate) {
+    query = query.gte('attendance_month', fromMonthDate);
+  }
+  const { data: sheets, error } = await query;
   if (error) throw error;
   if (!sheets?.length) return { sheets_recalculated: 0, sheet_ids: [] };
 
@@ -166,6 +179,24 @@ export async function applyDefaultMarksForRows(rowsWithMarks, policyBundle, mont
   return applied;
 }
 
+/**
+ * Apply default W/NH marks for one row. Returns updated day marks array.
+ */
+export async function applyDefaultMarksForRow(rowId, dayMarks, policyBundle, monthYmVal) {
+  const suggestions = suggestDefaultMarks(policyBundle, monthYmVal, dayMarks ?? []);
+  const updated = [...(dayMarks ?? [])];
+  for (const s of suggestions) {
+    const { error } = await supabaseAdmin.from('attendance_day_marks').insert({
+      row_id: rowId,
+      mark_date: s.mark_date,
+      code: s.code
+    });
+    if (error) throw error;
+    updated.push({ mark_date: s.mark_date, code: s.code });
+  }
+  return updated;
+}
+
 export async function recalculateRowSummary({
   row,
   dayMarks,
@@ -187,9 +218,79 @@ export async function recalculateRowSummary({
   });
 }
 
+function monthYmToDate(monthYm) {
+  const s = String(monthYm ?? '').trim();
+  if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return `${s.slice(0, 7)}-01`;
+  return null;
+}
+
+/**
+ * Recalculate employee rows in sheets after fromMonthYm (same calendar year) for YTD cascade.
+ */
+export async function recalculateForwardYtdForEmployees(clientId, fromMonthYm, employeeIds) {
+  const ids = [...new Set((employeeIds ?? []).filter(Boolean))];
+  if (!ids.length || !fromMonthYm) return { sheets_updated: 0, row_ids: [] };
+
+  const fromMonthDate = monthYmToDate(fromMonthYm);
+  if (!fromMonthDate) return { sheets_updated: 0, row_ids: [] };
+
+  const year = Number(fromMonthYm.slice(0, 4)) || new Date().getFullYear();
+  const yearEnd = `${year}-12-01`;
+
+  const { data: sheets, error: sErr } = await supabaseAdmin
+    .from('attendance_sheets')
+    .select('id, attendance_month')
+    .eq('client_id', clientId)
+    .gt('attendance_month', fromMonthDate)
+    .gte('attendance_month', `${year}-01-01`)
+    .lte('attendance_month', yearEnd)
+    .order('attendance_month', { ascending: true });
+  if (sErr) throw sErr;
+  if (!sheets?.length) return { sheets_updated: 0, row_ids: [] };
+
+  const updatedRowIds = [];
+  for (const sheet of sheets) {
+    const monthYmVal = monthYm(sheet.attendance_month);
+    const policyBundle = await fetchClientPolicyBundleForMonth(clientId, monthYmVal);
+    const rowsWithMarks = (await fetchSheetRowsWithMarks(sheet.id)).filter(
+      (r) => r.employee_id && ids.includes(r.employee_id)
+    );
+    if (!rowsWithMarks.length) continue;
+
+    const ytdMap = await fetchYtdTakenByEmployee(clientId, year, monthYmVal, ids);
+    for (const row of rowsWithMarks) {
+      const summary = await recalculateRowSummary({
+        row,
+        dayMarks: row.day_marks ?? [],
+        policyBundle,
+        monthYm: monthYmVal,
+        ytdTaken: ytdMap.get(row.employee_id) ?? mergeYtdTaken([])
+      });
+      const { error: upErr } = await supabaseAdmin
+        .from('attendance_rows')
+        .update({
+          paid_days: summary.paid_days,
+          lop: summary.lop,
+          not_considered: summary.not_considered,
+          total_days: summary.total_days,
+          legend_totals: summary.legend_totals,
+          leave_summary: summary.leave_summary,
+          incentive: summary.incentive,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', row.id);
+      if (upErr) throw upErr;
+      updatedRowIds.push(row.id);
+    }
+  }
+
+  return { sheets_updated: sheets.length, row_ids: updatedRowIds };
+}
+
 export async function recalculateSheetRows(sheet, rowsWithMarks, clientId) {
-  const policyBundle = await fetchClientPolicyBundle(clientId);
   const monthYmVal = monthYm(sheet.attendance_month);
+  const policyBundle = await fetchClientPolicyBundleForMonth(clientId, monthYmVal);
   const defaultMarksApplied = await applyDefaultMarksForRows(rowsWithMarks, policyBundle, monthYmVal);
   const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
   const employeeIds = rowsWithMarks.map((r) => r.employee_id).filter(Boolean);
@@ -233,6 +334,7 @@ export async function recalculateSheetRows(sheet, rowsWithMarks, clientId) {
   return { payrollMeta, policyBundle, defaultMarksApplied };
 }
 
-export async function loadClientPolicyForResponse(clientId) {
+export async function loadClientPolicyForResponse(clientId, monthYm = null) {
+  if (monthYm) return fetchClientPolicyBundleForMonth(clientId, monthYm);
   return fetchClientPolicyBundle(clientId);
 }

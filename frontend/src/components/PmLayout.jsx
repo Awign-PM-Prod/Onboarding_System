@@ -1,16 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { matchPmClientDetailPath, pmClientTabUrl } from '../lib/pmClientRoutes';
 import { api } from '../lib/api';
-import CollapsibleAppSidebar, {
+import {
   IconClients,
   IconDashboard,
   IconOnboarding,
-  SidebarCollapseToggle,
-  readSidebarCollapsed,
-  writeSidebarCollapsed
+  SidebarCollapseToggle
 } from './CollapsibleAppSidebar';
+import TwoPaneSidebar, {
+  SidebarClientsPanel,
+  SidebarModulesPanel,
+  readSidebarPanelOpen,
+  writeSidebarPanelOpen
+} from './TwoPaneSidebar';
 import ModalOverlay from './ModalOverlay';
 
 function IconMenu({ className }) {
@@ -83,27 +87,58 @@ export default function PmLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const [panelOpen, setPanelOpen] = useState(readSidebarPanelOpen);
+  const [panelView, setPanelView] = useState('clients');
+  const [clients, setClients] = useState([]);
+  const [clientsLoading, setClientsLoading] = useState(true);
+  const [clientsError, setClientsError] = useState(null);
   const [joiningReminderToday, setJoiningReminderToday] = useState([]);
   const [joiningReminderOverdue, setJoiningReminderOverdue] = useState([]);
   const [joiningReminderStep, setJoiningReminderStep] = useState('');
 
   const pathname = location.pathname;
   const clientRoute = useMemo(() => matchPmClientDetailPath(pathname), [pathname]);
-  const isClientDetail = Boolean(clientRoute);
-  const clientsNavActive =
-    pathname === '/pm-dashboard/clients' || pathname.startsWith('/pm-dashboard/client/');
-  const dashboardNavActive = pathname === '/pm-dashboard/dashboard';
-
-  const c = clientRoute?.clientId;
+  const clientId = clientRoute?.clientId ?? null;
   const clientTabSeg = clientRoute?.tabSegment;
-  const isClientOnboardingModule =
-    clientTabSeg === 'dashboard' || clientTabSeg === 'in-progress';
+  const isClientOnboardingModule = clientTabSeg && clientTabSeg !== 'attendance';
   const isClientAttendanceModule = clientTabSeg === 'attendance';
+
+  const loadClients = useCallback(async () => {
+    setClientsLoading(true);
+    setClientsError(null);
+    try {
+      const data = await api.listPmClients();
+      setClients(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setClientsError(err.message);
+    } finally {
+      setClientsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadClients();
+  }, [loadClients]);
 
   useEffect(() => {
     setMobileNavOpen(false);
   }, [pathname]);
+
+  const setPanelOpenPersist = (open) => {
+    setPanelOpen(open);
+    writeSidebarPanelOpen(open);
+  };
+
+  // Entering a client shows its modules in the panel; leaving returns to the client list.
+  useEffect(() => {
+    if (clientId) {
+      setPanelView('modules');
+      setPanelOpen(true);
+      writeSidebarPanelOpen(true);
+    } else {
+      setPanelView('clients');
+    }
+  }, [clientId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,37 +167,49 @@ export default function PmLayout() {
     navigate('/login', { replace: true });
   };
 
-  const closeMobile = () => setMobileNavOpen(false);
+  const clientsRailActive = Boolean(clientId) || (panelOpen && panelView === 'clients');
 
-  const defaultItems = [
+  const handleClientsRailClick = () => {
+    if (!panelOpen) {
+      setPanelView('clients');
+      setPanelOpenPersist(true);
+    } else if (panelView === 'modules') {
+      setPanelView('clients');
+    } else {
+      setPanelOpenPersist(false);
+    }
+  };
+
+  const railItems = [
     {
       id: 'dashboard',
       to: '/pm-dashboard/dashboard',
       label: 'Dashboard',
-      active: dashboardNavActive,
-      icon: <IconDashboard className="h-full w-full" />
+      active: pathname === '/pm-dashboard/dashboard',
+      icon: <IconDashboard className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
     },
     {
       id: 'clients',
-      to: '/pm-dashboard/clients',
       label: 'Clients',
-      active: clientsNavActive && !isClientDetail,
-      icon: <IconClients className="h-full w-full" />
+      active: clientsRailActive,
+      icon: <IconClients className="h-full w-full" />,
+      onClick: handleClientsRailClick
     }
   ];
 
-  const clientItems = c
+  const moduleItems = clientId
     ? [
         {
           id: 'onboarding',
-          to: pmClientTabUrl(c, 'client_dashboard'),
+          to: pmClientTabUrl(clientId, 'client_dashboard'),
           label: 'Onboarding',
           active: isClientOnboardingModule,
           icon: <IconOnboarding className="h-full w-full" filled={isClientOnboardingModule} />
         },
         {
           id: 'attendance',
-          to: pmClientTabUrl(c, 'attendance'),
+          to: pmClientTabUrl(clientId, 'attendance'),
           label: 'Attendance',
           active: isClientAttendanceModule,
           icon: <IconDashboard className="h-full w-full" />
@@ -170,26 +217,47 @@ export default function PmLayout() {
       ]
     : [];
 
-  const renderSidebar = () => (
-    <CollapsibleAppSidebar
-      homeTo="/pm-dashboard/clients"
+  const activeClient = clientId
+    ? clients.find((c) => String(c.id) === String(clientId))
+    : null;
+
+  const renderPanel = (closeDrawer) => {
+    if (panelView === 'modules' && clientId) {
+      return (
+        <SidebarModulesPanel
+          clientName={activeClient?.client_name ?? 'Client'}
+          items={moduleItems}
+          onShowClients={() => setPanelView('clients')}
+          onNavigate={closeDrawer}
+        />
+      );
+    }
+    return (
+      <SidebarClientsPanel
+        subtitle="Clients where you are the Program Manager."
+        clients={clients}
+        loading={clientsLoading}
+        error={clientsError}
+        onRetry={loadClients}
+        activeClientId={clientId}
+        clientLink={(client) => `/pm-dashboard/client/${client.id}/dashboard`}
+        onNavigate={closeDrawer}
+      />
+    );
+  };
+
+  const renderSidebar = ({ forcePanelOpen = false } = {}) => (
+    <TwoPaneSidebar
+      homeTo="/pm-dashboard/dashboard"
       profile={profile}
       user={user}
       onSignOut={handleSignOut}
-      onNavigate={closeMobile}
-      collapsed={sidebarCollapsed}
-      onCollapsedChange={setSidebarCollapsed}
-      items={isClientDetail && c ? clientItems : defaultItems}
+      onNavigate={() => setMobileNavOpen(false)}
+      railItems={railItems}
+      panelOpen={panelOpen || forcePanelOpen}
+      panel={renderPanel(() => setMobileNavOpen(false))}
     />
   );
-
-  const toggleSidebarCollapsed = () => {
-    setSidebarCollapsed((v) => {
-      const next = !v;
-      writeSidebarCollapsed(next);
-      return next;
-    });
-  };
 
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-slate-100">
@@ -211,7 +279,7 @@ export default function PmLayout() {
           mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {renderSidebar()}
+        {renderSidebar({ forcePanelOpen: true })}
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -226,11 +294,11 @@ export default function PmLayout() {
             {mobileNavOpen ? <IconClose className="h-6 w-6" /> : <IconMenu className="h-6 w-6" />}
           </button>
           <SidebarCollapseToggle
-            collapsed={sidebarCollapsed}
-            onToggle={toggleSidebarCollapsed}
+            collapsed={!panelOpen}
+            onToggle={() => setPanelOpenPersist(!panelOpen)}
             className="hidden lg:inline-flex"
           />
-          <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Onboarding System</span>
+          <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Staffing-Go</span>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">

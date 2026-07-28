@@ -50,8 +50,13 @@ export default function Login() {
         onSubmit={onSubmit}
         className="w-full max-w-sm bg-white p-8 rounded-lg shadow-sm border border-slate-200"
       >
-        <h1 className="text-2xl font-semibold text-slate-900 mb-1">Sign in</h1>
-        <p className="text-sm text-slate-500 mb-6">Payroll Lead portal</p>
+        <div className="mb-6 flex items-center gap-3">
+          <img src="/logo.png" alt="Staffing-Go logo" className="h-12 w-12 rounded-xl" draggable={false} />
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-900 leading-tight">Staffing-Go</h1>
+            <p className="text-sm text-slate-500">Sign in to continue</p>
+          </div>
+        </div>
 
         <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
         <input

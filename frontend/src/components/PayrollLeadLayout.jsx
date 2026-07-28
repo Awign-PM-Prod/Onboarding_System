@@ -1,13 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import CollapsibleAppSidebar, {
+import { api } from '../lib/api';
+import {
   IconClients,
   IconDashboard,
-  SidebarCollapseToggle,
-  readSidebarCollapsed,
-  writeSidebarCollapsed
+  IconOnboarding,
+  IconSettings,
+  SidebarCollapseToggle
 } from './CollapsibleAppSidebar';
+import TwoPaneSidebar, {
+  SidebarClientsPanel,
+  SidebarModulesPanel,
+  readSidebarPanelOpen,
+  writeSidebarPanelOpen
+} from './TwoPaneSidebar';
 
 function IconMenu({ className }) {
   return (
@@ -25,71 +32,256 @@ function IconClose({ className }) {
   );
 }
 
+function IconCheck({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function IconReject({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function IconId({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5zm6-10.125a1.875 1.875 0 11-3.75 0 1.875 1.875 0 013.75 0zm1.294 6.336a6.721 6.721 0 01-3.17.789 6.721 6.721 0 01-3.168-.789 3.376 3.376 0 016.338 0z"
+      />
+    </svg>
+  );
+}
+
+function IconCalendar({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"
+      />
+    </svg>
+  );
+}
+
+function IconUserSwitch({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"
+      />
+    </svg>
+  );
+}
+
 export default function PayrollLeadLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { profile, user, signOut } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const [panelOpen, setPanelOpen] = useState(readSidebarPanelOpen);
+  const [panelView, setPanelView] = useState('clients');
+  const [clients, setClients] = useState([]);
+  const [clientsLoading, setClientsLoading] = useState(true);
+  const [clientsError, setClientsError] = useState(null);
+
+  const pathname = location.pathname;
+  const clientId = pathname.match(/^\/dashboard\/client\/([^/]+)/)?.[1] ?? null;
+
+  const loadClients = useCallback(async () => {
+    setClientsLoading(true);
+    setClientsError(null);
+    try {
+      const data = await api.listClients();
+      setClients(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setClientsError(err.message);
+    } finally {
+      setClientsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadClients();
+  }, [loadClients]);
 
   useEffect(() => {
     setMobileNavOpen(false);
-  }, [location.pathname]);
+  }, [pathname]);
+
+  const setPanelOpenPersist = (open) => {
+    setPanelOpen(open);
+    writeSidebarPanelOpen(open);
+  };
+
+  // Entering a client shows its modules in the panel; leaving returns to the client list.
+  useEffect(() => {
+    if (clientId) {
+      setPanelView('modules');
+      setPanelOpen(true);
+      writeSidebarPanelOpen(true);
+    } else {
+      setPanelView('clients');
+    }
+  }, [clientId]);
 
   const handleSignOut = async () => {
     await signOut();
     navigate('/login', { replace: true });
   };
 
-  if (location.pathname === '/dashboard') {
-    return <Navigate to="/dashboard/clients" replace />;
+  if (pathname === '/dashboard') {
+    return <Navigate to="/dashboard/dashboard" replace />;
   }
 
-  const pathname = location.pathname;
-  const dashboardNavActive = pathname === '/dashboard/dashboard';
-  const clientsNavActive =
-    pathname === '/dashboard/clients' ||
-    pathname.startsWith('/dashboard/client/') ||
+  const clientsRailActive =
+    Boolean(clientId) ||
+    (panelOpen && panelView === 'clients') ||
     pathname === '/clients/new' ||
     /^\/clients\/[^/]+\/edit\/?$/.test(pathname);
 
-  const items = [
+  const handleClientsRailClick = () => {
+    if (!panelOpen) {
+      setPanelView('clients');
+      setPanelOpenPersist(true);
+    } else if (panelView === 'modules') {
+      setPanelView('clients');
+    } else {
+      setPanelOpenPersist(false);
+    }
+  };
+
+  const railItems = [
     {
       id: 'dashboard',
       to: '/dashboard/dashboard',
       label: 'Dashboard',
-      active: dashboardNavActive,
-      icon: <IconDashboard className="h-full w-full" />
+      active: pathname === '/dashboard/dashboard',
+      icon: <IconDashboard className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
     },
     {
       id: 'clients',
-      to: '/dashboard/clients',
       label: 'Clients',
-      active: clientsNavActive,
-      icon: <IconClients className="h-full w-full" />
+      active: clientsRailActive,
+      icon: <IconClients className="h-full w-full" />,
+      onClick: handleClientsRailClick
     }
   ];
 
-  const renderSidebar = () => (
-    <CollapsibleAppSidebar
-      homeTo="/dashboard/clients"
+  const base = clientId ? `/dashboard/client/${clientId}` : '';
+  const moduleItems = clientId
+    ? [
+        {
+          id: 'dashboard',
+          to: `${base}/dashboard`,
+          label: 'Dashboard',
+          active: /\/dashboard\/?$/.test(pathname),
+          icon: <IconDashboard className="h-full w-full" />
+        },
+        {
+          id: 'pm-approved',
+          to: `${base}/approved-employees`,
+          label: 'PM Approved',
+          active: /\/approved-employees\/?$/.test(pathname),
+          icon: <IconOnboarding className="h-full w-full" />
+        },
+        {
+          id: 'approved',
+          to: `${base}/pl-approved-employees`,
+          label: 'Approved',
+          active: pathname.includes('/pl-approved-employees'),
+          icon: <IconCheck className="h-full w-full" />
+        },
+        {
+          id: 'rejected',
+          to: `${base}/rejected-employees`,
+          label: 'Rejected',
+          active: pathname.includes('/rejected-employees'),
+          icon: <IconReject className="h-full w-full" />
+        },
+        {
+          id: 'identity',
+          to: `${base}/identity-numbers`,
+          label: 'UAN & ESIC',
+          active: pathname.includes('/identity-numbers'),
+          icon: <IconId className="h-full w-full" />
+        },
+        {
+          id: 'attendance',
+          to: `${base}/attendance`,
+          label: 'Attendance',
+          active: pathname.includes('/attendance'),
+          icon: <IconCalendar className="h-full w-full" />
+        },
+        {
+          id: 'policy',
+          to: `${base}/policy`,
+          label: 'Policy Configuration',
+          active: pathname.includes('/policy'),
+          icon: <IconSettings className="h-full w-full" />
+        },
+        {
+          id: 'assign-pm',
+          to: `${base}/assign-pm`,
+          label: 'Assign Program Manager',
+          active: pathname.includes('/assign-pm'),
+          icon: <IconUserSwitch className="h-full w-full" />
+        }
+      ]
+    : [];
+
+  const activeClient = clientId
+    ? clients.find((c) => String(c.id) === String(clientId))
+    : null;
+
+  const renderPanel = (closeDrawer) => {
+    if (panelView === 'modules' && clientId) {
+      return (
+        <SidebarModulesPanel
+          clientName={activeClient?.client_name ?? 'Client'}
+          items={moduleItems}
+          onShowClients={() => setPanelView('clients')}
+          onNavigate={closeDrawer}
+        />
+      );
+    }
+    return (
+      <SidebarClientsPanel
+        clients={clients}
+        loading={clientsLoading}
+        error={clientsError}
+        onRetry={loadClients}
+        activeClientId={clientId}
+        clientLink={(client) => `/dashboard/client/${client.id}/dashboard`}
+        addClientTo="/clients/new"
+        onNavigate={closeDrawer}
+      />
+    );
+  };
+
+  const renderSidebar = ({ forcePanelOpen = false } = {}) => (
+    <TwoPaneSidebar
+      homeTo="/dashboard/dashboard"
       profile={profile}
       user={user}
       onSignOut={handleSignOut}
       onNavigate={() => setMobileNavOpen(false)}
-      collapsed={sidebarCollapsed}
-      onCollapsedChange={setSidebarCollapsed}
-      items={items}
+      railItems={railItems}
+      panelOpen={panelOpen || forcePanelOpen}
+      panel={renderPanel(() => setMobileNavOpen(false))}
     />
   );
-
-  const toggleSidebarCollapsed = () => {
-    setSidebarCollapsed((v) => {
-      const next = !v;
-      writeSidebarCollapsed(next);
-      return next;
-    });
-  };
 
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-slate-100">
@@ -111,7 +303,7 @@ export default function PayrollLeadLayout() {
           mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {renderSidebar()}
+        {renderSidebar({ forcePanelOpen: true })}
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -126,11 +318,11 @@ export default function PayrollLeadLayout() {
             {mobileNavOpen ? <IconClose className="h-6 w-6" /> : <IconMenu className="h-6 w-6" />}
           </button>
           <SidebarCollapseToggle
-            collapsed={sidebarCollapsed}
-            onToggle={toggleSidebarCollapsed}
+            collapsed={!panelOpen}
+            onToggle={() => setPanelOpenPersist(!panelOpen)}
             className="hidden lg:inline-flex"
           />
-          <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Onboarding System</span>
+          <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Staffing-Go</span>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">

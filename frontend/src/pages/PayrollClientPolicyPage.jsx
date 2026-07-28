@@ -5,24 +5,35 @@ import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyCon
 import {
   DEFAULT_ATTENDANCE_POLICY,
   buildLeaveAllowancesForDesignations,
+  mergeAttendancePolicyRoles,
   normalizeAttendancePolicyForForm
 } from '../lib/clientPolicy';
 import { emitClientPolicyUpdated } from '../lib/clientPolicyEvents';
 
+function currentMonthValue() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 function applyClientPolicyState(found, setters) {
   const {
     setClient,
+    setDesignations,
     setAttendancePolicy,
     setLeaveAllowances,
     setHolidays
   } = setters;
   setClient(found);
-  setDesignations(found.designations ?? []);
+  // Include designations found on the client's employees so every employee in
+  // attendance gets a configurable leave-allowance row (denominator source).
+  const mergedDesignations = mergeAttendancePolicyRoles(
+    found.designations ?? [],
+    found.employee_designations ?? []
+  );
+  setDesignations(mergedDesignations);
   setAttendancePolicy(normalizeAttendancePolicyForForm(found.attendance_policy));
   setLeaveAllowances(
-    found.leave_allowances?.length
-      ? found.leave_allowances
-      : buildLeaveAllowancesForDesignations(found.designations ?? [])
+    buildLeaveAllowancesForDesignations(mergedDesignations, found.leave_allowances ?? [])
   );
   setHolidays(found.holidays ?? []);
 }
@@ -56,6 +67,8 @@ export default function PayrollClientPolicyPage() {
   const [policyHistory, setPolicyHistory] = useState([]);
   const [showPolicyHistory, setShowPolicyHistory] = useState(false);
   const [recalcError, setRecalcError] = useState(null);
+  const [effectiveFromMonth, setEffectiveFromMonth] = useState(currentMonthValue);
+  const [confirmEarlyEffective, setConfirmEarlyEffective] = useState(false);
 
   const loadClient = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -64,6 +77,7 @@ export default function PayrollClientPolicyPage() {
       const found = await fetchClientForPolicy(id);
       applyClientPolicyState(found, {
         setClient,
+        setDesignations,
         setAttendancePolicy,
         setLeaveAllowances,
         setHolidays
@@ -133,7 +147,8 @@ export default function PayrollClientPolicyPage() {
         designations,
         attendance_policy: policyPayload,
         leave_allowances: leaveAllowances,
-        holidays: holidays.filter((h) => h.holiday_date)
+        holidays: holidays.filter((h) => h.holiday_date),
+        effective_from_month: effectiveFromMonth
       };
 
       let updated = null;
@@ -165,6 +180,7 @@ export default function PayrollClientPolicyPage() {
 
       applyClientPolicyState(updated, {
         setClient,
+        setDesignations,
         setAttendancePolicy,
         setLeaveAllowances,
         setHolidays
@@ -175,6 +191,9 @@ export default function PayrollClientPolicyPage() {
       setSaved(true);
       setPolicyChanges(updated?.policy_changes ?? []);
       setSavedRecalcCount(Number(updated?.attendance_recalculated ?? 0));
+      if (updated?.effective_from_month) {
+        setEffectiveFromMonth(String(updated.effective_from_month).slice(0, 7));
+      }
       if (updated?.attendance_recalc_error) {
         setRecalcError(updated.attendance_recalc_error);
       }
@@ -229,7 +248,8 @@ export default function PayrollClientPolicyPage() {
           )}
           {savedRecalcCount > 0 && (
             <p className="mt-2">
-              Attendance recalculated for {savedRecalcCount} sheet{savedRecalcCount === 1 ? '' : 's'} (paid days, leave balances, incentives).
+              Attendance recalculated for {savedRecalcCount} sheet{savedRecalcCount === 1 ? '' : 's'} from{' '}
+              {formatEffectiveMonth(effectiveFromMonth)} onward (paid days, leave balances, incentives).
             </p>
           )}
           {savedRecalcCount === 0 && (
@@ -276,6 +296,38 @@ export default function PayrollClientPolicyPage() {
             )}
           </div>
         )}
+        <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <label htmlFor="effective-from-month" className="block text-sm font-medium text-slate-900">
+            Effective from month
+          </label>
+          <p className="mt-1 text-xs text-slate-500">
+            New rules apply to attendance sheets from this month onward. Earlier months keep their existing calculations.
+          </p>
+          <input
+            id="effective-from-month"
+            type="month"
+            value={effectiveFromMonth}
+            onChange={(e) => {
+              setEffectiveFromMonth(e.target.value);
+              setConfirmEarlyEffective(false);
+            }}
+            className="mt-2 rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+          {effectiveFromMonth < currentMonthValue() && !confirmEarlyEffective && (
+            <label className="mt-3 flex items-start gap-2 text-sm text-amber-800">
+              <input
+                type="checkbox"
+                checked={confirmEarlyEffective}
+                onChange={(e) => setConfirmEarlyEffective(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                I understand prior months will not be changed; only sheets from{' '}
+                {formatEffectiveMonth(effectiveFromMonth)} onward will use these rules.
+              </span>
+            </label>
+          )}
+        </div>
         <ClientPolicyConfigFields
           attendancePolicy={attendancePolicy}
           leaveAllowances={leaveAllowances}
@@ -291,7 +343,10 @@ export default function PayrollClientPolicyPage() {
         <div className="mt-6 flex justify-end">
           <button
             type="submit"
-            disabled={submitting}
+            disabled={
+              submitting
+              || (effectiveFromMonth < currentMonthValue() && !confirmEarlyEffective)
+            }
             className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-60"
           >
             {submitting ? 'Saving...' : 'Save Policy'}
@@ -300,4 +355,10 @@ export default function PayrollClientPolicyPage() {
       </form>
     </main>
   );
+}
+
+function formatEffectiveMonth(monthYm) {
+  if (!monthYm) return '—';
+  const d = new Date(`${String(monthYm).slice(0, 7)}-01T00:00:00Z`);
+  return d.toLocaleString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 }

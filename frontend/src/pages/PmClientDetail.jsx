@@ -11,7 +11,6 @@ import AttendancePanel from '../components/AttendancePanel';
 import ModalOverlay from '../components/ModalOverlay';
 import { api } from '../lib/api';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
-import BackToClientsLink from '../components/BackToClientsLink';
 import {
   formatContractDate,
   formatDesignationLabel,
@@ -1122,7 +1121,6 @@ export default function PmClientDetail() {
         {client && (
           <header className="sticky top-0 z-[60] isolate border-b border-slate-200 bg-white shadow-sm">
             <div className="mx-auto w-[98%] px-6 pb-4 pt-5">
-              <BackToClientsLink to="/pm-dashboard/clients" className="mb-3" />
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="min-w-0 text-2xl font-semibold tracking-tight text-slate-900">
                   {client.client_name}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
 import ModalOverlay from './ModalOverlay';
@@ -7,14 +7,15 @@ import {
   LEGEND_TOTAL_COLUMNS,
   LEAVE_SUMMARY_COLUMNS,
   codeCellClass,
-  computeLegendTotals,
   displayCode,
   formatLeaveSummaryCell,
   holidayFlagBorderClass,
   isPresentOnHolidayCode
 } from '../lib/attendanceLegend';
 import { isWeekOffDate, findLeaveAllowanceForDesignation } from '../lib/clientPolicy';
+import { previewRowSummary } from '../lib/attendanceRowSummary';
 import { CLIENT_POLICY_UPDATED_EVENT } from '../lib/clientPolicyEvents';
+import { createDebouncedRowSaver } from '../lib/attendanceAutoSave';
 
 const EDITABLE_CODES = [
   'P', 'W', 'NH', 'FH', 'P-NH', 'P-FH', 'HD',
@@ -204,6 +205,13 @@ export default function AttendancePanel({ clientId, role }) {
   const [uploadSkipModalOpen, setUploadSkipModalOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [draftRows, setDraftRows] = useState([]);
+  const [pendingSaveCount, setPendingSaveCount] = useState(0);
+  const [autoSaveError, setAutoSaveError] = useState(null);
+
+  const draftRowsRef = useRef(draftRows);
+  const serverRowsRef = useRef([]);
+  const sheetRef = useRef(null);
+  const canEditRef = useRef(false);
 
   const sheet = payload?.sheet ?? null;
   const clientPolicy = payload?.client_policy ?? null;
@@ -217,6 +225,82 @@ export default function AttendancePanel({ clientId, role }) {
   useEffect(() => {
     setDraftRows(cloneRows(serverRows));
   }, [serverRows]);
+
+  useEffect(() => {
+    draftRowsRef.current = draftRows;
+  }, [draftRows]);
+
+  useEffect(() => {
+    serverRowsRef.current = serverRows;
+  }, [serverRows]);
+
+  useEffect(() => {
+    sheetRef.current = sheet;
+  }, [sheet]);
+
+  useEffect(() => {
+    canEditRef.current = canEdit;
+  }, [canEdit]);
+
+  const hasPendingSaves = pendingSaveCount > 0;
+
+  const flushRowSave = useCallback(async (rowId) => {
+    const currentSheet = sheetRef.current;
+    if (!currentSheet?.id || !canEditRef.current) return;
+
+    const draft = draftRowsRef.current.find((r) => r.id === rowId);
+    const server = serverRowsRef.current.find((r) => r.id === rowId);
+    if (!draft || !server) return;
+
+    const changes = buildRowChanges([draft], [server]);
+    if (!changes.length) return;
+
+    setAutoSaveError(null);
+    try {
+      const data = await api.saveAttendanceRows({
+        clientId,
+        sheetId: currentSheet.id,
+        rows: changes
+      });
+      setPayload(data);
+      setDraftRows(cloneRows(data?.rows ?? []));
+      if (data?.sheet?.id) {
+        try {
+          const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
+          setLogs(Array.isArray(logRows) ? logRows : []);
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch (err) {
+      setAutoSaveError(err.message);
+      setError(err.message);
+      throw err;
+    }
+  }, [clientId]);
+
+  const rowSaverRef = useRef(null);
+
+  useEffect(() => {
+    rowSaverRef.current = createDebouncedRowSaver({
+      delayMs: 400,
+      onSave: (rowId) => flushRowSave(rowId)
+    });
+    const unsub = rowSaverRef.current.onPendingChange(setPendingSaveCount);
+    return () => {
+      unsub();
+      rowSaverRef.current?.cancelAll();
+    };
+  }, [flushRowSave]);
+
+  useEffect(() => {
+    rowSaverRef.current?.cancelAll();
+  }, [clientId, sheet?.id]);
+
+  const queueRowAutoSave = useCallback((rowId) => {
+    if (!canEditRef.current) return;
+    rowSaverRef.current?.schedule(rowId);
+  }, []);
 
   const isDirty = useMemo(() => {
     if (draftRows.length !== serverRows.length) {
@@ -237,13 +321,11 @@ export default function AttendancePanel({ clientId, role }) {
     return Array.from(set).sort();
   }, [rows]);
 
-  // Prefer the month of stored day marks so statuses align with calendar columns.
+  // Calendar month of the uploaded sheet (attendance_month), 1st → last day.
   const gridDayDates = useMemo(() => {
-    const fromMarks = dayDates.length ? toDateKey(dayDates[0])?.slice(0, 7) : null;
-    const fromSheet = sheet?.attendance_month
+    const monthYm = sheet?.attendance_month
       ? String(sheet.attendance_month).slice(0, 7)
-      : null;
-    const monthYm = fromMarks || fromSheet || month;
+      : month;
     const full = daysForMonth(monthYm);
     return full.length ? full : dayDates;
   }, [sheet?.attendance_month, month, dayDates]);
@@ -442,7 +524,7 @@ export default function AttendancePanel({ clientId, role }) {
   };
 
   useEffect(() => {
-    if (!sheet?.id || loading || busy || isDirty) return;
+    if (!sheet?.id || loading || busy || hasPendingSaves) return;
     if (!isPolicyNewerThanSheet(clientPolicy, sheet)) return;
 
     const recalcKey = `${sheet.id}:${clientPolicy?.policy_updated_at}`;
@@ -475,27 +557,27 @@ export default function AttendancePanel({ clientId, role }) {
     clientId,
     loading,
     busy,
-    isDirty
+    hasPendingSaves
   ]);
 
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState !== 'visible' || loading || busy || isDirty) return;
+      if (document.visibilityState !== 'visible' || loading || busy || hasPendingSaves) return;
       refreshAfterAction();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [clientId, month, loading, busy, isDirty]);
+  }, [clientId, month, loading, busy, hasPendingSaves]);
 
   useEffect(() => {
     const onPolicyUpdated = (e) => {
       if (String(e.detail?.clientId) !== String(clientId)) return;
-      if (loading || busy || isDirty) return;
+      if (loading || busy || hasPendingSaves) return;
       refreshAfterAction();
     };
     window.addEventListener(CLIENT_POLICY_UPDATED_EVENT, onPolicyUpdated);
     return () => window.removeEventListener(CLIENT_POLICY_UPDATED_EVENT, onPolicyUpdated);
-  }, [clientId, loading, busy, isDirty]);
+  }, [clientId, loading, busy, hasPendingSaves]);
 
   const showSkipWarningPopup = () => {
     if (uploadSkipWarning) setUploadSkipModalOpen(true);
@@ -503,8 +585,8 @@ export default function AttendancePanel({ clientId, role }) {
 
   const onSubmit = async () => {
     if (!sheet?.id || !canEdit) return;
-    if (isDirty) {
-      setError('Save your changes before submitting attendance.');
+    if (hasPendingSaves) {
+      setError('Waiting for auto-save to finish before submitting attendance.');
       return;
     }
     showSkipWarningPopup();
@@ -605,21 +687,33 @@ export default function AttendancePanel({ clientId, role }) {
   const onChangeCell = (rowId, date, code) => {
     if (!canEdit) return;
     const key = toDateKey(date);
-    setDraftRows((prev) =>
-      prev.map((r) => {
+    const monthYm = String(sheet?.attendance_month ?? month).slice(0, 7);
+    setDraftRows((prev) => {
+      const next = prev.map((r) => {
         if (r.id !== rowId) return r;
         const marks = [...(r.day_marks ?? [])];
         const idx = marks.findIndex((m) => toDateKey(m.mark_date) === key);
         if (idx >= 0) marks[idx] = { ...marks[idx], mark_date: key, code };
         else marks.push({ mark_date: key, code });
+        const withMarks = { ...r, day_marks: marks };
+        const summary = previewRowSummary(withMarks, clientPolicy, monthYm);
+        if (!summary) return withMarks;
         return {
-          ...r,
-          day_marks: marks,
-          legend_totals: computeLegendTotals(marks.map((m) => m.code))
+          ...withMarks,
+          paid_days: summary.paid_days,
+          lop: summary.lop,
+          not_considered: summary.not_considered,
+          total_days: summary.total_days,
+          legend_totals: summary.legend_totals,
+          leave_summary: summary.leave_summary,
+          incentive: summary.incentive
         };
-      })
-    );
+      });
+      draftRowsRef.current = next;
+      return next;
+    });
     setEditingCell(null);
+    queueRowAutoSave(rowId);
   };
 
   const onChangeAddonIncentive = (rowId, value) => {
@@ -627,6 +721,7 @@ export default function AttendancePanel({ clientId, role }) {
     setDraftRows((prev) =>
       prev.map((r) => (r.id === rowId ? { ...r, addon_incentive: value === '' ? null : value } : r))
     );
+    queueRowAutoSave(rowId);
   };
 
   const onChangeRemarks = (rowId, value) => {
@@ -634,33 +729,15 @@ export default function AttendancePanel({ clientId, role }) {
     setDraftRows((prev) =>
       prev.map((r) => (r.id === rowId ? { ...r, remarks: value } : r))
     );
+    queueRowAutoSave(rowId);
   };
 
   const onDiscard = () => {
+    rowSaverRef.current?.cancelAll();
     setDraftRows(cloneRows(serverRows));
+    setAutoSaveError(null);
     setError(null);
     showToast('Changes discarded');
-  };
-
-  const onSave = async () => {
-    if (!sheet?.id || !canEdit || !isDirty) return;
-    const changes = buildRowChanges(draftRows, serverRows);
-    if (!changes.length) return;
-
-    setBusy(true);
-    setError(null);
-    try {
-      const data = await api.saveAttendanceRows({ clientId, sheetId: sheet.id, rows: changes });
-      setPayload(data);
-      setDraftRows(cloneRows(data?.rows ?? []));
-      showToast('Changes saved');
-      const logRows = await api.getAttendanceLogs({ clientId, sheetId: sheet.id });
-      setLogs(Array.isArray(logRows) ? logRows : []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
   };
 
   const onExport = async (type) => {
@@ -1367,7 +1444,7 @@ export default function AttendancePanel({ clientId, role }) {
                 {canEdit && (
                   <button
                     type="button"
-                    disabled={busy || isDirty}
+                    disabled={busy || hasPendingSaves}
                     onClick={onSubmit}
                     className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                   >
@@ -1384,24 +1461,25 @@ export default function AttendancePanel({ clientId, role }) {
             </div>
           )}
 
-          {sheet && isDirty && canEdit && (
-            <div className="sticky bottom-0 z-50 flex justify-end gap-2 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={onDiscard}
-                className="rounded-md border border-red-500 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
-              >
-                Discard
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={onSave}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
-              >
-                {busy ? 'Saving…' : 'Save'}
-              </button>
+          {sheet && canEdit && (hasPendingSaves || isDirty || autoSaveError) && (
+            <div className="sticky bottom-0 z-50 flex items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+              <p className="text-sm text-slate-600">
+                {autoSaveError
+                  ? `Auto-save failed: ${autoSaveError}`
+                  : hasPendingSaves
+                    ? 'Saving changes…'
+                    : 'All changes saved'}
+              </p>
+              {isDirty && (
+                <button
+                  type="button"
+                  disabled={busy || hasPendingSaves}
+                  onClick={onDiscard}
+                  className="rounded-md border border-red-500 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+                >
+                  Discard
+                </button>
+              )}
             </div>
           )}
         </>

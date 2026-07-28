@@ -169,7 +169,7 @@ export default function ClientForm() {
     <main className="mx-auto max-w-5xl px-6 py-8">
       <div className="mb-6">
         <Link to="/dashboard" className="text-sm text-indigo-600 hover:text-indigo-800">
-          &larr; Back to clients
+          &larr; Back to dashboard
         </Link>
         <h1 className="mt-2 text-2xl font-semibold text-slate-900">
           {isEdit ? 'Edit Client' : 'Create Client'}

@@ -123,7 +123,7 @@ export default function PayrollHeadLayout() {
             onToggle={toggleSidebarCollapsed}
             className="hidden lg:inline-flex"
           />
-          <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Onboarding System</span>
+          <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Staffing-Go</span>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">

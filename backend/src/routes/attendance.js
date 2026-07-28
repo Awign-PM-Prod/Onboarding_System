@@ -8,8 +8,10 @@ import {
 } from '../utils/attendanceLegend.js';
 import {
   fetchYtdTakenByEmployee,
+  applyDefaultMarksForRow,
   loadClientPolicyForResponse,
   recalculateAllAttendanceSheetsForClient,
+  recalculateForwardYtdForEmployees,
   recalculateRowSummary,
   recalculateSheetRows
 } from '../utils/attendanceRecalc.js';
@@ -334,7 +336,7 @@ router.get('/', async (req, res, next) => {
 
     if (!sheet) {
       const eligiblePms = await loadEligiblePms(access.client);
-      const client_policy = await loadClientPolicyForResponse(clientId);
+      const client_policy = await loadClientPolicyForResponse(clientId, monthDate.slice(0, 7));
       return res.json({
         sheet: null,
         rows: [],
@@ -353,7 +355,7 @@ router.get('/', async (req, res, next) => {
     const bundle = await fetchSheetBundle(sheet.id);
     const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
     const eligiblePms = await loadEligiblePms(access.client);
-    const client_policy = await loadClientPolicyForResponse(clientId);
+    const client_policy = await loadClientPolicyForResponse(clientId, monthYm(sheet.attendance_month));
     res.json({
       ...bundle,
       client: access.client,
@@ -864,9 +866,10 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
       (grantsForPatch ?? []).map((g) => g.user_id)
     );
 
-    const client_policy = await loadClientPolicyForResponse(clientId);
     const monthYmVal = monthYm(sheet.attendance_month);
+    const client_policy = await loadClientPolicyForResponse(clientId, monthYmVal);
     const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
+    const affectedEmployeeIds = [];
 
     for (const change of changes) {
       const rowId = change?.row_id;
@@ -932,11 +935,18 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
         rowUpdate.remarks = s || null;
       }
 
-      const { data: allMarks, error: allErr } = await supabaseAdmin
+      let { data: allMarks, error: allErr } = await supabaseAdmin
         .from('attendance_day_marks')
         .select('mark_date, code')
         .eq('row_id', row.id);
       if (allErr) throw allErr;
+
+      allMarks = await applyDefaultMarksForRow(
+        row.id,
+        allMarks ?? [],
+        client_policy,
+        monthYmVal
+      );
 
       const ytdMap = row.employee_id
         ? await fetchYtdTakenByEmployee(clientId, year, monthYmVal, [row.employee_id])
@@ -996,6 +1006,12 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
           message: buildRowFieldChangeMessage(row.emp_code, beforeFields, rowUpdate)
         });
       }
+
+      if (row.employee_id) affectedEmployeeIds.push(row.employee_id);
+    }
+
+    if (affectedEmployeeIds.length) {
+      await recalculateForwardYtdForEmployees(clientId, monthYmVal, affectedEmployeeIds);
     }
 
     if (sheet.status === 'SUBMITTED') {
@@ -1096,14 +1112,21 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
       dayMarkId = created.id;
     }
 
-    const { data: allMarks, error: allErr } = await supabaseAdmin
+    let { data: allMarks, error: allErr } = await supabaseAdmin
       .from('attendance_day_marks')
       .select('mark_date, code')
       .eq('row_id', row.id);
     if (allErr) throw allErr;
 
-    const client_policy = await loadClientPolicyForResponse(clientId);
     const monthYmVal = monthYm(sheet.attendance_month);
+    const client_policy = await loadClientPolicyForResponse(clientId, monthYmVal);
+    allMarks = await applyDefaultMarksForRow(
+      row.id,
+      allMarks ?? [],
+      client_policy,
+      monthYmVal
+    );
+
     const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
     const ytdMap = row.employee_id
       ? await fetchYtdTakenByEmployee(clientId, year, monthYmVal, [row.employee_id])
@@ -1143,6 +1166,10 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
       message: `${row.emp_code} ${markDate}: ${before?.code ?? '(empty)'} → ${code}`
     });
 
+    if (row.employee_id) {
+      await recalculateForwardYtdForEmployees(clientId, monthYmVal, [row.employee_id]);
+    }
+
     // reset to draft if was submitted
     if (sheet.status === 'SUBMITTED') {
       await supabaseAdmin
@@ -1153,8 +1180,11 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
 
     res.json({
       ok: true,
+      row_id: row.id,
       code,
       mark_date: markDate,
+      addon_incentive: row.addon_incentive,
+      remarks: row.remarks,
       legend_totals: summary.legend_totals,
       paid_days: summary.paid_days,
       lop: summary.lop,

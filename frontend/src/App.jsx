@@ -1,13 +1,10 @@
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
 import ClientForm from './pages/ClientForm';
 import PmLayout from './components/PmLayout';
 import PayrollLeadLayout from './components/PayrollLeadLayout';
-import PayrollClientLayout from './components/PayrollClientLayout';
 import PayrollHeadLayout from './components/PayrollHeadLayout';
 import PmDashboardHome from './pages/PmDashboardHome';
-import PmClientsPage from './pages/PmClientsPage';
 import PmClientDetail from './pages/PmClientDetail';
 import PayrollLeadDashboardHome from './pages/PayrollLeadDashboardHome';
 import PayrollClientDashboardHome from './pages/PayrollClientDashboardHome';
@@ -46,36 +43,22 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route path="/dashboard" element={<Navigate to="/dashboard/clients" replace />} />
+        <Route path="/dashboard" element={<Navigate to="/dashboard/dashboard" replace />} />
         <Route path="/dashboard/dashboard" element={<PayrollLeadDashboardHome />} />
-        <Route path="/dashboard/clients" element={<Dashboard />} />
+        <Route path="/dashboard/clients" element={<Navigate to="/dashboard/dashboard" replace />} />
         <Route path="/clients/new" element={<ClientForm />} />
         <Route path="/clients/:id/edit" element={<ClientForm />} />
-      </Route>
-      <Route
-        path="/dashboard/client/:id"
-        element={
-          <ProtectedRoute role="PAYROLL_LEAD">
-            <PayrollClientDefaultRedirect />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/dashboard/client/:id"
-        element={
-          <ProtectedRoute role="PAYROLL_LEAD">
-            <PayrollClientLayout />
-          </ProtectedRoute>
-        }
-      >
-        <Route path="dashboard" element={<PayrollClientDashboardHome />} />
-        <Route path="approved-employees" element={<PayrollClientApprovedEmployeesPage />} />
-        <Route path="pl-approved-employees" element={<PayrollClientFinalApprovedEmployeesPage />} />
-        <Route path="rejected-employees" element={<PayrollClientRejectedEmployeesPage />} />
-        <Route path="identity-numbers" element={<PayrollClientIdentityNumbersPage />} />
-        <Route path="attendance" element={<PayrollClientAttendancePage />} />
-        <Route path="policy" element={<PayrollClientPolicyPage />} />
-        <Route path="assign-pm" element={<PayrollClientAssignPmPage />} />
+        <Route path="/dashboard/client/:id">
+          <Route index element={<PayrollClientDefaultRedirect />} />
+          <Route path="dashboard" element={<PayrollClientDashboardHome />} />
+          <Route path="approved-employees" element={<PayrollClientApprovedEmployeesPage />} />
+          <Route path="pl-approved-employees" element={<PayrollClientFinalApprovedEmployeesPage />} />
+          <Route path="rejected-employees" element={<PayrollClientRejectedEmployeesPage />} />
+          <Route path="identity-numbers" element={<PayrollClientIdentityNumbersPage />} />
+          <Route path="attendance" element={<PayrollClientAttendancePage />} />
+          <Route path="policy" element={<PayrollClientPolicyPage />} />
+          <Route path="assign-pm" element={<PayrollClientAssignPmPage />} />
+        </Route>
       </Route>
 
       <Route
@@ -86,9 +69,9 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="clients" replace />} />
+        <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<PmDashboardHome />} />
-        <Route path="clients" element={<PmClientsPage />} />
+        <Route path="clients" element={<Navigate to="/pm-dashboard/dashboard" replace />} />
         <Route path="client/:id" element={<PmClientDefaultRedirect />} />
         <Route path="client/:id/:tab" element={<PmClientDetail />} />
       </Route>

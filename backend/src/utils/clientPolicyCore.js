@@ -168,6 +168,24 @@ export function getPayrollPeriod(policy, monthYm) {
   return { start, end };
 }
 
+/**
+ * Calendar-month period for a YYYY-MM anchor month (1st to last day).
+ * Attendance calculations use this window so it always matches the grid.
+ */
+export function getCalendarMonthPeriod(monthYm) {
+  const m = String(monthYm ?? '').trim().slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(m)) {
+    return { start: null, end: null };
+  }
+  const year = Number(m.slice(0, 4));
+  const mon = Number(m.slice(5, 7));
+  const lastDay = new Date(Date.UTC(year, mon, 0)).getUTCDate();
+  return {
+    start: isoFromParts(year, mon, 1),
+    end: isoFromParts(year, mon, lastDay)
+  };
+}
+
 export function payrollCycleLabel(policy) {
   const start = Number(policy?.payroll_cycle_start_day) || 1;
   const end = Number(policy?.payroll_cycle_end_day) || 31;

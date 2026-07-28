@@ -3,6 +3,9 @@ import { supabaseAdmin } from '../supabase.js';
 import {
   fetchClientPolicyBundle,
   upsertClientPolicyBundle,
+  insertClientPolicyVersion,
+  ensureBaselinePolicyVersion,
+  monthYmToDate,
   validateAttendancePolicyPayload,
   validateHolidaysPayload,
   validateLeaveAllowancesPayload
@@ -15,8 +18,23 @@ async function savePolicyWithAudit(clientId, body, actor) {
   const beforeBundle = await fetchClientPolicyBundle(clientId);
   const savedPolicy = await upsertClientPolicyBundle(clientId, body);
   const afterBundle = await fetchClientPolicyBundle(clientId);
+
+  const now = new Date();
+  const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const effectiveFromMonth = body.effective_from_month ?? body.effectiveFromMonth ?? defaultMonth;
+  const effectiveMonthDate = monthYmToDate(effectiveFromMonth);
+  if (!effectiveMonthDate) {
+    const err = new Error('effective_from_month must be YYYY-MM');
+    err.status = 400;
+    throw err;
+  }
+
+  await ensureBaselinePolicyVersion(clientId);
+  await insertClientPolicyVersion(clientId, effectiveMonthDate, afterBundle, actor?.userId ?? null);
+
   const policyChanges = diffClientPolicyBundles(beforeBundle, afterBundle);
-  const message = summarizePolicyChanges(policyChanges);
+  const effectiveLabel = String(effectiveFromMonth).slice(0, 7);
+  const message = summarizePolicyChanges(policyChanges, effectiveLabel);
 
   try {
     await supabaseAdmin.from('client_policy_change_logs').insert({
@@ -30,7 +48,7 @@ async function savePolicyWithAudit(clientId, body, actor) {
     console.warn('[clients] policy change log insert skipped:', logErr?.message || logErr);
   }
 
-  return { savedPolicy, policyChanges, afterBundle };
+  return { savedPolicy, policyChanges, afterBundle, effectiveFromMonth: effectiveLabel };
 }
 
 function mergeSavedPolicyResponse(full, savedPolicy) {
@@ -165,12 +183,52 @@ async function fetchClientWithRelations(clientId) {
     .order('created_at', { ascending: true });
   if (desigErr) throw desigErr;
 
+  const { data: employeeDesigs, error: empDesigErr } = await supabaseAdmin
+    .from('employees')
+    .select('designation')
+    .eq('client_id', clientId)
+    .not('designation', 'is', null);
+  if (empDesigErr) throw empDesigErr;
+
+  // Attendance rows carry designation snapshots from CSV import, which may not
+  // exist on the employees table — include them so leave allowances can be
+  // configured for every designation that appears in attendance.
+  const { data: clientSheets, error: sheetsErr } = await supabaseAdmin
+    .from('attendance_sheets')
+    .select('id')
+    .eq('client_id', clientId);
+  if (sheetsErr) throw sheetsErr;
+
+  let attendanceRowDesigs = [];
+  if (clientSheets?.length) {
+    const { data: rowDesigs, error: rowDesigErr } = await supabaseAdmin
+      .from('attendance_rows')
+      .select('designation')
+      .in('sheet_id', clientSheets.map((s) => s.id))
+      .not('designation', 'is', null);
+    if (rowDesigErr) throw rowDesigErr;
+    attendanceRowDesigs = rowDesigs ?? [];
+  }
+
+  const employeeDesignations = [];
+  const seenEmpDesig = new Set();
+  for (const row of [...(employeeDesigs ?? []), ...attendanceRowDesigs]) {
+    const name = String(row.designation ?? '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase().replace(/\s+/g, '');
+    if (seenEmpDesig.has(key)) continue;
+    seenEmpDesig.add(key);
+    employeeDesignations.push(name);
+  }
+  employeeDesignations.sort((a, b) => a.localeCompare(b));
+
   const policyBundle = await fetchClientPolicyBundle(clientId);
 
   return {
     ...client,
     program_manager_name: client.program_manager?.name ?? null,
     designations: designations.map(d => d.name),
+    employee_designations: employeeDesignations,
     ...policyBundle
   };
 }
@@ -333,6 +391,7 @@ router.post('/', async (req, res, next) => {
 
     try {
       await upsertClientPolicyBundle(created.id, req.body);
+      await ensureBaselinePolicyVersion(created.id);
     } catch (policyErr) {
       await supabaseAdmin.from('clients').delete().eq('id', created.id);
       throw policyErr;
@@ -410,14 +469,16 @@ router.put('/:id', async (req, res, next) => {
       if (insErr) throw insErr;
     }
 
-    const { savedPolicy, policyChanges } = await savePolicyWithAudit(id, req.body, {
+    const { savedPolicy, policyChanges, effectiveFromMonth } = await savePolicyWithAudit(id, req.body, {
       userId: req.user.id,
       role: 'PAYROLL_LEAD'
     });
 
     let attendanceRecalc = { sheets_recalculated: 0, sheet_ids: [], recalc_error: null };
     try {
-      attendanceRecalc = await recalculateAllAttendanceSheetsForClient(id);
+      attendanceRecalc = await recalculateAllAttendanceSheetsForClient(id, {
+        fromMonthYm: effectiveFromMonth
+      });
     } catch (recalcErr) {
       console.error('[clients] attendance recalc after policy save failed:', recalcErr?.message || recalcErr);
       attendanceRecalc = {
@@ -431,6 +492,7 @@ router.put('/:id', async (req, res, next) => {
     res.json({
       ...full,
       policy_changes: policyChanges,
+      effective_from_month: effectiveFromMonth,
       attendance_recalculated: attendanceRecalc.sheets_recalculated,
       attendance_recalc_error: attendanceRecalc.recalc_error
     });
@@ -535,18 +597,24 @@ router.put('/:id/policy', async (req, res, next) => {
       validateLeaveAllowancesPayload(req.body?.leave_allowances, designationNames, errors);
     }
     validateHolidaysPayload(req.body?.holidays, errors);
+    const effectiveFrom = req.body?.effective_from_month ?? req.body?.effectiveFromMonth;
+    if (effectiveFrom && !monthYmToDate(effectiveFrom)) {
+      errors.effective_from_month = 'must be YYYY-MM';
+    }
     if (Object.keys(errors).length) {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }
 
-    const { savedPolicy, policyChanges } = await savePolicyWithAudit(id, req.body, {
+    const { savedPolicy, policyChanges, effectiveFromMonth } = await savePolicyWithAudit(id, req.body, {
       userId: req.user.id,
       role: 'PAYROLL_LEAD'
     });
 
     let attendanceRecalc = { sheets_recalculated: 0, sheet_ids: [], recalc_error: null };
     try {
-      attendanceRecalc = await recalculateAllAttendanceSheetsForClient(id);
+      attendanceRecalc = await recalculateAllAttendanceSheetsForClient(id, {
+        fromMonthYm: effectiveFromMonth
+      });
     } catch (recalcErr) {
       console.error('[clients] attendance recalc after policy save failed:', recalcErr?.message || recalcErr);
       attendanceRecalc = {
@@ -560,6 +628,7 @@ router.put('/:id/policy', async (req, res, next) => {
     res.json({
       ...full,
       policy_changes: policyChanges,
+      effective_from_month: effectiveFromMonth,
       attendance_recalculated: attendanceRecalc.sheets_recalculated,
       attendance_recalc_error: attendanceRecalc.recalc_error
     });

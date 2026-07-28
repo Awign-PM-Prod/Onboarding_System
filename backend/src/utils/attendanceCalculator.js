@@ -1,7 +1,7 @@
 import { computeLegendTotals, normalizeAttendanceCode } from './attendanceLegend.js';
 import {
   datesInPeriod,
-  getPayrollPeriod,
+  getCalendarMonthPeriod,
   isWeekOffDate
 } from './clientPolicyCore.js';
 
@@ -142,8 +142,10 @@ export function computeIncentiveFromPolicy(consecutivePresentDays, attendancePol
  * Compute row summary fields from day marks and client policy.
  *
  * Assumptions (see plan):
+ * - Calculations cover the sheet's calendar month (1st to last day), matching the
+ *   attendance grid. The payroll cycle stays as payout metadata only.
  * - Leave allowances are annual; ytdTaken is from prior months in calendar year.
- * - NH/FH quota = holidays of that type in payroll period.
+ * - NH/FH quota = holidays of that type in the calendar month.
  * - HD = 0.5 paid day.
  */
 export function computeRowSummary({
@@ -158,7 +160,7 @@ export function computeRowSummary({
   const leaveAllowances = policyBundle?.leave_allowances ?? [];
   const holidays = policyBundle?.holidays ?? [];
 
-  const period = getPayrollPeriod(policy, monthYm);
+  const period = getCalendarMonthPeriod(monthYm);
   const periodDates = datesInPeriod(period.start, period.end);
   const marksByDate = new Map();
   for (const m of dayMarks ?? []) {
@@ -240,8 +242,10 @@ export function computeRowSummary({
     ML_taken: ytdWithPeriod.ML,
     RH_taken: ytdWithPeriod.RH,
     CO_taken: ytdWithPeriod.CO,
-    NH_taken: ytdWithPeriod.NH,
-    FH_taken: ytdWithPeriod.FH,
+    NH_taken: periodTaken.NH,
+    FH_taken: periodTaken.FH,
+    NH_taken_ytd: ytdWithPeriod.NH,
+    FH_taken_ytd: ytdWithPeriod.FH,
     EL_annual: Math.max(0, Number(allowance?.earned_days) || 0),
     SL_annual: Math.max(0, Number(allowance?.sick_days) || 0),
     CL_annual: Math.max(0, Number(allowance?.paid_days) || 0),
@@ -254,8 +258,8 @@ export function computeRowSummary({
     ML_left: Math.max(0, (allowance?.maternity_days ?? 0) - ytdWithPeriod.ML),
     RH_left: 0,
     CO_left: Math.max(0, coLeft),
-    NH_left: Math.max(0, nhDates.length - ytdWithPeriod.NH),
-    FH_left: Math.max(0, fhDates.length - ytdWithPeriod.FH),
+    NH_left: Math.max(0, nhDates.length - periodTaken.NH),
+    FH_left: Math.max(0, fhDates.length - periodTaken.FH),
     NH_allowed: nhDates.length,
     FH_allowed: fhDates.length,
     CO_earned_period: coEarned
@@ -269,17 +273,18 @@ export function computeRowSummary({
     legend_totals,
     leave_summary,
     incentive: computeIncentiveFromPolicy(consecutivePresentDays, policy),
-    payroll_period: period
+    calc_period: period
   };
 }
 
 /**
  * Suggest default day marks for empty cells: holidays override week off.
+ * Fills the calendar month so suggestions match the visible grid.
  */
 export function suggestDefaultMarks(policyBundle, monthYm, existingMarks = []) {
   const policy = policyBundle?.attendance_policy ?? {};
   const holidays = policyBundle?.holidays ?? [];
-  const period = getPayrollPeriod(policy, monthYm);
+  const period = getCalendarMonthPeriod(monthYm);
   const existing = new Set((existingMarks ?? []).map((m) => parseIso(m.mark_date)).filter(Boolean));
   const holidayMap = new Map();
   for (const h of holidays) {

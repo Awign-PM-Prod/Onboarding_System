@@ -7,7 +7,8 @@ import {
 import {
   computeIncentiveFromPolicy,
   computeRowSummary,
-  computeMaxConsecutivePresentStreak
+  computeMaxConsecutivePresentStreak,
+  suggestDefaultMarks
 } from '../src/utils/attendanceCalculator.js';
 import { diffClientPolicyBundles } from '../src/utils/clientPolicyDiff.js';
 
@@ -140,6 +141,50 @@ assert.equal(
 );
 assert.equal(aprilWithIncentive.leave_summary.EL_annual, 15);
 assert.equal(aprilWithIncentive.leave_summary.SL_annual, 10);
+
+// NH/FH leave summary uses period taken (not YTD) against period allowance
+const nhPeriodSummary = computeRowSummary({
+  dayMarks: [{ mark_date: '2026-04-03', code: 'NH' }],
+  policyBundle: aprilBundle,
+  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null },
+  monthYm: '2026-04',
+  ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 5, FH: 0 }
+});
+assert.equal(nhPeriodSummary.leave_summary.NH_taken, 1);
+assert.equal(nhPeriodSummary.leave_summary.NH_allowed, 1);
+assert.equal(nhPeriodSummary.leave_summary.NH_left, 0);
+assert.equal(nhPeriodSummary.leave_summary.NH_taken_ytd, 6);
+
+// Policy auto-fill: empty weekdays get W, holiday date gets NH
+const autoFillPolicy = normalizeAttendancePolicy({
+  payroll_cycle_start_day: 1,
+  payroll_cycle_end_day: 31,
+  week_off_config: { presets: ['sat_sun'], weekdays: [] }
+});
+const autoFillBundle = {
+  attendance_policy: autoFillPolicy,
+  leave_allowances: aprilBundle.leave_allowances,
+  holidays: [{ holiday_date: '2026-04-03', holiday_type: 'NH' }]
+};
+const autoSuggestions = suggestDefaultMarks(autoFillBundle, '2026-04', [
+  { mark_date: '2026-04-01', code: 'P' },
+  { mark_date: '2026-04-02', code: 'P' }
+]);
+assert.ok(autoSuggestions.some((s) => s.mark_date === '2026-04-04' && s.code === 'W'));
+assert.ok(autoSuggestions.some((s) => s.mark_date === '2026-04-03' && s.code === 'NH'));
+const autoFilledSummary = computeRowSummary({
+  dayMarks: [
+    { mark_date: '2026-04-01', code: 'P' },
+    { mark_date: '2026-04-02', code: 'P' },
+    ...autoSuggestions.map((s) => ({ mark_date: s.mark_date, code: s.code }))
+  ],
+  policyBundle: autoFillBundle,
+  employee: { designation: 'Executive', gender: 'F', doj: '2026-04-01', lwd: null },
+  monthYm: '2026-04',
+  ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
+});
+assert.ok(autoFilledSummary.paid_days >= 2);
+assert.equal(autoFilledSummary.legend_totals.W, autoSuggestions.filter((s) => s.code === 'W').length);
 
 // --- Paid days: half day + absent ---
 const mixedMarks = [

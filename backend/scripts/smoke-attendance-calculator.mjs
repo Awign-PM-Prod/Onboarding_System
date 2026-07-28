@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { computeIncentiveFromPolicy, computeRowSummary, computeMaxConsecutivePresentStreak, suggestDefaultMarks } from '../src/utils/attendanceCalculator.js';
 import {
+  getCalendarMonthPeriod,
   getPayrollPeriod,
   isWeekOffDate,
   normalizeAttendancePolicy
@@ -18,6 +19,7 @@ const policy = normalizeAttendancePolicy({
   fh_off_rule: 1.5
 });
 
+// Payroll cycle is payout metadata only
 const period = getPayrollPeriod(policy, '2026-04');
 assert.equal(period.start, '2026-03-25');
 assert.equal(period.end, '2026-04-24');
@@ -28,6 +30,13 @@ const calPeriod = getPayrollPeriod(
 );
 assert.equal(calPeriod.start, '2026-04-01');
 assert.equal(calPeriod.end, '2026-04-30');
+
+// Calculation window is always the calendar month, regardless of payroll cycle
+const monthPeriod = getCalendarMonthPeriod('2026-04');
+assert.equal(monthPeriod.start, '2026-04-01');
+assert.equal(monthPeriod.end, '2026-04-30');
+assert.equal(getCalendarMonthPeriod('2026-02').end, '2026-02-28');
+assert.equal(getCalendarMonthPeriod('2028-02').end, '2028-02-29');
 
 assert.equal(isWeekOffDate('2026-04-04', { presets: ['sat_sun'], weekdays: [] }), true);
 assert.equal(isWeekOffDate('2026-04-06', { presets: ['sat_sun'], weekdays: [] }), false);
@@ -49,13 +58,17 @@ const policyBundle = {
 };
 
 const dayMarks = [
+  // March marks are outside the April calendar month and must be ignored,
+  // even though the 25→24 payroll cycle would have included them before.
   { mark_date: '2026-03-25', code: 'P' },
-  { mark_date: '2026-03-26', code: 'P' },
-  { mark_date: '2026-03-27', code: 'NH' },
   { mark_date: '2026-03-28', code: 'A' },
-  { mark_date: '2026-03-29', code: 'W' },
-  { mark_date: '2026-03-30', code: 'W' },
-  { mark_date: '2026-03-31', code: 'P' }
+  { mark_date: '2026-04-01', code: 'P' },
+  { mark_date: '2026-04-02', code: 'P' },
+  { mark_date: '2026-04-03', code: 'NH' },
+  { mark_date: '2026-04-06', code: 'A' },
+  { mark_date: '2026-04-07', code: 'W' },
+  { mark_date: '2026-04-08', code: 'W' },
+  { mark_date: '2026-04-09', code: 'P' }
 ];
 
 const summary = computeRowSummary({
@@ -66,12 +79,15 @@ const summary = computeRowSummary({
   ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
 });
 
+assert.equal(summary.calc_period.start, '2026-04-01');
+assert.equal(summary.calc_period.end, '2026-04-30');
 assert.equal(summary.legend_totals.P, 3);
 assert.equal(summary.legend_totals.NH, 1);
 assert.equal(summary.legend_totals.A, 1);
 assert.equal(summary.legend_totals.W, 2);
 assert.equal(summary.paid_days, 6);
 assert.equal(summary.lop, 1);
+assert.equal(summary.total_days, 30);
 assert.ok(summary.leave_summary.EL_left >= 0);
 
 const incentivePolicy = normalizeAttendancePolicy({
@@ -119,6 +135,8 @@ const defaultSuggestions = suggestDefaultMarks(policyBundle, '2026-04', dayMarks
 assert.ok(defaultSuggestions.length > 0);
 assert.ok(defaultSuggestions.every((s) => s.code === 'W' || s.code === 'NH'));
 assert.ok(defaultSuggestions.every((s) => !dayMarks.some((m) => m.mark_date === s.mark_date)));
+// Suggestions stay within the sheet's calendar month
+assert.ok(defaultSuggestions.every((s) => s.mark_date.startsWith('2026-04-')));
 
 const filledMarks = [
   ...dayMarks,

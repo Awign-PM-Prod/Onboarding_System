@@ -60,7 +60,7 @@ export function IconOnboarding({ className, filled = false }) {
   );
 }
 
-function IconSettings({ className }) {
+export function IconSettings({ className }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
       <path
@@ -73,7 +73,7 @@ function IconSettings({ className }) {
   );
 }
 
-function IconLogout({ className }) {
+export function IconLogout({ className }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
       <path
@@ -95,13 +95,12 @@ function IconChevronLeft({ className }) {
 
 function IconLogo({ className }) {
   return (
-    <svg className={className} viewBox="0 0 32 32" fill="none" aria-hidden>
-      <path
-        d="M6 8h9v9H6V8zm11 0h9v9h-9V8zM6 19h9v9H6v-9zm11 0h9v9h-9v-9z"
-        fill="currentColor"
-        opacity="0.95"
-      />
-    </svg>
+    <img
+      src="/logo.png"
+      alt="Staffing-Go logo"
+      className={`${className ?? ''} rounded-lg object-contain`}
+      draggable={false}
+    />
   );
 }
 
@@ -310,15 +309,15 @@ export default function CollapsibleAppSidebar({
           to={homeTo}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white transition-opacity hover:opacity-80"
           aria-label="Home"
-          title="Onboarding System"
+          title="Staffing-Go"
           onClick={handleNav}
         >
-          <IconLogo className="h-7 w-7" />
+          <IconLogo className="h-9 w-9" />
         </NavLink>
         {!collapsed && (
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-white">Onboarding</p>
-            <p className="truncate text-[11px] text-slate-400">System</p>
+            <p className="truncate text-sm font-semibold text-white">Staffing-Go</p>
+            <p className="truncate text-[11px] text-slate-400">Workforce Suite</p>
           </div>
         )}
       </div>
