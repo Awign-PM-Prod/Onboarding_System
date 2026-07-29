@@ -207,11 +207,17 @@ export default function AttendancePanel({ clientId, role }) {
   const [draftRows, setDraftRows] = useState([]);
   const [pendingSaveCount, setPendingSaveCount] = useState(0);
   const [autoSaveError, setAutoSaveError] = useState(null);
+  /** Snapshots of server rows taken before each successful save this session. */
+  const [saveHistory, setSaveHistory] = useState([]);
 
   const draftRowsRef = useRef(draftRows);
   const serverRowsRef = useRef([]);
   const sheetRef = useRef(null);
   const canEditRef = useRef(false);
+  /** Rows as loaded when this sheet/month session started (for discard-all). */
+  const sessionBaselineRef = useRef([]);
+  /** Skip pushing undo history while applying a discard restore. */
+  const restoringRef = useRef(false);
 
   const sheet = payload?.sheet ?? null;
   const clientPolicy = payload?.client_policy ?? null;
@@ -244,6 +250,35 @@ export default function AttendancePanel({ clientId, role }) {
 
   const hasPendingSaves = pendingSaveCount > 0;
 
+  const applyRowsToServer = useCallback(async (nextRows) => {
+    const currentSheet = sheetRef.current;
+    if (!currentSheet?.id || !canEditRef.current) return null;
+
+    const changes = buildRowChanges(nextRows, serverRowsRef.current);
+    if (!changes.length) {
+      setDraftRows(cloneRows(nextRows));
+      return null;
+    }
+
+    setAutoSaveError(null);
+    const data = await api.saveAttendanceRows({
+      clientId,
+      sheetId: currentSheet.id,
+      rows: changes
+    });
+    setPayload(data);
+    setDraftRows(cloneRows(data?.rows ?? []));
+    if (data?.sheet?.id) {
+      try {
+        const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
+        setLogs(Array.isArray(logRows) ? logRows : []);
+      } catch {
+        /* ignore */
+      }
+    }
+    return data;
+  }, [clientId]);
+
   const flushRowSave = useCallback(async (rowId) => {
     const currentSheet = sheetRef.current;
     if (!currentSheet?.id || !canEditRef.current) return;
@@ -255,6 +290,7 @@ export default function AttendancePanel({ clientId, role }) {
     const changes = buildRowChanges([draft], [server]);
     if (!changes.length) return;
 
+    const beforeSave = cloneRows(serverRowsRef.current);
     setAutoSaveError(null);
     try {
       const data = await api.saveAttendanceRows({
@@ -262,6 +298,9 @@ export default function AttendancePanel({ clientId, role }) {
         sheetId: currentSheet.id,
         rows: changes
       });
+      if (!restoringRef.current) {
+        setSaveHistory((prev) => [...prev, beforeSave]);
+      }
       setPayload(data);
       setDraftRows(cloneRows(data?.rows ?? []));
       if (data?.sheet?.id) {
@@ -430,6 +469,8 @@ export default function AttendancePanel({ clientId, role }) {
         if (cancelled) return;
         setPayload(data);
         setDraftRows(cloneRows(data?.rows ?? []));
+        sessionBaselineRef.current = cloneRows(data?.rows ?? []);
+        setSaveHistory([]);
         if (data?.sheet?.id) {
           try {
             const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
@@ -485,6 +526,8 @@ export default function AttendancePanel({ clientId, role }) {
         setMonth(sheetMonth);
       }
       setPayload(result);
+      sessionBaselineRef.current = cloneRows(result?.rows ?? []);
+      setSaveHistory([]);
       if (result?.sheet?.id) {
         const logRows = await api.getAttendanceLogs({ clientId, sheetId: result.sheet.id });
         setLogs(Array.isArray(logRows) ? logRows : []);
@@ -526,6 +569,8 @@ export default function AttendancePanel({ clientId, role }) {
     const data = await api.getAttendance({ clientId, month });
     setPayload(data);
     setDraftRows(cloneRows(data?.rows ?? []));
+    sessionBaselineRef.current = cloneRows(data?.rows ?? []);
+    setSaveHistory([]);
     if (data?.sheet?.id) {
       try {
         const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
@@ -556,6 +601,8 @@ export default function AttendancePanel({ clientId, role }) {
         if (cancelled) return;
         setPayload(data);
         setDraftRows(cloneRows(data?.rows ?? []));
+        sessionBaselineRef.current = cloneRows(data?.rows ?? []);
+        setSaveHistory([]);
         showToast('Attendance recalculated from latest client policy');
       } catch (err) {
         if (!cancelled) setError(err.message);
@@ -692,6 +739,8 @@ export default function AttendancePanel({ clientId, role }) {
       const data = await api.recomputeAttendance({ clientId, sheetId: sheet.id });
       setPayload(data);
       setDraftRows(cloneRows(data?.rows ?? []));
+      sessionBaselineRef.current = cloneRows(data?.rows ?? []);
+      setSaveHistory([]);
       showToast('Attendance recalculated from client policy');
     } catch (err) {
       setError(err.message);
@@ -748,12 +797,52 @@ export default function AttendancePanel({ clientId, role }) {
     queueRowAutoSave(rowId);
   };
 
-  const onDiscard = () => {
+  const onDiscardUnsaved = () => {
     rowSaverRef.current?.cancelAll();
     setDraftRows(cloneRows(serverRows));
     setAutoSaveError(null);
     setError(null);
-    showToast('Changes discarded');
+    showToast('Unsaved changes discarded');
+  };
+
+  const onDiscardPrevious = async () => {
+    if (!saveHistory.length) return;
+    rowSaverRef.current?.cancelAll();
+    const previous = saveHistory[saveHistory.length - 1];
+    setBusy(true);
+    setError(null);
+    restoringRef.current = true;
+    try {
+      await applyRowsToServer(previous);
+      setSaveHistory((prev) => prev.slice(0, -1));
+      showToast('Previous change discarded');
+    } catch (err) {
+      setAutoSaveError(err.message);
+      setError(err.message);
+    } finally {
+      restoringRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  const onDiscardAll = async () => {
+    const baseline = sessionBaselineRef.current;
+    if (!baseline?.length && !saveHistory.length && !isDirty) return;
+    rowSaverRef.current?.cancelAll();
+    setBusy(true);
+    setError(null);
+    restoringRef.current = true;
+    try {
+      await applyRowsToServer(baseline);
+      setSaveHistory([]);
+      showToast('All changes discarded');
+    } catch (err) {
+      setAutoSaveError(err.message);
+      setError(err.message);
+    } finally {
+      restoringRef.current = false;
+      setBusy(false);
+    }
   };
 
   const onExport = async (type) => {
@@ -1530,25 +1619,51 @@ export default function AttendancePanel({ clientId, role }) {
             </div>
           )}
 
-          {sheet && canEdit && (hasPendingSaves || isDirty || autoSaveError) && (
+          {sheet && canEdit && (hasPendingSaves || isDirty || autoSaveError || saveHistory.length > 0) && (
             <div className="sticky bottom-0 z-50 flex items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
               <p className="text-sm text-slate-600">
                 {autoSaveError
                   ? `Auto-save failed: ${autoSaveError}`
                   : hasPendingSaves
                     ? 'Saving changes…'
-                    : 'All changes saved'}
+                    : isDirty
+                      ? 'You have unsaved changes'
+                      : 'All changes saved'}
               </p>
-              {isDirty && (
-                <button
-                  type="button"
-                  disabled={busy || hasPendingSaves}
-                  onClick={onDiscard}
-                  className="rounded-md border border-red-500 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
-                >
-                  Discard
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {isDirty && (
+                  <button
+                    type="button"
+                    disabled={busy || hasPendingSaves}
+                    onClick={onDiscardUnsaved}
+                    className="rounded-md border border-red-500 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+                  >
+                    Discard unsaved
+                  </button>
+                )}
+                {saveHistory.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busy || hasPendingSaves || isDirty}
+                      onClick={onDiscardPrevious}
+                      className="rounded-md border border-red-500 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+                      title={isDirty ? 'Discard or save unsaved changes first' : 'Undo the last saved change'}
+                    >
+                      Discard previous change
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || hasPendingSaves}
+                      onClick={onDiscardAll}
+                      className="rounded-md border border-red-600 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
+                      title="Revert all edits made this session"
+                    >
+                      Discard all changes
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           )}
         </>

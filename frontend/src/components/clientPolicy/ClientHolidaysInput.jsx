@@ -59,17 +59,17 @@ export default function ClientHolidaysInput({ value, onChange }) {
       ) : (
         <div className="space-y-2">
           {holidays.map((h, i) => (
-            <div key={i} className="flex flex-wrap items-center gap-2">
+            <div key={i} className="flex flex-nowrap items-center gap-2">
               <input
                 type="date"
                 value={h.holiday_date ?? ''}
                 onChange={(e) => updateRow(i, { holiday_date: e.target.value })}
-                className="input"
+                className="input w-auto shrink-0"
               />
               <select
                 value={normalizeHolidayType(h.holiday_type)}
                 onChange={(e) => updateRow(i, { holiday_type: e.target.value })}
-                className="input"
+                className="input w-auto min-w-[12rem] shrink-0"
               >
                 {HOLIDAY_TYPES.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -80,7 +80,7 @@ export default function ClientHolidaysInput({ value, onChange }) {
               <button
                 type="button"
                 onClick={() => removeRow(i)}
-                className="text-xs text-red-600 hover:text-red-800"
+                className="shrink-0 text-xs text-red-600 hover:text-red-800"
               >
                 Remove
               </button>
