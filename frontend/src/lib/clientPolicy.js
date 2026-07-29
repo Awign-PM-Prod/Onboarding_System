@@ -28,6 +28,9 @@ export const DEFAULT_ATTENDANCE_POLICY = {
   nh_comp_off_applicable: true,
   nh_off_rule: 2,
   nh_pay_rule: 1,
+  fh_comp_off_applicable: false,
+  fh_off_rule: 1,
+  fh_pay_rule: 1,
   incentive_applicable: false,
   incentive_min_days: 26,
   incentive_value: 0

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   IconLogout,
   IconSettings,
@@ -111,8 +111,11 @@ export function SidebarClientsPanel({
   activeClientId = null,
   clientLink,
   addClientTo = null,
-  onNavigate
+  onNavigate,
+  onClientSelect
 }) {
+  const navigate = useNavigate();
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 px-4 pb-3 pt-5">
@@ -133,7 +136,7 @@ export function SidebarClientsPanel({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 pb-4">
         {loading && <p className="px-3 py-2 text-sm text-slate-400">Loading clients...</p>}
 
         {error && !loading && (
@@ -155,11 +158,19 @@ export function SidebarClientsPanel({
           <nav className="flex flex-col gap-1.5" aria-label="Clients">
             {clients.map((client) => {
               const active = String(client.id) === String(activeClientId ?? '');
+              const to = clientLink(client);
               return (
                 <NavLink
                   key={client.id}
-                  to={clientLink(client)}
-                  onClick={onNavigate}
+                  to={to}
+                  onClick={(event) => {
+                    // Always open the client modules panel, even when already on this
+                    // client's URL (NavLink would otherwise be a same-route no-op).
+                    event.preventDefault();
+                    onClientSelect?.(client);
+                    navigate(to);
+                    onNavigate?.();
+                  }}
                   className={panelItemClass(active)}
                   title={client.client_name}
                 >
@@ -203,7 +214,7 @@ export function SidebarModulesPanel({ clientName, items = [], onShowClients, onN
         </p>
       </div>
 
-      <nav className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-3 pb-4" aria-label="Client modules">
+      <nav className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-y-contain px-3 pb-4" aria-label="Client modules">
         {items.map((item) => (
           <NavLink
             key={item.id}
@@ -275,7 +286,7 @@ export default function TwoPaneSidebar({
   };
 
   return (
-    <div className="flex h-full min-h-0 bg-[#1a1f3a]">
+    <div className="flex h-full min-h-0 max-h-screen bg-[#1a1f3a]">
       {/* Icon rail */}
       <div className="flex h-full min-h-0 w-[4.5rem] shrink-0 flex-col">
         <div className="flex shrink-0 items-center justify-center px-2 pb-3 pt-5">

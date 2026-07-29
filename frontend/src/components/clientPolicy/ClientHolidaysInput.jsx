@@ -1,3 +1,12 @@
+const HOLIDAY_TYPES = [
+  { value: 'NH', label: 'NH — National Holiday' },
+  { value: 'FH', label: 'FH — Festival Holiday' }
+];
+
+function normalizeHolidayType(type) {
+  return type === 'FH' ? 'FH' : 'NH';
+}
+
 export default function ClientHolidaysInput({ value, onChange }) {
   const holidays = value ?? [];
 
@@ -9,7 +18,13 @@ export default function ClientHolidaysInput({ value, onChange }) {
   };
 
   const updateRow = (index, patch) => {
-    onChange(holidays.map((h, i) => (i === index ? { ...h, ...patch, holiday_type: 'NH' } : h)));
+    onChange(
+      holidays.map((h, i) => {
+        if (i !== index) return h;
+        const next = { ...h, ...patch };
+        return { ...next, holiday_type: normalizeHolidayType(next.holiday_type) };
+      })
+    );
   };
 
   const removeRow = (index) => {
@@ -20,7 +35,7 @@ export default function ClientHolidaysInput({ value, onChange }) {
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <label className="block text-sm font-medium text-slate-700">
-          Client Holidays (NH)
+          Client Holidays
         </label>
         <button
           type="button"
@@ -31,15 +46,16 @@ export default function ClientHolidaysInput({ value, onChange }) {
         </button>
       </div>
       <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
-        <p className="font-medium">National and floating holidays</p>
+        <p className="font-medium">National and festival holidays</p>
         <ul className="mt-2 list-disc space-y-1 pl-5">
-          <li>Add national holiday (NH) dates here. They set NH quotas and NH comp-off eligibility.</li>
-          <li>Floating holidays (FH) are not configured in policy. PMs can still mark FH and P-FH on attendance sheets.</li>
-          <li>Previously saved FH dates were converted to NH.</li>
+          <li>Choose NH or FH for each date. They set separate quotas and comp-off eligibility.</li>
+          <li>NH dates drive NH / P-NH rules; FH dates drive FH / P-FH rules.</li>
         </ul>
       </div>
       {holidays.length === 0 ? (
-        <p className="text-xs text-slate-500">No holidays configured. NH quotas will be zero until dates are added.</p>
+        <p className="text-xs text-slate-500">
+          No holidays configured. NH and FH quotas will be zero until dates are added.
+        </p>
       ) : (
         <div className="space-y-2">
           {holidays.map((h, i) => (
@@ -50,7 +66,17 @@ export default function ClientHolidaysInput({ value, onChange }) {
                 onChange={(e) => updateRow(i, { holiday_date: e.target.value })}
                 className="input"
               />
-              <span className="text-xs font-medium text-slate-500">NH</span>
+              <select
+                value={normalizeHolidayType(h.holiday_type)}
+                onChange={(e) => updateRow(i, { holiday_type: e.target.value })}
+                className="input"
+              >
+                {HOLIDAY_TYPES.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
               <button
                 type="button"
                 onClick={() => removeRow(i)}

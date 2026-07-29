@@ -27,7 +27,7 @@ export function normalizePolicyBundleFromJson(policyJson, normalizeAttendancePol
     holidays: (raw.holidays ?? []).map((h) => ({
       id: h.id ?? null,
       holiday_date: String(h.holiday_date).slice(0, 10),
-      holiday_type: 'NH'
+      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH'
     }))
   };
 }
@@ -38,7 +38,7 @@ export function bundleToPolicyJson(bundle) {
     leave_allowances: bundle.leave_allowances ?? [],
     holidays: (bundle.holidays ?? []).map((h) => ({
       holiday_date: String(h.holiday_date).slice(0, 10),
-      holiday_type: 'NH'
+      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH'
     }))
   };
 }

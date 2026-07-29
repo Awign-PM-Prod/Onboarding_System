@@ -201,7 +201,7 @@ export default function AttendancePanel({ clientId, role }) {
   const exportMenuRef = useRef(null);
   const policyRecalcKeyRef = useRef(null);
   const [editingCell, setEditingCell] = useState(null); // { rowId, date }
-  const [uploadSkipWarning, setUploadSkipWarning] = useState(null); // { imported, skipped, errors, failed?, message? }
+  const [uploadSkipWarning, setUploadSkipWarning] = useState(null); // { imported, skipped, errors, missing?, failed?, message? }
   const [uploadSkipModalOpen, setUploadSkipModalOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [draftRows, setDraftRows] = useState([]);
@@ -455,50 +455,66 @@ export default function AttendancePanel({ clientId, role }) {
   }, [clientId, month, location.pathname]);
 
   const onUpload = async (e) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = '';
-    if (!file) return;
+    if (!files.length) return;
     if (!canEdit && sheet) {
       setError('Sheet is locked. Unlock before uploading.');
       return;
     }
     setBusy(true);
     setError(null);
+    let totalImported = 0;
+    let totalSkipped = 0;
+    const errorList = [];
+    let currentFile = null;
     try {
-      const result = await api.uploadAttendance({ clientId, month, file });
-      const sheetMonth = result.sheet?.attendance_month
+      let result = null;
+      // Upload sequentially: each file merges into the same month's sheet.
+      for (const file of files) {
+        currentFile = file;
+        result = await api.uploadAttendance({ clientId, month, file });
+        totalImported += Number(result.imported ?? 0);
+        totalSkipped += Number(result.skipped ?? 0);
+        if (Array.isArray(result.errors)) errorList.push(...result.errors);
+      }
+      const sheetMonth = result?.sheet?.attendance_month
         ? String(result.sheet.attendance_month).slice(0, 7)
         : null;
       if (sheetMonth && sheetMonth !== month) {
         setMonth(sheetMonth);
       }
       setPayload(result);
-      if (result.sheet?.id) {
+      if (result?.sheet?.id) {
         const logRows = await api.getAttendanceLogs({ clientId, sheetId: result.sheet.id });
         setLogs(Array.isArray(logRows) ? logRows : []);
       }
-      const skippedCount = Number(result.skipped ?? 0);
-      const errorList = Array.isArray(result.errors) ? result.errors : [];
-      if (skippedCount > 0 || errorList.some((x) => x?.emp_code || x?.error)) {
+      const missing = Array.isArray(result?.missing_from_csv) ? result.missing_from_csv : [];
+      if (totalSkipped > 0 || errorList.some((x) => x?.emp_code || x?.error) || missing.length > 0) {
         setUploadSkipWarning({
-          imported: Number(result.imported ?? 0),
-          skipped: skippedCount,
-          errors: errorList
+          imported: totalImported,
+          skipped: totalSkipped,
+          errors: errorList,
+          missing
         });
-        showToast(`Imported ${result.imported ?? 0} rows (${skippedCount} skipped)`);
+        const parts = [];
+        if (totalSkipped > 0) parts.push(`${totalSkipped} skipped`);
+        if (missing.length > 0) parts.push(`${missing.length} missing from CSV`);
+        showToast(`Imported ${totalImported} rows${parts.length ? ` (${parts.join(', ')})` : ''}`);
       } else {
         setUploadSkipWarning(null);
-        showToast(`Imported ${result.imported ?? 0} rows`);
+        showToast(`Imported ${totalImported} rows`);
       }
     } catch (err) {
-      setError(err.message);
+      const prefix = files.length > 1 && currentFile ? `${currentFile.name}: ` : '';
+      setError(`${prefix}${err.message}`);
       if (err.details && Array.isArray(err.details) && err.details.length) {
         setUploadSkipWarning({
-          imported: 0,
+          imported: totalImported,
           skipped: err.details.length,
           errors: err.details,
           failed: true,
-          message: err.message
+          message: `${prefix}${err.message}`
         });
       }
     } finally {
@@ -795,12 +811,18 @@ export default function AttendancePanel({ clientId, role }) {
             className="pointer-events-auto w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl"
           >
             <h3 id="attendance-skip-title" className="text-lg font-semibold text-slate-900">
-              {uploadSkipWarning.failed ? 'Upload incomplete' : 'Some rows were not uploaded'}
+              {uploadSkipWarning.failed
+                ? 'Upload incomplete'
+                : uploadSkipWarning.skipped > 0
+                  ? 'Some rows were not uploaded'
+                  : 'Employees missing from uploaded CSV'}
             </h3>
             <p className="mt-2 text-sm text-slate-600">
               {uploadSkipWarning.message
                 ? uploadSkipWarning.message
-                : `${uploadSkipWarning.skipped} row(s) from the CSV were skipped and were not uploaded.`}
+                : uploadSkipWarning.skipped > 0
+                  ? `${uploadSkipWarning.skipped} row(s) from the CSV were skipped and were not uploaded.`
+                  : ''}
               {uploadSkipWarning.imported > 0
                 ? ` ${uploadSkipWarning.imported} matching row(s) were imported successfully.`
                 : ''}
@@ -811,6 +833,7 @@ export default function AttendancePanel({ clientId, role }) {
                   <thead className="sticky top-0 bg-slate-50 text-slate-600">
                     <tr>
                       <th className="px-3 py-2 text-left font-medium">Emp Code</th>
+                      <th className="px-3 py-2 text-left font-medium">Employee Name</th>
                       <th className="px-3 py-2 text-left font-medium">Reason</th>
                     </tr>
                   </thead>
@@ -820,6 +843,9 @@ export default function AttendancePanel({ clientId, role }) {
                         <td className="px-3 py-2 font-mono text-slate-800">
                           {err?.emp_code || (err?.row != null ? `Row ${err.row}` : '—')}
                         </td>
+                        <td className="px-3 py-2 text-slate-800">
+                          {err?.employee_name || '—'}
+                        </td>
                         <td className="px-3 py-2 text-slate-600">
                           {err?.error || (Array.isArray(err?.errors) ? err.errors.join('; ') : 'Skipped')}
                         </td>
@@ -828,6 +854,35 @@ export default function AttendancePanel({ clientId, role }) {
                   </tbody>
                 </table>
               </div>
+            )}
+            {Array.isArray(uploadSkipWarning.missing) && uploadSkipWarning.missing.length > 0 && (
+              <>
+                <p className="mt-4 text-sm text-slate-600">
+                  <span className="font-medium text-slate-800">
+                    {uploadSkipWarning.missing.length} employee(s)
+                  </span>{' '}
+                  on this client have no attendance data in the uploaded CSV. Upload their CSV
+                  before submitting, or verify they should be excluded this month.
+                </p>
+                <div className="mt-2 max-h-40 overflow-auto rounded-lg border border-slate-200">
+                  <table className="min-w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium">Emp Code</th>
+                        <th className="px-3 py-2 text-left font-medium">Employee Name</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {uploadSkipWarning.missing.slice(0, 100).map((emp, idx) => (
+                        <tr key={`${emp?.emp_code || 'missing'}-${idx}`}>
+                          <td className="px-3 py-2 font-mono text-slate-800">{emp?.emp_code || '—'}</td>
+                          <td className="px-3 py-2 text-slate-800">{emp?.employee_name || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
             <div className="mt-5 flex justify-end">
               <button
@@ -1138,6 +1193,7 @@ export default function AttendancePanel({ clientId, role }) {
                 <input
                   type="file"
                   accept=".csv,text/csv"
+                  multiple
                   className="hidden"
                   disabled={busy || (sheet && !canEdit)}
                   onChange={onUpload}
@@ -1171,13 +1227,26 @@ export default function AttendancePanel({ clientId, role }) {
               className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 hover:bg-amber-100"
             >
               <span className="font-semibold">
-                {uploadSkipWarning.failed ? 'Upload incomplete' : 'Some rows were not uploaded'}
+                {uploadSkipWarning.failed
+                  ? 'Upload incomplete'
+                  : uploadSkipWarning.skipped > 0
+                    ? 'Some rows were not uploaded'
+                    : 'Employees missing from uploaded CSV'}
               </span>
               <span className="mt-0.5 block text-amber-800/90">
-                {uploadSkipWarning.message
-                  ? uploadSkipWarning.message
-                  : `${uploadSkipWarning.skipped} row(s) skipped`}
-                {uploadSkipWarning.imported > 0 ? ` · ${uploadSkipWarning.imported} imported` : ''}
+                {[
+                  uploadSkipWarning.message
+                    ? uploadSkipWarning.message
+                    : uploadSkipWarning.skipped > 0
+                      ? `${uploadSkipWarning.skipped} row(s) skipped`
+                      : null,
+                  uploadSkipWarning.imported > 0 ? `${uploadSkipWarning.imported} imported` : null,
+                  Array.isArray(uploadSkipWarning.missing) && uploadSkipWarning.missing.length > 0
+                    ? `${uploadSkipWarning.missing.length} employee(s) missing from CSV`
+                    : null
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
                 {' · '}
                 <span className="underline">View details</span>
               </span>
@@ -1869,7 +1938,7 @@ function EmptyAttendanceState({ busy, onUpload }) {
         }`}
       >
         Upload CSV
-        <input type="file" accept=".csv,text/csv" className="hidden" disabled={busy} onChange={onUpload} />
+        <input type="file" accept=".csv,text/csv" multiple className="hidden" disabled={busy} onChange={onUpload} />
       </label>
     </div>
   );

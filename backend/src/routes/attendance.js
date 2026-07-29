@@ -608,7 +608,11 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
     for (const row of rowsToUse) {
       const emp = empByCode.get(row.emp_code);
       if (!emp) {
-        skipped.push({ emp_code: row.emp_code, error: 'No matching employee emp_code on this client' });
+        skipped.push({
+          emp_code: row.emp_code,
+          employee_name: row.employee_name_snapshot ?? null,
+          error: 'No matching employee emp_code on this client'
+        });
         continue;
       }
       matched.push({ ...row, employee_id: emp.id });
@@ -626,25 +630,31 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
     let sheetId = existing?.id;
 
     if (existing) {
-      // replace rows
-      const { error: delErr } = await supabaseAdmin
-        .from('attendance_rows')
-        .delete()
-        .eq('sheet_id', existing.id);
-      if (delErr) throw delErr;
+      // Merge: replace only rows for emp_codes present in this CSV; keep rows from
+      // earlier uploads so delayed client submissions can be added file by file.
+      const matchedCodes = [...new Set(matched.map((r) => r.emp_code))];
+      const DELETE_CHUNK = 200;
+      for (let i = 0; i < matchedCodes.length; i += DELETE_CHUNK) {
+        const { error: delErr } = await supabaseAdmin
+          .from('attendance_rows')
+          .delete()
+          .eq('sheet_id', existing.id)
+          .in('emp_code', matchedCodes.slice(i, i + DELETE_CHUNK));
+        if (delErr) throw delErr;
+      }
 
       const { data: updated, error: upErr } = await supabaseAdmin
         .from('attendance_sheets')
         .update({
           status: 'DRAFT',
-          contract_code: metaToUse?.contract_code,
-          entity: metaToUse?.entity,
-          cycle_type: metaToUse?.cycle_type,
-          payroll_cycle: metaToUse?.payroll_cycle,
-          payroll_start_date: metaToUse?.payroll_start_date,
-          payroll_end_date: metaToUse?.payroll_end_date,
-          salary_payout_date: metaToUse?.salary_payout_date,
-          project_manager_name: metaToUse?.project_manager_name,
+          contract_code: metaToUse?.contract_code ?? existing.contract_code,
+          entity: metaToUse?.entity ?? existing.entity,
+          cycle_type: metaToUse?.cycle_type ?? existing.cycle_type,
+          payroll_cycle: metaToUse?.payroll_cycle ?? existing.payroll_cycle,
+          payroll_start_date: metaToUse?.payroll_start_date ?? existing.payroll_start_date,
+          payroll_end_date: metaToUse?.payroll_end_date ?? existing.payroll_end_date,
+          salary_payout_date: metaToUse?.salary_payout_date ?? existing.salary_payout_date,
+          project_manager_name: metaToUse?.project_manager_name ?? existing.project_manager_name,
           source_filename: req.file.originalname || null,
           uploaded_by: req.user.id,
           uploaded_at: now,
@@ -759,6 +769,29 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
     };
     await supabaseAdmin.from('attendance_sheets').update(sheetMetaUpdate).eq('id', sheetId);
 
+    // Employees on this client (with an emp_code) that still have no row on the
+    // sheet after this upload — i.e. missing from the uploaded CSV data.
+    const { data: allClientEmployees, error: allEmpErr } = await supabaseAdmin
+      .from('employees')
+      .select('emp_code, name')
+      .eq('client_id', clientId)
+      .not('emp_code', 'is', null);
+    if (allEmpErr) throw allEmpErr;
+    const { data: sheetRowCodes, error: rowCodeErr } = await supabaseAdmin
+      .from('attendance_rows')
+      .select('emp_code')
+      .eq('sheet_id', sheetId);
+    if (rowCodeErr) throw rowCodeErr;
+    const sheetCodeSet = new Set(
+      (sheetRowCodes ?? []).map((r) => String(r.emp_code ?? '').trim()).filter(Boolean)
+    );
+    const missingFromCsv = (allClientEmployees ?? [])
+      .filter((e) => {
+        const code = String(e.emp_code ?? '').trim();
+        return code && !sheetCodeSet.has(code);
+      })
+      .map((e) => ({ emp_code: e.emp_code, employee_name: e.name ?? null }));
+
     const uploadMessage = defaultMarksApplied > 0
       ? `Uploaded ${matched.length} rows (${defaultMarksApplied} default week-off/holiday mark(s) applied)`
       : `Uploaded ${matched.length} rows`;
@@ -771,6 +804,7 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       afterJson: {
         imported: matched.length,
         skipped: skipped.length,
+        missing_from_csv: missingFromCsv.length,
         day_marks: dayMarkPayloads.length,
         default_marks_applied: defaultMarksApplied,
         filename: req.file.originalname
@@ -782,10 +816,11 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
     const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
     const eligiblePms = await loadEligiblePms(access.client);
     const client_policy = await loadClientPolicyForResponse(clientId);
-    res.status(skipped.length || allErrors.length ? 207 : 200).json({
+    res.status(skipped.length || allErrors.length || missingFromCsv.length ? 207 : 200).json({
       imported: matched.length,
       skipped: skipped.length,
       errors: [...allErrors, ...skipped],
+      missing_from_csv: missingFromCsv,
       ...bundle,
       client: access.client,
       client_policy,

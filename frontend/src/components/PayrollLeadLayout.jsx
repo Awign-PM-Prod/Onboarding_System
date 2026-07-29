@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
@@ -94,6 +94,7 @@ export default function PayrollLeadLayout() {
   const [clients, setClients] = useState([]);
   const [clientsLoading, setClientsLoading] = useState(true);
   const [clientsError, setClientsError] = useState(null);
+  const mainScrollRef = useRef(null);
 
   const pathname = location.pathname;
   const clientId = pathname.match(/^\/dashboard\/client\/([^/]+)/)?.[1] ?? null;
@@ -117,6 +118,11 @@ export default function PayrollLeadLayout() {
 
   useEffect(() => {
     setMobileNavOpen(false);
+  }, [pathname]);
+
+  // Keep the sidebar fixed and reset the main pane when routes change.
+  useEffect(() => {
+    mainScrollRef.current?.scrollTo({ top: 0, left: 0 });
   }, [pathname]);
 
   const setPanelOpenPersist = (open) => {
@@ -266,6 +272,10 @@ export default function PayrollLeadLayout() {
         clientLink={(client) => `/dashboard/client/${client.id}/dashboard`}
         addClientTo="/clients/new"
         onNavigate={closeDrawer}
+        onClientSelect={() => {
+          setPanelView('modules');
+          setPanelOpenPersist(true);
+        }}
       />
     );
   };
@@ -285,7 +295,7 @@ export default function PayrollLeadLayout() {
 
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-slate-100">
-      <aside className="relative z-30 hidden h-full max-h-screen shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
+      <aside className="relative z-30 hidden h-screen max-h-screen min-h-0 shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
         {renderSidebar()}
       </aside>
 
@@ -325,7 +335,7 @@ export default function PayrollLeadLayout() {
           <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Staffing-Go</span>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
+        <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
           <Outlet />
         </div>
       </div>

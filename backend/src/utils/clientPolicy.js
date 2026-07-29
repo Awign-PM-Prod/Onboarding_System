@@ -135,7 +135,7 @@ export async function fetchClientPolicyBundle(clientId) {
     holidays: (holidays ?? []).map((h) => ({
       id: h.id,
       holiday_date: String(h.holiday_date).slice(0, 10),
-      holiday_type: 'NH'
+      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH'
     }))
   };
 }
@@ -154,9 +154,9 @@ export async function upsertClientPolicyBundle(clientId, body) {
     nh_comp_off_applicable: policy.nh_comp_off_applicable,
     nh_off_rule: policy.nh_off_rule,
     nh_pay_rule: policy.nh_pay_rule,
-    fh_comp_off_applicable: false,
-    fh_off_rule: 1,
-    fh_pay_rule: 1,
+    fh_comp_off_applicable: policy.fh_comp_off_applicable,
+    fh_off_rule: policy.fh_off_rule,
+    fh_pay_rule: policy.fh_pay_rule,
     incentive_applicable: policy.incentive_applicable,
     incentive_min_days: policy.incentive_min_days,
     incentive_value: policy.incentive_value,
@@ -196,7 +196,7 @@ export async function upsertClientPolicyBundle(clientId, body) {
   const holidayRows = (body.holidays ?? []).map((h) => ({
     client_id: clientId,
     holiday_date: String(h.holiday_date).slice(0, 10),
-    holiday_type: 'NH'
+    holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH'
   }));
   if (holidayRows.length) {
     const { error: hErr } = await supabaseAdmin.from('client_holidays').insert(holidayRows);

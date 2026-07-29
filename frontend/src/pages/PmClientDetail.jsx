@@ -1117,7 +1117,7 @@ export default function PmClientDetail() {
   }
 
   return (
-    <main className="flex min-h-full flex-col">
+    <main className="min-h-full">
         {client && (
           <header className="sticky top-0 z-[60] isolate border-b border-slate-200 bg-white shadow-sm">
             <div className="mx-auto w-[98%] px-6 pb-4 pt-5">
@@ -1211,8 +1211,8 @@ export default function PmClientDetail() {
           </header>
         )}
 
-        <div className="flex w-full min-h-0 flex-1 flex-col bg-white">
-          <div className="mx-auto w-[98%] flex-1 px-6 py-6">
+        <div className="bg-white">
+          <div className="mx-auto w-[98%] px-6 py-6">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2 text-sm mb-4">
             {error}

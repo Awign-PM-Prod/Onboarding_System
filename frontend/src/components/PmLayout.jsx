@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { matchPmClientDetailPath, pmClientTabUrl } from '../lib/pmClientRoutes';
@@ -95,6 +95,7 @@ export default function PmLayout() {
   const [joiningReminderToday, setJoiningReminderToday] = useState([]);
   const [joiningReminderOverdue, setJoiningReminderOverdue] = useState([]);
   const [joiningReminderStep, setJoiningReminderStep] = useState('');
+  const mainScrollRef = useRef(null);
 
   const pathname = location.pathname;
   const clientRoute = useMemo(() => matchPmClientDetailPath(pathname), [pathname]);
@@ -122,6 +123,11 @@ export default function PmLayout() {
 
   useEffect(() => {
     setMobileNavOpen(false);
+  }, [pathname]);
+
+  // Match PL: keep the sidebar fixed and reset the main pane when routes change.
+  useEffect(() => {
+    mainScrollRef.current?.scrollTo({ top: 0, left: 0 });
   }, [pathname]);
 
   const setPanelOpenPersist = (open) => {
@@ -242,6 +248,10 @@ export default function PmLayout() {
         activeClientId={clientId}
         clientLink={(client) => `/pm-dashboard/client/${client.id}/dashboard`}
         onNavigate={closeDrawer}
+        onClientSelect={() => {
+          setPanelView('modules');
+          setPanelOpenPersist(true);
+        }}
       />
     );
   };
@@ -261,7 +271,7 @@ export default function PmLayout() {
 
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-slate-100">
-      <aside className="relative z-30 hidden h-full max-h-screen shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
+      <aside className="relative z-30 hidden h-screen max-h-screen min-h-0 shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
         {renderSidebar()}
       </aside>
 
@@ -301,7 +311,7 @@ export default function PmLayout() {
           <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Staffing-Go</span>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
+        <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
           <Outlet />
         </div>
       </div>

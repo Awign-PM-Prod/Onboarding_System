@@ -20,8 +20,17 @@ function formatIncentive(policy) {
   return `₹${policy.incentive_value} at ${policy.incentive_min_days}+ consecutive present days`;
 }
 
-function holidayDates(holidays) {
-  return new Set((holidays ?? []).map((h) => String(h.holiday_date ?? '').slice(0, 10)).filter(Boolean));
+function holidayKeys(holidays) {
+  return new Set(
+    (holidays ?? [])
+      .map((h) => {
+        const date = String(h.holiday_date ?? '').slice(0, 10);
+        if (!date) return null;
+        const type = h.holiday_type === 'FH' ? 'FH' : 'NH';
+        return `${date}:${type}`;
+      })
+      .filter(Boolean)
+  );
 }
 
 const ALLOWANCE_FIELDS = [
@@ -83,19 +92,31 @@ export function diffClientPolicyBundles(before, after) {
     changes.push(`NH comp off: ${bNh} → ${aNh}`);
   }
 
+  const bFh = formatCompOffRule(bPolicy.fh_comp_off_applicable, bPolicy.fh_off_rule, bPolicy.fh_pay_rule);
+  const aFh = formatCompOffRule(aPolicy.fh_comp_off_applicable, aPolicy.fh_off_rule, aPolicy.fh_pay_rule);
+  if (bFh !== aFh) {
+    changes.push(`FH comp off: ${bFh} → ${aFh}`);
+  }
+
   const bIncentive = formatIncentive(bPolicy);
   const aIncentive = formatIncentive(aPolicy);
   if (bIncentive !== aIncentive) {
     changes.push(`Incentive: ${bIncentive} → ${aIncentive}`);
   }
 
-  const bHolidays = holidayDates(before?.holidays);
-  const aHolidays = holidayDates(after?.holidays);
-  for (const date of aHolidays) {
-    if (!bHolidays.has(date)) changes.push(`Holiday added: ${date}`);
+  const bHolidays = holidayKeys(before?.holidays);
+  const aHolidays = holidayKeys(after?.holidays);
+  for (const key of aHolidays) {
+    if (!bHolidays.has(key)) {
+      const [date, type] = key.split(':');
+      changes.push(`Holiday added: ${date} (${type})`);
+    }
   }
-  for (const date of bHolidays) {
-    if (!aHolidays.has(date)) changes.push(`Holiday removed: ${date}`);
+  for (const key of bHolidays) {
+    if (!aHolidays.has(key)) {
+      const [date, type] = key.split(':');
+      changes.push(`Holiday removed: ${date} (${type})`);
+    }
   }
 
   const bAllow = allowancesByDesignation(before?.leave_allowances);
