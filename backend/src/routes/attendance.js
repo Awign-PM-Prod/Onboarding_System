@@ -67,14 +67,29 @@ function formatMarkLabel(code) {
   return code ?? '(empty)';
 }
 
+function formatMarkDate(markDate) {
+  const raw = String(markDate ?? '').slice(0, 10);
+  const [y, m, d] = raw.split('-').map(Number);
+  if (!y || !m || !d) return raw || '—';
+  try {
+    return new Date(y, m - 1, d).toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  } catch {
+    return raw;
+  }
+}
+
 function buildDayMarkChangeMessage(empCode, changes, maxLen = 500) {
   const parts = changes.map(({ markDate, before, after }) =>
-    `${markDate} ${formatMarkLabel(before)}→${formatMarkLabel(after)}`
+    `${formatMarkDate(markDate)}: ${formatMarkLabel(before)} to ${formatMarkLabel(after)}`
   );
-  let message = `${empCode}: ${parts.join('; ')}`;
+  let message = `Emp ${empCode} · ${parts.join('; ')}`;
   if (message.length > maxLen) {
     const kept = [];
-    let len = `${empCode}: `.length;
+    let len = `Emp ${empCode} · `.length;
     for (const part of parts) {
       const next = kept.length ? `; ${part}` : part;
       if (len + next.length + 12 > maxLen) break;
@@ -82,7 +97,7 @@ function buildDayMarkChangeMessage(empCode, changes, maxLen = 500) {
       len += next.length;
     }
     const remaining = parts.length - kept.length;
-    message = `${empCode}: ${kept.join('; ')}${remaining > 0 ? `; …and ${remaining} more` : ''}`;
+    message = `Emp ${empCode} · ${kept.join('; ')}${remaining > 0 ? `; …and ${remaining} more` : ''}`;
   }
   return message;
 }
@@ -941,7 +956,9 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
           if (mErr) throw mErr;
 
           const beforeCode = existingMark?.code ?? null;
-          dayMarkChanges.push({ markDate, before: beforeCode, after: code });
+          if (String(beforeCode ?? '').toUpperCase() !== String(code ?? '').toUpperCase()) {
+            dayMarkChanges.push({ markDate, before: beforeCode, after: code });
+          }
 
           if (existingMark) {
             const { error: uErr } = await supabaseAdmin
@@ -1189,17 +1206,20 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
       .eq('id', row.id);
     if (totErr) throw totErr;
 
-    await writeLog({
-      sheetId: sheet.id,
-      rowId: row.id,
-      dayMarkId,
-      action: 'CELL_CHANGE',
-      actorUserId: req.user.id,
-      actorRole: access.user.role,
-      beforeJson: before,
-      afterJson: { code, mark_date: markDate },
-      message: `${row.emp_code} ${markDate}: ${before?.code ?? '(empty)'} → ${code}`
-    });
+    const beforeCode = before?.code ?? null;
+    if (String(beforeCode ?? '').toUpperCase() !== String(code ?? '').toUpperCase()) {
+      await writeLog({
+        sheetId: sheet.id,
+        rowId: row.id,
+        dayMarkId,
+        action: 'CELL_CHANGE',
+        actorUserId: req.user.id,
+        actorRole: access.user.role,
+        beforeJson: before,
+        afterJson: { code, mark_date: markDate },
+        message: `Emp ${row.emp_code} · ${formatMarkDate(markDate)}: ${formatMarkLabel(beforeCode)} to ${formatMarkLabel(code)}`
+      });
+    }
 
     if (row.employee_id) {
       await recalculateForwardYtdForEmployees(clientId, monthYmVal, [row.employee_id]);
@@ -1324,6 +1344,7 @@ router.post('/:sheetId/submit', async (req, res, next) => {
     );
 
     const wasSubmitted = sheet.status === 'SUBMITTED';
+    const isResubmit = wasSubmitted || Boolean(sheet.submitted_at) || Boolean(sheet.ever_locked);
     const now = new Date().toISOString();
     const { data: updated, error: upErr } = await supabaseAdmin
       .from('attendance_sheets')
@@ -1338,16 +1359,12 @@ router.post('/:sheetId/submit', async (req, res, next) => {
       .single();
     if (upErr) throw upErr;
 
-    const action = wasSubmitted ? 'RESUBMIT' : 'SUBMIT';
     await writeLog({
       sheetId: sheet.id,
-      action: sheet.ever_locked && !wasSubmitted ? 'RESUBMIT' : action,
+      action: isResubmit ? 'RESUBMIT' : 'SUBMIT',
       actorUserId: req.user.id,
       actorRole: access.user.role,
-      message:
-        wasSubmitted || sheet.ever_locked
-          ? 'Attendance resubmitted'
-          : 'Attendance submitted'
+      message: isResubmit ? 'Attendance resubmitted' : 'Attendance submitted'
     });
 
     // Email PL when submit/resubmit after prior lock (PM actor)
@@ -1367,6 +1384,73 @@ router.post('/:sheetId/submit', async (req, res, next) => {
           text: `Attendance resubmitted for ${access.client.client_name}. Open: ${link}`
         });
       }
+    }
+
+    res.json({ sheet: updated });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// Undo submit — revert SUBMITTED → DRAFT (unlocked sheets only)
+router.post('/:sheetId/unsubmit', async (req, res, next) => {
+  try {
+    const clientId = req.params.clientId;
+    const access = await resolveClientAccess(req, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    const { data: sheet, error } = await supabaseAdmin
+      .from('attendance_sheets')
+      .select('*')
+      .eq('id', req.params.sheetId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
+    if (sheet.locked) {
+      return res.status(400).json({ error: 'Locked attendance cannot be unsubmitted. Unlock first.' });
+    }
+    if (sheet.status !== 'SUBMITTED') {
+      return res.status(400).json({ error: 'Attendance is not submitted.' });
+    }
+
+    const { data: grantsForUnsubmit } = await supabaseAdmin
+      .from('attendance_edit_grants')
+      .select('user_id')
+      .eq('sheet_id', sheet.id);
+    assertCanEdit(
+      sheet,
+      access,
+      (grantsForUnsubmit ?? []).map((g) => g.user_id)
+    );
+
+    const now = new Date().toISOString();
+    const { data: updated, error: upErr } = await supabaseAdmin
+      .from('attendance_sheets')
+      .update({
+        status: 'DRAFT',
+        submitted_at: null,
+        submitted_by: null,
+        updated_at: now
+      })
+      .eq('id', sheet.id)
+      .select()
+      .single();
+    if (upErr) throw upErr;
+
+    try {
+      await writeLog({
+        sheetId: sheet.id,
+        action: 'UNSUBMIT',
+        actorUserId: req.user.id,
+        actorRole: access.user.role,
+        message: 'Attendance submission undone'
+      });
+    } catch (logErr) {
+      // Older DBs may lack UNSUBMIT in attendance_activity_logs_action_check.
+      // Undo must still succeed; apply migration 20260730150000_attendance_unsubmit_action.sql.
+      console.warn('attendance unsubmit log skipped:', logErr?.message || logErr);
     }
 
     res.json({ sheet: updated });

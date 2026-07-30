@@ -428,6 +428,11 @@ export const api = {
       `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/submit`,
       { method: 'POST', body: JSON.stringify({}) }
     ),
+  unsubmitAttendance: ({ clientId, sheetId }) =>
+    request(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/unsubmit`,
+      { method: 'POST', body: JSON.stringify({}) }
+    ),
   lockAttendance: ({ clientId, sheetId }) =>
     request(
       `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/lock`,

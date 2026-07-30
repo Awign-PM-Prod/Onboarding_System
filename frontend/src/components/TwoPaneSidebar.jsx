@@ -1,10 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import {
-  IconLogout,
-  ROLE_LABEL,
-  initialsFromName
-} from './CollapsibleAppSidebar';
+import ProfileLogoutMenu from './ProfileLogoutMenu';
 
 const PANEL_KEY = 'obs.sidebar.panelOpen';
 
@@ -212,11 +207,11 @@ export function SidebarModulesPanel({
             className={`mb-2 flex items-center rounded-lg py-1 text-[11px] font-medium text-slate-400 transition hover:text-white ${
               collapsed ? 'w-full justify-center px-1' : 'gap-1.5 px-1'
             }`}
-            title="All Clients"
-            aria-label="All Clients"
+            title="Back to Clients"
+            aria-label="Back to Clients"
           >
             <IconChevronLeft className="h-3.5 w-3.5 shrink-0" />
-            {!collapsed && 'All Clients'}
+            {!collapsed && 'Back to Clients'}
           </button>
         )}
         <p
@@ -283,50 +278,17 @@ export default function TwoPaneSidebar({
   const visible = typeof panelVisible === 'boolean' ? panelVisible : Boolean(panelOpen);
   const expanded = visible && (typeof panelExpanded === 'boolean' ? panelExpanded : Boolean(panelOpen));
   const collapsed = visible && !expanded;
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const profileMenuRef = useRef(null);
-
-  const initials = useMemo(
-    () => initialsFromName(profile?.name ?? user?.email ?? ''),
-    [profile?.name, user?.email]
-  );
-
-  const roleLabel = ROLE_LABEL[profile?.role] ?? profile?.role ?? '';
-
-  useEffect(() => {
-    if (!profileMenuOpen) return undefined;
-
-    const handlePointerDown = (event) => {
-      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
-        setProfileMenuOpen(false);
-      }
-    };
-
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') setProfileMenuOpen(false);
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [profileMenuOpen]);
 
   const handleNav = () => {
-    setProfileMenuOpen(false);
     onNavigate?.();
   };
 
   const resolvedPanel = typeof panel === 'function' ? panel(collapsed) : panel;
 
   return (
-    <div className="relative flex h-full min-h-0 max-h-screen bg-[#1a1f3a]">
+    <div className="relative flex h-full min-h-0 max-h-screen overflow-visible bg-[#1a1f3a]">
       {/* Icon rail */}
-      <div className="flex h-full min-h-0 w-[4.5rem] shrink-0 flex-col">
+      <div className="flex h-full min-h-0 w-[4.5rem] shrink-0 flex-col overflow-visible">
         <div className="flex shrink-0 items-center justify-center px-2 pb-3 pt-5">
           <NavLink
             to={homeTo}
@@ -348,43 +310,15 @@ export default function TwoPaneSidebar({
           ))}
         </nav>
 
-        <div ref={profileMenuRef} className="relative z-20 shrink-0 border-t border-white/10 px-2 py-3">
-          <div className="flex flex-col items-stretch gap-2">
-            {profileMenuOpen && (
-              <div className="overflow-hidden rounded-lg border border-slate-700/80 bg-[#1e2438] shadow-lg">
-                <div className="px-2 py-2">
-                  <p
-                    className="truncate text-center text-[11px] font-semibold text-white"
-                    title={profile?.name ?? 'Profile'}
-                  >
-                    {profile?.name ?? 'Profile'}
-                  </p>
-                  {roleLabel && (
-                    <p className="mt-0.5 truncate text-center text-[10px] text-slate-400">{roleLabel}</p>
-                  )}
-                </div>
-                <div className="border-t border-white/10" aria-hidden />
-                <button
-                  type="button"
-                  onClick={onSignOut}
-                  className="flex w-full items-center justify-center gap-1.5 px-2 py-2.5 text-[11px] font-medium text-rose-400 transition hover:bg-white/5"
-                >
-                  <IconLogout className="h-4 w-4 shrink-0" />
-                  Logout
-                </button>
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => setProfileMenuOpen((v) => !v)}
-              className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white ring-2 ring-indigo-400/30 transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300"
-              aria-label="Profile menu"
-              aria-expanded={profileMenuOpen}
-              title={profile?.name ?? 'Profile'}
-            >
-              {initials}
-            </button>
-          </div>
+        <div className="relative z-20 shrink-0 overflow-visible border-t border-white/10 px-2 py-3">
+          <ProfileLogoutMenu
+            profile={profile}
+            user={user}
+            onSignOut={onSignOut}
+            variant="dark"
+            align="rail"
+            className="flex justify-center"
+          />
         </div>
       </div>
 

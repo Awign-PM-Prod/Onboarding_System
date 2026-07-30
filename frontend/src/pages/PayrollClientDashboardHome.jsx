@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import ClientProjectMetaHeader from '../components/ClientProjectMetaHeader';
 import {
   resolveEmployeeStatusLabel,
   employeeStatusBadgeClass,
@@ -160,6 +161,15 @@ export default function PayrollClientDashboardHome() {
     return map;
   }, [employees]);
 
+  const plApprovedCount = useMemo(
+    () => employees.filter((e) => isPlApprovedReview(e)).length,
+    [employees]
+  );
+  const plRejectedCount = useMemo(
+    () => employees.filter((e) => isPlRejectedReview(e)).length,
+    [employees]
+  );
+
   const stats = useMemo(() => {
     const rejected = employees.filter(
       (e) =>
@@ -311,23 +321,19 @@ export default function PayrollClientDashboardHome() {
 
   return (
     <main className="mx-auto max-w-7xl px-6 pb-8 pt-4">
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">{client?.client_name || 'Client Dashboard'}</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Comprehensive HR &amp; Payroll breakdown including UAN approvals, PM validations, and active leaves.
-          </p>
-        </div>
-        <label className="flex items-center gap-2 text-sm text-slate-600">
-          Month
-          <input
-            type="month"
-            value={month}
-            onChange={(e) => e.target.value && setMonth(e.target.value)}
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-          />
-        </label>
-      </div>
+      <ClientProjectMetaHeader
+        className="mb-6"
+        title={client?.client_name || 'Client Dashboard'}
+        contractCode={client?.contract_code}
+        contractStartDate={client?.contract_start_date}
+        contractEndDate={client?.contract_end_date}
+        designations={client?.designations}
+        plApprovedCount={plApprovedCount}
+        plRejectedCount={plRejectedCount}
+        insuranceApplicable={Boolean(client?.insurance_applicable)}
+        month={month}
+        onMonthChange={setMonth}
+      />
 
       {loading && (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500">Loading dashboard...</div>
@@ -365,7 +371,7 @@ export default function PayrollClientDashboardHome() {
             <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:col-span-2">
               <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                 <h2 className="text-sm font-semibold text-slate-900">Active Payroll Records</h2>
-                <p className="text-xs text-slate-500">{monthLabel(month)}</p>
+                <p className="text-xs text-slate-500">Sort by: Recent</p>
               </div>
 
               {attendanceLoading ? (
@@ -430,7 +436,7 @@ export default function PayrollClientDashboardHome() {
             <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
               <div className="border-b border-slate-200 px-4 py-3">
                 <h2 className="text-sm font-semibold text-slate-900">Approval Pipeline</h2>
-                <p className="mt-0.5 text-xs text-slate-500">Latest validation activity for this client</p>
+                <p className="mt-0.5 text-xs text-slate-500">Realtime validation of payroll cycles</p>
               </div>
               {pipeline.length === 0 ? (
                 <div className="p-8 text-center text-sm text-slate-500">No approval activity yet.</div>

@@ -8,11 +8,11 @@ import BulkUploadModal from '../components/BulkUploadModal';
 import RoleDetailsModal from '../components/RoleDetailsModal';
 import PmClientDashboard from '../components/PmClientDashboard';
 import AttendancePanel from '../components/AttendancePanel';
+import ClientProjectMetaHeader from '../components/ClientProjectMetaHeader';
 import ModalOverlay from '../components/ModalOverlay';
 import { api } from '../lib/api';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
 import {
-  formatContractDate,
   formatDesignationLabel,
   formatEmployeeStatusLabel,
 } from '../lib/formatLabels';
@@ -1046,11 +1046,6 @@ export default function PmClientDetail() {
     [pmClients, id]
   );
 
-  const designationLayoutClass =
-    client && client.designations.length > 4
-      ? 'grid grid-cols-2 gap-1.5 sm:grid-cols-4'
-      : 'flex flex-col gap-1.5 sm:flex-row sm:flex-wrap';
-
   const renderJoiningStatusCell = (row, defaultLabel) => {
     const status = String(row.joining_status ?? '').trim().toUpperCase();
     const changeCount = Number(row.joining_status_change_count ?? 0);
@@ -1156,57 +1151,19 @@ export default function PmClientDetail() {
 
   return (
     <main className="min-h-full">
-        {client && (
+        {client && activeTab !== 'attendance' && (
           <header className="sticky top-0 z-[60] isolate border-b border-slate-200 bg-white shadow-sm">
             <div className="mx-auto w-[98%] px-6 pb-4 pt-5">
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="min-w-0 text-2xl font-semibold tracking-tight text-slate-900">
-                  {client.client_name}
-                </h1>
-                {client.insurance_applicable && (
-                  <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-600/15">
-                    Insured
-                  </span>
-                )}
-              </div>
-
-              <div className="mt-5 grid gap-5 border-t border-slate-100 pt-5 sm:grid-cols-2 lg:grid-cols-12 lg:items-start lg:gap-x-8">
-                <div className="lg:col-span-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contract code</p>
-                  <p className="mt-1 font-mono text-sm font-semibold text-slate-900">{client.contract_code}</p>
-                </div>
-
-                <div className="lg:col-span-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contract period</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="min-w-0 rounded-md border border-slate-200/90 bg-slate-100 px-2.5 py-1 text-center text-xs font-medium tabular-nums text-emerald-700 break-words sm:text-left">
-                      {formatContractDate(client.contract_start_date)}
-                    </span>
-                    <span className="text-slate-300" aria-hidden>
-                      →
-                    </span>
-                    <span className="min-w-0 rounded-md border border-slate-200/90 bg-slate-100 px-2.5 py-1 text-center text-xs font-medium tabular-nums text-red-700 break-words sm:text-left">
-                      {formatContractDate(client.contract_end_date)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="sm:col-span-2 lg:col-span-5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Designations</p>
-                  <div className={`mt-2 ${designationLayoutClass}`}>
-                    {client.designations.map((d) => (
-                      <span
-                        key={d}
-                        className="bg-slate-100 text-center text-xs font-medium text-slate-800 break-words rounded-md border border-slate-200/90 px-2.5 py-1 min-w-0 sm:text-left"
-                      >
-                        {formatDesignationLabel(d)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {activeTab !== 'attendance' && (
+              <ClientProjectMetaHeader
+                title={client.client_name}
+                contractCode={client.contract_code}
+                contractStartDate={client.contract_start_date}
+                contractEndDate={client.contract_end_date}
+                designations={client.designations}
+                plApprovedCount={plApprovedRows.length}
+                plRejectedCount={plRejectedRows.length}
+                insuranceApplicable={Boolean(client.insurance_applicable)}
+              >
                 <nav className="mt-4 flex flex-wrap items-center gap-2" aria-label="Client views">
                   <NavLink
                     to={pmClientTabUrl(id, 'client_dashboard')}
@@ -1234,13 +1191,19 @@ export default function PmClientDetail() {
                     <span className="ml-1.5 tabular-nums font-medium text-slate-500">({employees.length})</span>
                   </NavLink>
                 </nav>
-              )}
+              </ClientProjectMetaHeader>
             </div>
           </header>
         )}
 
-        <div className="bg-white">
-          <div className="mx-auto w-[98%] px-6 py-6">
+        <div className={activeTab === 'attendance' ? '' : 'bg-white'}>
+          <div
+            className={
+              activeTab === 'attendance'
+                ? 'px-6 pb-8 pt-4'
+                : 'mx-auto w-[98%] px-6 py-6'
+            }
+          >
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2 text-sm mb-4">
             {error}
@@ -1262,7 +1225,7 @@ export default function PmClientDetail() {
         )}
 
         {activeTab === 'attendance' && (
-          <AttendancePanel clientId={id} role="PROGRAM_MANAGER" />
+          <AttendancePanel clientId={id} role="PROGRAM_MANAGER" projectName={client?.client_name} />
         )}
 
         {(activeTab === 'pending' || activeTab === 'role_assigned') && (

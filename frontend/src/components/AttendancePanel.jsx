@@ -106,6 +106,16 @@ function payrollCycleDisplay(sheet, clientPolicy) {
   return `${p.payroll_cycle_start_day} to ${p.payroll_cycle_end_day}`;
 }
 
+/** True when this month was submitted before (or is currently submitted / was locked). */
+function isResubmitSheet(sheet) {
+  if (!sheet) return false;
+  return (
+    sheet.status === 'SUBMITTED' ||
+    Boolean(sheet.submitted_at) ||
+    Boolean(sheet.ever_locked)
+  );
+}
+
 function cloneRows(rows) {
   return (rows ?? []).map((r) => ({
     ...r,
@@ -113,14 +123,6 @@ function cloneRows(rows) {
     legend_totals: { ...(r.legend_totals ?? {}) },
     leave_summary: { ...(r.leave_summary ?? {}) }
   }));
-}
-
-function rowFingerprint(row) {
-  const marks = (row.day_marks ?? [])
-    .map((m) => `${toDateKey(m.mark_date)}:${String(m.code ?? '').toUpperCase()}`)
-    .sort()
-    .join('|');
-  return `${row.id}|${marks}|${row.addon_incentive ?? ''}|${row.remarks ?? ''}`;
 }
 
 function buildRowChanges(draftRows, serverRows) {
@@ -136,13 +138,12 @@ function buildRowChanges(draftRows, serverRows) {
       mark_date: toDateKey(m.mark_date),
       code: String(m.code ?? '').toUpperCase()
     }));
-    const serverMarks = (server.day_marks ?? []).map((m) => ({
-      mark_date: toDateKey(m.mark_date),
-      code: String(m.code ?? '').toUpperCase()
-    }));
-    const marksChanged = JSON.stringify(draftMarks) !== JSON.stringify(serverMarks);
-    if (marksChanged) {
-      patch.day_marks = draftMarks;
+    const serverMarkByDate = new Map(
+      (server.day_marks ?? []).map((m) => [toDateKey(m.mark_date), String(m.code ?? '').toUpperCase()])
+    );
+    const changedMarks = draftMarks.filter((m) => (serverMarkByDate.get(m.mark_date) ?? '') !== m.code);
+    if (changedMarks.length > 0) {
+      patch.day_marks = changedMarks;
       hasChange = true;
     }
     if (draft.addon_incentive !== server.addon_incentive) {
@@ -156,6 +157,61 @@ function buildRowChanges(draftRows, serverRows) {
     if (hasChange) changes.push(patch);
   }
   return changes;
+}
+
+function formatLogMarkDate(markDate) {
+  const raw = String(markDate ?? '').slice(0, 10);
+  const [y, m, d] = raw.split('-').map(Number);
+  if (!y || !m || !d) return raw || '—';
+  try {
+    return new Date(y, m - 1, d).toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  } catch {
+    return raw;
+  }
+}
+
+function formatActivityLogDetail(log) {
+  if (!log) return '—';
+
+  const before = log.before_json ?? log.beforeJson ?? null;
+  const after = log.after_json ?? log.afterJson ?? null;
+  const action = String(log.action ?? '').toUpperCase();
+
+  if (action === 'CELL_CHANGE') {
+    const afterMarks = Array.isArray(after?.day_marks) ? after.day_marks : null;
+    const beforeMarks = Array.isArray(before?.day_marks) ? before.day_marks : null;
+    if (afterMarks?.length) {
+      const beforeByDate = new Map(
+        (beforeMarks ?? []).map((m) => [String(m.mark_date ?? '').slice(0, 10), m.code ?? null])
+      );
+      const empMatch =
+        String(log.message ?? '').match(/Emp\s+([^\s·:]+)/i) ||
+        String(log.message ?? '').match(/^([A-Za-z0-9/_-]+)\s*:/);
+      const empCode = empMatch?.[1] ?? null;
+      const parts = afterMarks.map((m) => {
+        const dateKey = String(m.mark_date ?? '').slice(0, 10);
+        const from = beforeByDate.has(dateKey) ? beforeByDate.get(dateKey) : '(empty)';
+        const to = m.code ?? '(empty)';
+        return `${formatLogMarkDate(dateKey)}: ${from ?? '(empty)'} to ${to}`;
+      });
+      return empCode ? `Emp ${empCode} · ${parts.join('; ')}` : parts.join('; ');
+    }
+
+    if (after?.mark_date || after?.code) {
+      const empMatch =
+        String(log.message ?? '').match(/Emp\s+([^\s·:]+)/i) ||
+        String(log.message ?? '').match(/^([A-Za-z0-9/_-]+)\s/);
+      const empCode = empMatch?.[1] ?? null;
+      const detail = `${formatLogMarkDate(after.mark_date)}: ${before?.code ?? '(empty)'} to ${after.code ?? '(empty)'}`;
+      return empCode ? `Emp ${empCode} · ${detail}` : detail;
+    }
+  }
+
+  return log.message || '—';
 }
 
 function downloadBlob(blob, filename) {
@@ -176,16 +232,16 @@ function isPolicyNewerThanSheet(clientPolicy, sheet) {
 
 /**
  * Shared PM / PL attendance panel.
- * @param {{ clientId: string, role: 'PROGRAM_MANAGER' | 'PAYROLL_LEAD' }} props
+ * @param {{ clientId: string, role: 'PROGRAM_MANAGER' | 'PAYROLL_LEAD', projectName?: string }} props
  */
-export default function AttendancePanel({ clientId, role }) {
+export default function AttendancePanel({ clientId, role, projectName }) {
   const isPl = role === 'PAYROLL_LEAD';
   const location = useLocation();
   const [month, setMonth] = useState(currentMonthValue);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [toast, setToast] = useState(null);
+  const [toast, setToast] = useState(null); // { message, actionLabel?, onAction? }
   const [payload, setPayload] = useState(null);
   const [logs, setLogs] = useState([]);
   const [showLogs, setShowLogs] = useState(false);
@@ -200,24 +256,22 @@ export default function AttendancePanel({ clientId, role }) {
   const unlockMenuRef = useRef(null);
   const exportMenuRef = useRef(null);
   const policyRecalcKeyRef = useRef(null);
+  const toastTimerRef = useRef(null);
   const [editingCell, setEditingCell] = useState(null); // { rowId, date }
   const [uploadSkipWarning, setUploadSkipWarning] = useState(null); // { imported, skipped, errors, missing?, failed?, message? }
   const [uploadSkipModalOpen, setUploadSkipModalOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [draftRows, setDraftRows] = useState([]);
   const [pendingSaveCount, setPendingSaveCount] = useState(0);
-  const [autoSaveError, setAutoSaveError] = useState(null);
-  /** Snapshots of server rows taken before each successful save this session. */
-  const [saveHistory, setSaveHistory] = useState([]);
+  const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  const [overwriteModalOpen, setOverwriteModalOpen] = useState(false);
+  const [pendingUploadFiles, setPendingUploadFiles] = useState(null);
+  const [resolvedProjectName, setResolvedProjectName] = useState(() => String(projectName ?? '').trim());
 
   const draftRowsRef = useRef(draftRows);
   const serverRowsRef = useRef([]);
   const sheetRef = useRef(null);
   const canEditRef = useRef(false);
-  /** Rows as loaded when this sheet/month session started (for discard-all). */
-  const sessionBaselineRef = useRef([]);
-  /** Skip pushing undo history while applying a discard restore. */
-  const restoringRef = useRef(false);
 
   const sheet = payload?.sheet ?? null;
   const clientPolicy = payload?.client_policy ?? null;
@@ -250,34 +304,33 @@ export default function AttendancePanel({ clientId, role }) {
 
   const hasPendingSaves = pendingSaveCount > 0;
 
-  const applyRowsToServer = useCallback(async (nextRows) => {
-    const currentSheet = sheetRef.current;
-    if (!currentSheet?.id || !canEditRef.current) return null;
-
-    const changes = buildRowChanges(nextRows, serverRowsRef.current);
-    if (!changes.length) {
-      setDraftRows(cloneRows(nextRows));
-      return null;
+  const dismissToast = useCallback(() => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
     }
+    setToast(null);
+  }, []);
 
-    setAutoSaveError(null);
-    const data = await api.saveAttendanceRows({
-      clientId,
-      sheetId: currentSheet.id,
-      rows: changes
+  const showToast = useCallback((message, options = {}) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToast({
+      message,
+      actionLabel: options.actionLabel ?? null,
+      onAction: options.onAction ?? null
     });
-    setPayload(data);
-    setDraftRows(cloneRows(data?.rows ?? []));
-    if (data?.sheet?.id) {
-      try {
-        const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
-        setLogs(Array.isArray(logRows) ? logRows : []);
-      } catch {
-        /* ignore */
-      }
-    }
-    return data;
-  }, [clientId]);
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, options.durationMs ?? 4000);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  }, []);
 
   const flushRowSave = useCallback(async (rowId) => {
     const currentSheet = sheetRef.current;
@@ -290,19 +343,16 @@ export default function AttendancePanel({ clientId, role }) {
     const changes = buildRowChanges([draft], [server]);
     if (!changes.length) return;
 
-    const beforeSave = cloneRows(serverRowsRef.current);
-    setAutoSaveError(null);
+    setError(null);
     try {
       const data = await api.saveAttendanceRows({
         clientId,
         sheetId: currentSheet.id,
         rows: changes
       });
-      if (!restoringRef.current) {
-        setSaveHistory((prev) => [...prev, beforeSave]);
-      }
       setPayload(data);
       setDraftRows(cloneRows(data?.rows ?? []));
+      showToast('Changes auto saved');
       if (data?.sheet?.id) {
         try {
           const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
@@ -312,11 +362,10 @@ export default function AttendancePanel({ clientId, role }) {
         }
       }
     } catch (err) {
-      setAutoSaveError(err.message);
       setError(err.message);
       throw err;
     }
-  }, [clientId]);
+  }, [clientId, showToast]);
 
   const rowSaverRef = useRef(null);
 
@@ -341,14 +390,6 @@ export default function AttendancePanel({ clientId, role }) {
     rowSaverRef.current?.schedule(rowId);
   }, []);
 
-  const isDirty = useMemo(() => {
-    if (draftRows.length !== serverRows.length) {
-      return draftRows.length > 0 || serverRows.length > 0;
-    }
-    const serverFp = new Map(serverRows.map((r) => [r.id, rowFingerprint(r)]));
-    return draftRows.some((r) => rowFingerprint(r) !== serverFp.get(r.id));
-  }, [draftRows, serverRows]);
-
   const dayDates = useMemo(() => {
     const set = new Set();
     for (const row of rows) {
@@ -371,6 +412,32 @@ export default function AttendancePanel({ clientId, role }) {
 
   const client = payload?.client ?? null;
   const eligiblePms = useMemo(() => payload?.eligible_pms ?? [], [payload]);
+  const displayProjectName =
+    client?.client_name || resolvedProjectName || String(projectName ?? '').trim() || '';
+
+  useEffect(() => {
+    setResolvedProjectName(String(projectName ?? '').trim());
+  }, [clientId, projectName]);
+
+  // Resolve project name early so the header never flashes "Attendance" while the sheet loads.
+  useEffect(() => {
+    if (!clientId) return undefined;
+    if (String(projectName ?? '').trim() || client?.client_name) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.getClient(clientId);
+        if (!cancelled && data?.client_name) {
+          setResolvedProjectName(String(data.client_name).trim());
+        }
+      } catch {
+        /* ignore — attendance payload still provides client when ready */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, projectName, client?.client_name]);
 
   useEffect(() => {
     if (!unlockMenuOpen) return undefined;
@@ -445,14 +512,12 @@ export default function AttendancePanel({ clientId, role }) {
     }));
   };
 
-  const showToast = (msg) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 3500);
-  };
-
   useEffect(() => {
     setUploadSkipWarning(null);
     setUploadSkipModalOpen(false);
+    setOverwriteModalOpen(false);
+    setPendingUploadFiles(null);
+    setSubmitConfirmOpen(false);
   }, [clientId]);
 
   useEffect(() => {
@@ -469,8 +534,6 @@ export default function AttendancePanel({ clientId, role }) {
         if (cancelled) return;
         setPayload(data);
         setDraftRows(cloneRows(data?.rows ?? []));
-        sessionBaselineRef.current = cloneRows(data?.rows ?? []);
-        setSaveHistory([]);
         if (data?.sheet?.id) {
           try {
             const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
@@ -495,14 +558,8 @@ export default function AttendancePanel({ clientId, role }) {
     };
   }, [clientId, month, location.pathname]);
 
-  const onUpload = async (e) => {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = '';
-    if (!files.length) return;
-    if (!canEdit && sheet) {
-      setError('Sheet is locked. Unlock before uploading.');
-      return;
-    }
+  const runUpload = async (files) => {
+    if (!files?.length) return;
     setBusy(true);
     setError(null);
     let totalImported = 0;
@@ -526,8 +583,6 @@ export default function AttendancePanel({ clientId, role }) {
         setMonth(sheetMonth);
       }
       setPayload(result);
-      sessionBaselineRef.current = cloneRows(result?.rows ?? []);
-      setSaveHistory([]);
       if (result?.sheet?.id) {
         const logRows = await api.getAttendanceLogs({ clientId, sheetId: result.sheet.id });
         setLogs(Array.isArray(logRows) ? logRows : []);
@@ -540,14 +595,10 @@ export default function AttendancePanel({ clientId, role }) {
           errors: errorList,
           missing
         });
-        const parts = [];
-        if (totalSkipped > 0) parts.push(`${totalSkipped} skipped`);
-        if (missing.length > 0) parts.push(`${missing.length} missing from CSV`);
-        showToast(`Imported ${totalImported} rows${parts.length ? ` (${parts.join(', ')})` : ''}`);
       } else {
         setUploadSkipWarning(null);
-        showToast(`Imported ${totalImported} rows`);
       }
+      showToast('Data populated successfully');
     } catch (err) {
       const prefix = files.length > 1 && currentFile ? `${currentFile.name}: ` : '';
       setError(`${prefix}${err.message}`);
@@ -562,15 +613,32 @@ export default function AttendancePanel({ clientId, role }) {
       }
     } finally {
       setBusy(false);
+      setPendingUploadFiles(null);
+      setOverwriteModalOpen(false);
     }
+  };
+
+  const onUpload = async (e) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (!files.length) return;
+    if (!canEdit && sheet) {
+      setError('Sheet is locked. Unlock before uploading.');
+      return;
+    }
+    const hasExistingData = (serverRows?.length ?? 0) > 0 || (draftRows?.length ?? 0) > 0;
+    if (hasExistingData) {
+      setPendingUploadFiles(files);
+      setOverwriteModalOpen(true);
+      return;
+    }
+    await runUpload(files);
   };
 
   const refreshAfterAction = async () => {
     const data = await api.getAttendance({ clientId, month });
     setPayload(data);
     setDraftRows(cloneRows(data?.rows ?? []));
-    sessionBaselineRef.current = cloneRows(data?.rows ?? []);
-    setSaveHistory([]);
     if (data?.sheet?.id) {
       try {
         const logRows = await api.getAttendanceLogs({ clientId, sheetId: data.sheet.id });
@@ -601,8 +669,6 @@ export default function AttendancePanel({ clientId, role }) {
         if (cancelled) return;
         setPayload(data);
         setDraftRows(cloneRows(data?.rows ?? []));
-        sessionBaselineRef.current = cloneRows(data?.rows ?? []);
-        setSaveHistory([]);
         showToast('Attendance recalculated from latest client policy');
       } catch (err) {
         if (!cancelled) setError(err.message);
@@ -646,8 +712,35 @@ export default function AttendancePanel({ clientId, role }) {
     if (uploadSkipWarning) setUploadSkipModalOpen(true);
   };
 
-  const onSubmit = async () => {
+  const requestSubmit = () => {
     if (!sheet?.id || !canEdit) return;
+    if (hasPendingSaves) {
+      setError('Waiting for auto-save to finish before submitting attendance.');
+      return;
+    }
+    setSubmitConfirmOpen(true);
+  };
+
+  const onUndoSubmit = async (sheetId) => {
+    const id = sheetId || sheetRef.current?.id;
+    if (!id) return;
+    dismissToast();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.unsubmitAttendance({ clientId, sheetId: id });
+      await refreshAfterAction();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onConfirmSubmit = async () => {
+    const sheetId = sheet?.id;
+    if (!sheetId || !canEdit) return;
+    setSubmitConfirmOpen(false);
     if (hasPendingSaves) {
       setError('Waiting for auto-save to finish before submitting attendance.');
       return;
@@ -656,9 +749,13 @@ export default function AttendancePanel({ clientId, role }) {
     setBusy(true);
     setError(null);
     try {
-      await api.submitAttendance({ clientId, sheetId: sheet.id });
+      await api.submitAttendance({ clientId, sheetId });
       await refreshAfterAction();
-      showToast(sheet.status === 'SUBMITTED' ? 'Attendance resubmitted' : 'Attendance submitted');
+      showToast('Attendance submitted', {
+        actionLabel: 'Undo',
+        onAction: () => onUndoSubmit(sheetId),
+        durationMs: 8000
+      });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -739,8 +836,6 @@ export default function AttendancePanel({ clientId, role }) {
       const data = await api.recomputeAttendance({ clientId, sheetId: sheet.id });
       setPayload(data);
       setDraftRows(cloneRows(data?.rows ?? []));
-      sessionBaselineRef.current = cloneRows(data?.rows ?? []);
-      setSaveHistory([]);
       showToast('Attendance recalculated from client policy');
     } catch (err) {
       setError(err.message);
@@ -797,54 +892,6 @@ export default function AttendancePanel({ clientId, role }) {
     queueRowAutoSave(rowId);
   };
 
-  const onDiscardUnsaved = () => {
-    rowSaverRef.current?.cancelAll();
-    setDraftRows(cloneRows(serverRows));
-    setAutoSaveError(null);
-    setError(null);
-    showToast('Unsaved changes discarded');
-  };
-
-  const onDiscardPrevious = async () => {
-    if (!saveHistory.length) return;
-    rowSaverRef.current?.cancelAll();
-    const previous = saveHistory[saveHistory.length - 1];
-    setBusy(true);
-    setError(null);
-    restoringRef.current = true;
-    try {
-      await applyRowsToServer(previous);
-      setSaveHistory((prev) => prev.slice(0, -1));
-      showToast('Previous change discarded');
-    } catch (err) {
-      setAutoSaveError(err.message);
-      setError(err.message);
-    } finally {
-      restoringRef.current = false;
-      setBusy(false);
-    }
-  };
-
-  const onDiscardAll = async () => {
-    const baseline = sessionBaselineRef.current;
-    if (!baseline?.length && !saveHistory.length && !isDirty) return;
-    rowSaverRef.current?.cancelAll();
-    setBusy(true);
-    setError(null);
-    restoringRef.current = true;
-    try {
-      await applyRowsToServer(baseline);
-      setSaveHistory([]);
-      showToast('All changes discarded');
-    } catch (err) {
-      setAutoSaveError(err.message);
-      setError(err.message);
-    } finally {
-      restoringRef.current = false;
-      setBusy(false);
-    }
-  };
-
   const onExport = async (type) => {
     setExportMenuOpen(false);
     setBusy(true);
@@ -883,9 +930,117 @@ export default function AttendancePanel({ clientId, role }) {
   return (
     <div className="space-y-4">
       {toast && (
-        <div className="fixed bottom-6 left-1/2 z-[110] max-w-md -translate-x-1/2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 shadow-lg">
-          {toast}
+        <div
+          role="status"
+          className="fixed bottom-6 left-1/2 z-[110] flex min-w-[280px] max-w-md -translate-x-1/2 items-center gap-4 rounded-lg bg-[#E5E5E5] px-4 py-3 text-sm text-slate-900 shadow-md"
+        >
+          <span className="flex-1 font-medium">{toast.message}</span>
+          {toast.actionLabel && (
+            <button
+              type="button"
+              className="shrink-0 font-medium text-sky-500 underline underline-offset-2 hover:text-sky-600"
+              onClick={() => {
+                const action = toast.onAction;
+                dismissToast();
+                action?.();
+              }}
+            >
+              {toast.actionLabel}
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="Dismiss"
+            className="shrink-0 text-slate-700 hover:text-slate-900"
+            onClick={dismissToast}
+          >
+            <svg className="h-4 w-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
+      )}
+
+      {submitConfirmOpen && (
+        <ModalOverlay
+          backdropClassName="bg-black/70"
+          onClose={() => setSubmitConfirmOpen(false)}
+        >
+          <div
+            role="document"
+            aria-labelledby="attendance-submit-title"
+            className="w-full max-w-md rounded-2xl bg-white px-8 py-8 text-center shadow-2xl"
+          >
+            <h3 id="attendance-submit-title" className="text-xl font-bold text-slate-900">
+              Confirm Submission
+            </h3>
+            <p className="mt-3 text-sm text-slate-500">
+              Are you sure you want to submit the attendance records?
+            </p>
+            <div className="mt-8 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setSubmitConfirmOpen(false)}
+                className="min-w-[7.5rem] rounded-lg border border-slate-200 bg-slate-100 px-5 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-200 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy || hasPendingSaves}
+                onClick={onConfirmSubmit}
+                className="min-w-[7.5rem] rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-60"
+              >
+                Yes, Submit
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {overwriteModalOpen && (
+        <ModalOverlay
+          backdropClassName="bg-black/70"
+          onClose={() => {
+            setOverwriteModalOpen(false);
+            setPendingUploadFiles(null);
+          }}
+        >
+          <div
+            role="document"
+            aria-labelledby="attendance-overwrite-title"
+            className="w-full max-w-md rounded-2xl bg-white px-8 py-8 text-center shadow-2xl"
+          >
+            <h3 id="attendance-overwrite-title" className="text-xl font-bold text-slate-900">
+              Overwrite Existing Data?
+            </h3>
+            <p className="mt-3 text-sm text-slate-500">
+              Uploading a new CSV may overwrite existing fields. Are you sure you want to proceed?
+            </p>
+            <div className="mt-8 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setOverwriteModalOpen(false);
+                  setPendingUploadFiles(null);
+                }}
+                className="min-w-[7.5rem] rounded-lg border border-slate-200 bg-slate-100 px-5 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-200 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy || !pendingUploadFiles?.length}
+                onClick={() => runUpload(pendingUploadFiles)}
+                className="min-w-[7.5rem] rounded-lg bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+              >
+                Yes, Overwrite
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
       )}
 
       {uploadSkipModalOpen && uploadSkipWarning && (
@@ -1009,85 +1164,87 @@ export default function AttendancePanel({ clientId, role }) {
         />
       )}
 
-      <div className="flex flex-wrap items-end justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div>
-          <h2 className="text-xl font-semibold text-slate-900">
-            {client?.client_name || 'Attendance'}
-          </h2>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Attendance · {formatMonthLabel(sheet?.attendance_month || `${month}-01`)}
-          </p>
-          {sheet && (
-            <div className="mt-2 flex flex-wrap gap-2 text-xs">
-              <span className={`rounded-full px-2.5 py-0.5 font-medium ${
-                sheet.status === 'SUBMITTED' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
-              }`}>
-                {sheet.status}
-              </span>
-              <span className={`rounded-full px-2.5 py-0.5 font-medium ${
-                sheet.locked ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-700'
-              }`}>
-                {sheet.locked
-                  ? 'Locked'
-                  : sheet.edit_scope === 'PL_ONLY'
-                    ? 'Unlocked (PL only)'
-                    : sheet.edit_scope === 'SHARED'
-                      ? 'Unlocked (shared)'
-                      : 'Unlocked'}
-              </span>
-              {sheet.unlock_request_status === 'PENDING' && (
-                <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 font-medium text-indigo-800">
-                  Edit request pending
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">
+              {displayProjectName || (loading ? '…' : '—')}
+            </h2>
+            <p className="mt-0.5 text-sm text-slate-500">
+              Attendance · {formatMonthLabel(sheet?.attendance_month || `${month}-01`)}
+            </p>
+            {sheet && (
+              <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                <span className={`rounded-full px-2.5 py-0.5 font-medium ${
+                  sheet.status === 'SUBMITTED' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
+                }`}>
+                  {sheet.status}
                 </span>
-              )}
-            </div>
-          )}
+                <span className={`rounded-full px-2.5 py-0.5 font-medium ${
+                  sheet.locked ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-700'
+                }`}>
+                  {sheet.locked
+                    ? 'Locked'
+                    : sheet.edit_scope === 'PL_ONLY'
+                      ? 'Unlocked (PL only)'
+                      : sheet.edit_scope === 'SHARED'
+                        ? 'Unlocked (shared)'
+                        : 'Unlocked'}
+                </span>
+                {sheet.unlock_request_status === 'PENDING' && (
+                  <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 font-medium text-indigo-800">
+                    Edit request pending
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-sm text-slate-600">
+              Attendance Month
+              <input
+                type="month"
+                className="ml-2 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+                value={month}
+                onChange={(e) => {
+                  setUploadSkipWarning(null);
+                  setUploadSkipModalOpen(false);
+                  setMonth(e.target.value);
+                }}
+              />
+            </label>
+            {sheet && canEdit && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onRecompute}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Recompute
+              </button>
+            )}
+            {sheet && (
+              <button
+                type="button"
+                onClick={() => setShowLogs((v) => !v)}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                {showLogs ? 'Hide activity' : 'Activity log'}
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="text-sm text-slate-600">
-            Attendance Month
-            <input
-              type="month"
-              className="ml-2 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-              value={month}
-              onChange={(e) => {
-                setUploadSkipWarning(null);
-                setUploadSkipModalOpen(false);
-                setMonth(e.target.value);
-              }}
-            />
-          </label>
-          {sheet && canEdit && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onRecompute}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-            >
-              Recompute
-            </button>
-          )}
-          {sheet && (
-            <button
-              type="button"
-              onClick={() => setShowLogs((v) => !v)}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-            >
-              {showLogs ? 'Hide activity' : 'Activity log'}
-            </button>
-          )}
+        <div className="mt-4 grid gap-3 border-t border-slate-100 pt-3 text-sm sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+          <Meta label="Contract Code" value={sheet?.contract_code || client?.contract_code} />
+          <Meta label="Client" value={displayProjectName || client?.client_name} />
+          <Meta label="Entity" value={sheet?.entity} />
+          <Meta label="Cycle Type" value={sheet?.cycle_type} />
+          <Meta label="Payroll Cycle" value={payrollCycleDisplay(sheet, clientPolicy)} />
+          <Meta label="Salary Payout Date" value={sheet?.salary_payout_date} />
+          <Meta label="Project Manager" value={sheet?.project_manager_name} />
         </div>
-      </div>
-
-      <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-        <Meta label="Contract Code" value={sheet?.contract_code || client?.contract_code} />
-        <Meta label="Client" value={client?.client_name} />
-        <Meta label="Entity" value={sheet?.entity} />
-        <Meta label="Cycle Type" value={sheet?.cycle_type} />
-        <Meta label="Payroll Cycle" value={payrollCycleDisplay(sheet, clientPolicy)} />
-        <Meta label="Salary Payout Date" value={sheet?.salary_payout_date} />
-        <Meta label="Project Manager" value={sheet?.project_manager_name} />
       </div>
 
       <p className="text-xs text-slate-500">
@@ -1124,7 +1281,9 @@ export default function AttendancePanel({ clientId, role }) {
                     <td className="px-3 py-2 text-slate-700">
                       {l.actor_name || l.actor_email || l.actor_role || '—'}
                     </td>
-                    <td className="px-3 py-2 text-slate-600">{l.message || '—'}</td>
+                    <td className="max-w-xl px-3 py-2 text-slate-600">
+                      <span className="break-words">{formatActivityLogDetail(l)}</span>
+                    </td>
                   </tr>
                 ))
               )}
@@ -1139,33 +1298,33 @@ export default function AttendancePanel({ clientId, role }) {
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <input
-                type="search"
-                placeholder="Search employee name or code…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
+          <div className="flex w-full min-w-0 flex-nowrap items-center gap-2">
+            <input
+              type="search"
+              placeholder="Search employee name or code…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              disabled={!sheet}
+              className="min-w-[8rem] flex-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+            />
+            <label className="flex shrink-0 items-center gap-2 text-sm text-slate-600">
+              <span className="whitespace-nowrap">Leave Type:</span>
+              <select
+                value={leaveType}
+                onChange={(e) => setLeaveType(e.target.value)}
                 disabled={!sheet}
-                className="w-full max-w-xs rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400"
-              />
-              <label className="flex items-center gap-2 text-sm text-slate-600">
-                <span className="whitespace-nowrap">Leave Type:</span>
-                <select
-                  value={leaveType}
-                  onChange={(e) => setLeaveType(e.target.value)}
-                  disabled={!sheet}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 disabled:bg-slate-50 disabled:text-slate-400"
-                >
-                  {LEAVE_TYPE_OPTIONS.map((opt) => (
-                    <option key={opt.value || 'all'} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-800 disabled:bg-slate-50 disabled:text-slate-400"
+              >
+                {LEAVE_TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value || 'all'} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {sheet && <CalendarViewToggle value={calendarView} onChange={setCalendarView} />}
+
+            <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
               {sheet && sheet.locked && !(isPl && (canLock || canUnlock)) && (
                 <LockedStatusPill />
               )}
@@ -1219,7 +1378,7 @@ export default function AttendancePanel({ clientId, role }) {
                     type="button"
                     disabled={busy}
                     onClick={() => setExportMenuOpen((v) => !v)}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-[#1e293b] px-3 py-2 text-sm font-medium text-white hover:bg-[#0f172a] disabled:opacity-60"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[#1e293b] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#0f172a] disabled:opacity-60"
                   >
                     <DownloadIcon className="h-4 w-4" />
                     Export CSV
@@ -1268,17 +1427,21 @@ export default function AttendancePanel({ clientId, role }) {
                   type="button"
                   disabled={busy}
                   onClick={() => onExport('template')}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#1e293b] px-3 py-2 text-sm font-medium text-white hover:bg-[#0f172a] disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#1e293b] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#0f172a] disabled:opacity-60"
                 >
                   <DownloadIcon className="h-4 w-4" />
                   Export Template
                 </button>
               )}
-              <label className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium text-white ${
-                busy || (sheet && !canEdit) ? 'bg-slate-400' : 'bg-[#3b82f6] hover:bg-[#2563eb]'
-              }`}>
+              <label
+                className={`inline-flex items-center gap-1.5 rounded-md bg-[#3B82F6] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#2563EB] ${
+                  busy || (sheet && !canEdit)
+                    ? 'cursor-not-allowed opacity-60'
+                    : 'cursor-pointer'
+                }`}
+              >
                 <UploadIcon className="h-4 w-4" />
-                Upload CSV
+                Import CSV
                 <input
                   type="file"
                   accept=".csv,text/csv"
@@ -1293,19 +1456,18 @@ export default function AttendancePanel({ clientId, role }) {
                   type="button"
                   disabled={busy || sheet.unlock_request_status === 'PENDING'}
                   onClick={onRequestEdit}
-                  className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+                  title={
+                    sheet.unlock_request_status === 'PENDING'
+                      ? 'Request pending'
+                      : 'Request edit access'
+                  }
+                  className="whitespace-nowrap rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  {sheet.unlock_request_status === 'PENDING' ? 'Request pending' : 'Request edit access'}
+                  {sheet.unlock_request_status === 'PENDING' ? 'Pending' : 'Request edit'}
                 </button>
               )}
             </div>
           </div>
-
-          {sheet && (
-            <div className="flex justify-end">
-              <CalendarViewToggle value={calendarView} onChange={setCalendarView} />
-            </div>
-          )}
 
           {sheet && <LegendBar />}
 
@@ -1603,10 +1765,10 @@ export default function AttendancePanel({ clientId, role }) {
                   <button
                     type="button"
                     disabled={busy || hasPendingSaves}
-                    onClick={onSubmit}
-                    className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                    onClick={requestSubmit}
+                    className="rounded-md bg-emerald-500 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-60"
                   >
-                    {sheet.status === 'SUBMITTED' ? 'Resubmit Attendance' : 'Submit Attendance'}
+                    {isResubmitSheet(sheet) ? 'Resubmit' : 'Submit'}
                   </button>
                 )}
               </div>
@@ -1616,54 +1778,6 @@ export default function AttendancePanel({ clientId, role }) {
                   {dayDates.length === 0 && ' · No day columns found — re-upload CSV with date headers (e.g. 1-Jul-26)'}
                 </p>
               )}
-            </div>
-          )}
-
-          {sheet && canEdit && (hasPendingSaves || isDirty || autoSaveError || saveHistory.length > 0) && (
-            <div className="sticky bottom-0 z-50 flex items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
-              <p className="text-sm text-slate-600">
-                {autoSaveError
-                  ? `Auto-save failed: ${autoSaveError}`
-                  : hasPendingSaves
-                    ? 'Saving changes…'
-                    : isDirty
-                      ? 'You have unsaved changes'
-                      : 'All changes saved'}
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                {isDirty && (
-                  <button
-                    type="button"
-                    disabled={busy || hasPendingSaves}
-                    onClick={onDiscardUnsaved}
-                    className="rounded-md border border-red-500 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
-                  >
-                    Discard unsaved
-                  </button>
-                )}
-                {saveHistory.length > 0 && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busy || hasPendingSaves || isDirty}
-                      onClick={onDiscardPrevious}
-                      className="rounded-md border border-red-500 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
-                      title={isDirty ? 'Discard or save unsaved changes first' : 'Undo the last saved change'}
-                    >
-                      Discard previous change
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy || hasPendingSaves}
-                      onClick={onDiscardAll}
-                      className="rounded-md border border-red-600 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60"
-                      title="Revert all edits made this session"
-                    >
-                      Discard all changes
-                    </button>
-                  </>
-                )}
-              </div>
             </div>
           )}
         </>
@@ -2004,7 +2118,7 @@ function CalendarViewToggle({ value, onChange }) {
     <div
       role="group"
       aria-label="Calendar view"
-      className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5"
+      className="inline-flex shrink-0 rounded-lg border border-slate-200 bg-slate-100 p-0.5"
     >
       {options.map((opt) => {
         const active = value === opt.id;
@@ -2082,11 +2196,11 @@ function LegendBar() {
     { code: 'R/T/-', label: 'Not considered', cls: 'bg-slate-100 text-slate-500' }
   ];
   return (
-    <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+    <div className="flex w-full min-w-0 flex-nowrap items-center justify-between gap-x-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
       {items.map((it) => (
-        <span key={it.code} className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+        <span key={it.code} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-slate-600">
           <span
-            className={`relative inline-flex overflow-hidden rounded px-1.5 py-0.5 font-semibold ${
+            className={`relative inline-flex overflow-hidden rounded px-1 py-0.5 text-[10px] font-semibold leading-none ${
               it.cls || codeCellClass(it.code === 'EL/SL/CL…' ? 'EL' : it.code.split('/')[0])
             }`}
           >
