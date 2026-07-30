@@ -81,8 +81,8 @@ export default function PayrollClientApprovedEmployeesPage() {
     [employees]
   );
 
-  const closeResponseModal = () => {
-    if (responseDecisionLoading) return;
+  const closeResponseModal = (opts = {}) => {
+    if (responseDecisionLoading && !opts.force) return;
     setResponseModalOpen(false);
     setResponseModalEmployee(null);
     setResponseModalForm(null);
@@ -140,7 +140,8 @@ export default function PayrollClientApprovedEmployeesPage() {
       const [employeeRows, clientRows] = await Promise.all([api.listEmployees(id), api.listClients()]);
       setEmployees(employeeRows || []);
       setClients(clientRows || []);
-      closeResponseModal();
+      // force: close while decision loading is still true (finally clears it after)
+      closeResponseModal({ force: true });
     } catch (err) {
       setResponseModalError(err.message || 'Could not submit Payroll Lead decision.');
     } finally {

@@ -93,7 +93,7 @@ export default function PayrollClientAssignPmPage() {
   return (
     <main className="mx-auto max-w-3xl px-6 py-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">Assign Program Manager</h1>
+        <h1 className="text-2xl font-semibold text-slate-900">Re-Assign Program Manager</h1>
         <p className="mt-1 text-sm text-slate-500">
           {client.client_name} · {client.contract_code}
         </p>
@@ -148,7 +148,7 @@ export default function PayrollClientAssignPmPage() {
             disabled={submitting || !programManagerId}
             className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-60"
           >
-            {submitting ? 'Saving...' : 'Assign Program Manager'}
+            {submitting ? 'Saving...' : 'Re-Assign Program Manager'}
           </button>
         </div>
       </form>

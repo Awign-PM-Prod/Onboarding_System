@@ -6,13 +6,10 @@ import {
   IconClients,
   IconDashboard,
   IconOnboarding,
-  IconSettings,
-  SidebarCollapseToggle
+  IconSettings
 } from './CollapsibleAppSidebar';
 import TwoPaneSidebar, {
-  SidebarClientsPanel,
   SidebarModulesPanel,
-  readSidebarPanelOpen,
   writeSidebarPanelOpen
 } from './TwoPaneSidebar';
 
@@ -89,32 +86,33 @@ export default function PayrollLeadLayout() {
   const location = useLocation();
   const { profile, user, signOut } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(readSidebarPanelOpen);
-  const [panelView, setPanelView] = useState('clients');
+  const [panelOpen, setPanelOpen] = useState(false);
   const [clients, setClients] = useState([]);
-  const [clientsLoading, setClientsLoading] = useState(true);
-  const [clientsError, setClientsError] = useState(null);
   const mainScrollRef = useRef(null);
 
   const pathname = location.pathname;
   const clientId = pathname.match(/^\/dashboard\/client\/([^/]+)/)?.[1] ?? null;
+  const isClientsListPage = pathname === '/dashboard/clients';
+  const isClientFormPage =
+    pathname === '/clients/new' || /^\/clients\/[^/]+\/edit\/?$/.test(pathname);
 
   const loadClients = useCallback(async () => {
-    setClientsLoading(true);
-    setClientsError(null);
     try {
       const data = await api.listClients();
       setClients(Array.isArray(data) ? data : []);
-    } catch (err) {
-      setClientsError(err.message);
-    } finally {
-      setClientsLoading(false);
+    } catch {
+      setClients([]);
     }
   }, []);
 
   useEffect(() => {
     loadClients();
   }, [loadClients]);
+
+  // Refresh after create/edit when returning to the clients list.
+  useEffect(() => {
+    if (isClientsListPage) loadClients();
+  }, [isClientsListPage, loadClients]);
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -130,14 +128,14 @@ export default function PayrollLeadLayout() {
     writeSidebarPanelOpen(open);
   };
 
-  // Entering a client shows its modules in the panel; leaving returns to the client list.
+  // Second sidebar (modules) only while a client workspace is open.
   useEffect(() => {
     if (clientId) {
-      setPanelView('modules');
       setPanelOpen(true);
       writeSidebarPanelOpen(true);
     } else {
-      setPanelView('clients');
+      setPanelOpen(false);
+      writeSidebarPanelOpen(false);
     }
   }, [clientId]);
 
@@ -150,22 +148,7 @@ export default function PayrollLeadLayout() {
     return <Navigate to="/dashboard/dashboard" replace />;
   }
 
-  const clientsRailActive =
-    Boolean(clientId) ||
-    (panelOpen && panelView === 'clients') ||
-    pathname === '/clients/new' ||
-    /^\/clients\/[^/]+\/edit\/?$/.test(pathname);
-
-  const handleClientsRailClick = () => {
-    if (!panelOpen) {
-      setPanelView('clients');
-      setPanelOpenPersist(true);
-    } else if (panelView === 'modules') {
-      setPanelView('clients');
-    } else {
-      setPanelOpenPersist(false);
-    }
-  };
+  const clientsRailActive = Boolean(clientId) || isClientsListPage || isClientFormPage;
 
   const railItems = [
     {
@@ -178,10 +161,11 @@ export default function PayrollLeadLayout() {
     },
     {
       id: 'clients',
+      to: '/dashboard/clients',
       label: 'Clients',
       active: clientsRailActive,
       icon: <IconClients className="h-full w-full" />,
-      onClick: handleClientsRailClick
+      onClick: () => setPanelOpenPersist(false)
     }
   ];
 
@@ -240,7 +224,7 @@ export default function PayrollLeadLayout() {
         {
           id: 'assign-pm',
           to: `${base}/assign-pm`,
-          label: 'Assign Program Manager',
+          label: 'Re-Assign Program Manager',
           active: pathname.includes('/assign-pm'),
           icon: <IconUserSwitch className="h-full w-full" />
         }
@@ -251,36 +235,24 @@ export default function PayrollLeadLayout() {
     ? clients.find((c) => String(c.id) === String(clientId))
     : null;
 
-  const renderPanel = (closeDrawer) => {
-    if (panelView === 'modules' && clientId) {
-      return (
-        <SidebarModulesPanel
-          clientName={activeClient?.client_name ?? 'Client'}
-          items={moduleItems}
-          onShowClients={() => setPanelView('clients')}
-          onNavigate={closeDrawer}
-        />
-      );
-    }
+  const renderPanel = (closeDrawer) => (collapsed) => {
+    if (!clientId) return null;
     return (
-      <SidebarClientsPanel
-        clients={clients}
-        loading={clientsLoading}
-        error={clientsError}
-        onRetry={loadClients}
-        activeClientId={clientId}
-        clientLink={(client) => `/dashboard/client/${client.id}/dashboard`}
-        addClientTo="/clients/new"
-        onNavigate={closeDrawer}
-        onClientSelect={() => {
-          setPanelView('modules');
-          setPanelOpenPersist(true);
+      <SidebarModulesPanel
+        collapsed={collapsed}
+        clientName={activeClient?.client_name ?? 'Client'}
+        items={moduleItems}
+        onShowClients={() => {
+          navigate('/dashboard/clients');
+          setPanelOpenPersist(false);
+          closeDrawer?.();
         }}
+        onNavigate={closeDrawer}
       />
     );
   };
 
-  const renderSidebar = ({ forcePanelOpen = false } = {}) => (
+  const renderSidebar = ({ forceExpanded = false } = {}) => (
     <TwoPaneSidebar
       homeTo="/dashboard/dashboard"
       profile={profile}
@@ -288,7 +260,9 @@ export default function PayrollLeadLayout() {
       onSignOut={handleSignOut}
       onNavigate={() => setMobileNavOpen(false)}
       railItems={railItems}
-      panelOpen={panelOpen || forcePanelOpen}
+      panelVisible={Boolean(clientId)}
+      panelExpanded={Boolean(clientId) && (panelOpen || forceExpanded)}
+      onPanelExpandedChange={setPanelOpenPersist}
       panel={renderPanel(() => setMobileNavOpen(false))}
     />
   );
@@ -313,26 +287,21 @@ export default function PayrollLeadLayout() {
           mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {renderSidebar({ forcePanelOpen: true })}
+        {renderSidebar({ forceExpanded: Boolean(clientId) })}
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="z-20 flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur">
+        <header className="z-20 flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur lg:hidden">
           <button
             type="button"
             onClick={() => setMobileNavOpen((v) => !v)}
-            className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 lg:hidden"
+            className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
             aria-expanded={mobileNavOpen}
             aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
           >
             {mobileNavOpen ? <IconClose className="h-6 w-6" /> : <IconMenu className="h-6 w-6" />}
           </button>
-          <SidebarCollapseToggle
-            collapsed={!panelOpen}
-            onToggle={() => setPanelOpenPersist(!panelOpen)}
-            className="hidden lg:inline-flex"
-          />
-          <span className="min-w-0 truncate text-sm font-semibold text-slate-900 lg:hidden">Staffing-Go</span>
+          <span className="min-w-0 truncate text-sm font-semibold text-slate-900">Staffing-Go</span>
         </header>
 
         <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">

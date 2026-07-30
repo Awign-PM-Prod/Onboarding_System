@@ -143,13 +143,13 @@ export default function ClientForm() {
         if (changes.length) {
           setPolicyChanges(changes);
           setSaveSuccess(true);
-          window.setTimeout(() => navigate('/dashboard'), 2500);
+          window.setTimeout(() => navigate('/dashboard/clients'), 2500);
         } else {
-          navigate('/dashboard');
+          navigate('/dashboard/clients');
         }
       } else {
         await api.createClient(payload);
-        navigate('/dashboard');
+        navigate('/dashboard/clients');
       }
     } catch (err) {
       setError(err.message);
@@ -168,8 +168,8 @@ export default function ClientForm() {
   return (
     <main className="mx-auto max-w-5xl px-6 py-8">
       <div className="mb-6">
-        <Link to="/dashboard" className="text-sm text-indigo-600 hover:text-indigo-800">
-          &larr; Back to dashboard
+        <Link to="/dashboard/clients" className="text-sm text-indigo-600 hover:text-indigo-800">
+          &larr; Back to clients
         </Link>
         <h1 className="mt-2 text-2xl font-semibold text-slate-900">
           {isEdit ? 'Edit Client' : 'Create Client'}
@@ -342,7 +342,7 @@ export default function ClientForm() {
 
           <div className="flex justify-end gap-3 pt-2">
             <Link
-              to="/dashboard"
+              to="/dashboard/clients"
               className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
             >
               Cancel

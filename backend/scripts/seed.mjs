@@ -55,7 +55,7 @@ const demoClients = [
     designations: ['Data Entry Operator', 'Quality Analyst']
   },
   {
-    client_name: 'Attendance Test',
+    client_name: 'Demo-Project',
     contract_code: 'ATT-TEST',
     contract_start_date: '2026-01-01',
     contract_end_date: '2027-12-31',
@@ -287,7 +287,7 @@ async function run() {
     employees: demoEmployees
   });
 
-  console.log('Seeding employees for Attendance Test client...');
+  console.log('Seeding employees for Demo-Project client...');
   await ensureEmployeesForClient({
     clientId: clientIds['ATT-TEST'],
     creatorId: PM_RAHUL,

@@ -178,6 +178,9 @@ const DOCUMENT_TAB_DEFINITIONS = [
 const DOCUMENT_FIELD_KEYS = new Set(DOCUMENT_TAB_DEFINITIONS.map((item) => item.key));
 
 const PM_MARKABLE_FIELDS = new Set([
+  // Must stay in sync with backend CORRECTION_EDITABLE_FIELDS (employees.js)
+  'email',
+  'pd_secondary_mobile',
   'pd_emergency_contact_name',
   'pd_emergency_contact_relation',
   'pd_alternate_number',

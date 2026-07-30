@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   IconLogout,
-  IconSettings,
   ROLE_LABEL,
   initialsFromName
 } from './CollapsibleAppSidebar';
@@ -194,37 +193,65 @@ export function SidebarClientsPanel({
 
 /**
  * Contextual panel content: modules of the currently opened client.
+ * When `collapsed`, shows icons only (narrow rail) like the primary sidebar.
  */
-export function SidebarModulesPanel({ clientName, items = [], onShowClients, onNavigate }) {
+export function SidebarModulesPanel({
+  clientName,
+  items = [],
+  onShowClients,
+  onNavigate,
+  collapsed = false
+}) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 px-3 pb-3 pt-5">
+      <div className={`shrink-0 pb-3 pt-5 ${collapsed ? 'px-2' : 'px-3'}`}>
         {onShowClients && (
           <button
             type="button"
             onClick={onShowClients}
-            className="mb-2 flex items-center gap-1.5 rounded-lg px-1 py-1 text-[11px] font-medium text-slate-400 transition hover:text-white"
+            className={`mb-2 flex items-center rounded-lg py-1 text-[11px] font-medium text-slate-400 transition hover:text-white ${
+              collapsed ? 'w-full justify-center px-1' : 'gap-1.5 px-1'
+            }`}
+            title="All Clients"
+            aria-label="All Clients"
           >
             <IconChevronLeft className="h-3.5 w-3.5 shrink-0" />
-            All Clients
+            {!collapsed && 'All Clients'}
           </button>
         )}
-        <p className="truncate px-1 text-sm font-semibold text-white" title={clientName}>
+        <p
+          className={`truncate font-semibold text-white ${
+            collapsed ? 'px-0 text-center text-[11px]' : 'px-1 text-sm'
+          }`}
+          title={clientName}
+        >
           {clientName}
         </p>
       </div>
 
-      <nav className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-y-contain px-3 pb-4" aria-label="Client modules">
+      <nav
+        className={`flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-y-contain pb-4 ${
+          collapsed ? 'px-2' : 'px-3'
+        }`}
+        aria-label="Client modules"
+      >
         {items.map((item) => (
           <NavLink
             key={item.id}
             to={item.to}
-            className={panelItemClass(item.active)}
+            className={collapsed ? railItemClass(item.active) : panelItemClass(item.active)}
             title={item.label}
+            aria-label={item.label}
             onClick={onNavigate}
           >
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center">{item.icon}</span>
-            <span className="truncate">{item.label}</span>
+            <span
+              className={`flex shrink-0 items-center justify-center ${
+                collapsed ? 'h-6 w-6' : 'h-5 w-5'
+              }`}
+            >
+              {item.icon}
+            </span>
+            {!collapsed && <span className="truncate">{item.label}</span>}
           </NavLink>
         ))}
       </nav>
@@ -235,20 +262,29 @@ export function SidebarModulesPanel({ clientName, items = [], onShowClients, onN
 /**
  * Two-pane sidebar: a slim icon rail plus a contextual slide-out panel.
  * `railItems`: { id, label, icon, active, to?, onClick? }
- * `panel`: node rendered inside the second pane when `panelOpen` is true.
+ * `panelVisible`: second pane shown (e.g. while on a client route).
+ * `panelExpanded`: full labels vs icon-only collapsed rail.
+ * `panel`: node or `(collapsed) => node` for the second pane.
  */
 export default function TwoPaneSidebar({
   homeTo = '/',
   railItems = [],
-  panelOpen = false,
+  panelVisible = false,
+  panelExpanded = true,
+  onPanelExpandedChange,
+  /** @deprecated use panelVisible + panelExpanded */
+  panelOpen,
   panel = null,
   profile,
   user,
   onSignOut,
   onNavigate
 }) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const settingsRef = useRef(null);
+  const visible = typeof panelVisible === 'boolean' ? panelVisible : Boolean(panelOpen);
+  const expanded = visible && (typeof panelExpanded === 'boolean' ? panelExpanded : Boolean(panelOpen));
+  const collapsed = visible && !expanded;
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef(null);
 
   const initials = useMemo(
     () => initialsFromName(profile?.name ?? user?.email ?? ''),
@@ -258,16 +294,16 @@ export default function TwoPaneSidebar({
   const roleLabel = ROLE_LABEL[profile?.role] ?? profile?.role ?? '';
 
   useEffect(() => {
-    if (!settingsOpen) return undefined;
+    if (!profileMenuOpen) return undefined;
 
     const handlePointerDown = (event) => {
-      if (settingsRef.current && !settingsRef.current.contains(event.target)) {
-        setSettingsOpen(false);
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setProfileMenuOpen(false);
       }
     };
 
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape') setSettingsOpen(false);
+      if (event.key === 'Escape') setProfileMenuOpen(false);
     };
 
     document.addEventListener('mousedown', handlePointerDown);
@@ -278,15 +314,17 @@ export default function TwoPaneSidebar({
       document.removeEventListener('touchstart', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [settingsOpen]);
+  }, [profileMenuOpen]);
 
   const handleNav = () => {
-    setSettingsOpen(false);
+    setProfileMenuOpen(false);
     onNavigate?.();
   };
 
+  const resolvedPanel = typeof panel === 'function' ? panel(collapsed) : panel;
+
   return (
-    <div className="flex h-full min-h-0 max-h-screen bg-[#1a1f3a]">
+    <div className="relative flex h-full min-h-0 max-h-screen bg-[#1a1f3a]">
       {/* Icon rail */}
       <div className="flex h-full min-h-0 w-[4.5rem] shrink-0 flex-col">
         <div className="flex shrink-0 items-center justify-center px-2 pb-3 pt-5">
@@ -310,9 +348,9 @@ export default function TwoPaneSidebar({
           ))}
         </nav>
 
-        <div ref={settingsRef} className="relative z-20 shrink-0 border-t border-white/10 px-2 py-3">
+        <div ref={profileMenuRef} className="relative z-20 shrink-0 border-t border-white/10 px-2 py-3">
           <div className="flex flex-col items-stretch gap-2">
-            {settingsOpen && (
+            {profileMenuOpen && (
               <div className="overflow-hidden rounded-lg border border-slate-700/80 bg-[#1e2438] shadow-lg">
                 <div className="px-2 py-2">
                   <p
@@ -336,33 +374,43 @@ export default function TwoPaneSidebar({
                 </button>
               </div>
             )}
-            <span
-              className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white ring-2 ring-indigo-400/30"
-              aria-hidden
-            >
-              {initials}
-            </span>
             <button
               type="button"
-              onClick={() => setSettingsOpen((v) => !v)}
-              className={railItemClass(settingsOpen)}
-              aria-label="Settings"
-              aria-expanded={settingsOpen}
-              title="Settings"
+              onClick={() => setProfileMenuOpen((v) => !v)}
+              className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white ring-2 ring-indigo-400/30 transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300"
+              aria-label="Profile menu"
+              aria-expanded={profileMenuOpen}
+              title={profile?.name ?? 'Profile'}
             >
-              <IconSettings className="h-5 w-5" />
+              {initials}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Contextual panel */}
+      {/* Contextual panel: hidden | icon-collapsed | expanded */}
       <div
-        className={`h-full min-h-0 overflow-hidden border-l border-white/10 transition-[width] duration-200 ease-out ${
-          panelOpen ? 'w-64' : 'w-0 border-l-0'
+        className={`relative h-full min-h-0 overflow-visible border-l border-white/10 transition-[width] duration-200 ease-out ${
+          !visible ? 'w-0 border-l-0' : expanded ? 'w-64' : 'w-[4.5rem]'
         }`}
       >
-        <div className="h-full w-64">{panel}</div>
+        <div className={`h-full overflow-hidden ${expanded ? 'w-64' : 'w-[4.5rem]'}`}>
+          {resolvedPanel}
+        </div>
+
+        {visible && onPanelExpandedChange && (
+          <button
+            type="button"
+            onClick={() => onPanelExpandedChange(!expanded)}
+            className="absolute -right-3.5 top-8 z-30 hidden h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-[#252b4a] text-slate-200 shadow-md transition hover:bg-[#2f3658] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300 lg:flex"
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand menu' : 'Collapse menu'}
+          >
+            <IconChevronLeft
+              className={`h-3.5 w-3.5 transition-transform duration-200 ${collapsed ? 'rotate-180' : ''}`}
+            />
+          </button>
+        )}
       </div>
     </div>
   );

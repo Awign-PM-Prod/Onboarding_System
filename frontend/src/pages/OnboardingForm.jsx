@@ -10,6 +10,19 @@ const TWELVE_DIGIT_REGEX = /^\d{12}$/;
 const SIX_DIGIT_REGEX = /^\d{6}$/;
 
 const MARITAL_OPTIONS = ['Single', 'Married', 'Divorced', 'Widowed'];
+const RELATION_OPTIONS = [
+  'Father',
+  'Mother',
+  'Spouse',
+  'Husband',
+  'Wife',
+  'Brother',
+  'Sister',
+  'Son',
+  'Daughter',
+  'Friend',
+  'Other',
+];
 const DRIVING_OPTIONS = ['Yes', 'No'];
 const DRIVING_LICENSE_MAX_BYTES = 12 * 1024 * 1024;
 const QUALIFICATION_MAX_BYTES = 12 * 1024 * 1024;
@@ -2828,13 +2841,24 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                     <label className="mb-1.5 block text-sm font-medium text-slate-800">
                       Relation {isRequired('pd_emergency_contact_relation', true) && <span className="text-rose-500">*</span>}
                     </label>
-                    <input
-                      type="text"
+                    <select
                       className={fieldClass(false)}
-                      placeholder="e.g. Father, Mother, Spouse"
                       value={draft.pd_emergency_contact_relation}
                       onChange={(e) => setDraft((d) => ({ ...d, pd_emergency_contact_relation: e.target.value }))}
-                    />
+                    >
+                      <option value="">Select Relation</option>
+                      {RELATION_OPTIONS.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                      {draft.pd_emergency_contact_relation &&
+                        !RELATION_OPTIONS.includes(draft.pd_emergency_contact_relation) && (
+                          <option value={draft.pd_emergency_contact_relation}>
+                            {draft.pd_emergency_contact_relation}
+                          </option>
+                        )}
+                    </select>
                   </div>
                 )}
               </div>
@@ -3232,15 +3256,26 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                 <label className="mb-1.5 block text-sm font-medium text-slate-800">
                   Relation <span className="text-rose-500">*</span>
                 </label>
-                <input
-                  type="text"
+                <select
                   className={fieldClass(false)}
-                  placeholder="e.g. Father, Mother, Spouse"
                   value={draft.pd_emergency_contact_relation}
                   onChange={(e) =>
                     setDraft((d) => ({ ...d, pd_emergency_contact_relation: e.target.value }))
                   }
-                />
+                >
+                  <option value="">Select Relation</option>
+                  {RELATION_OPTIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                  {draft.pd_emergency_contact_relation &&
+                    !RELATION_OPTIONS.includes(draft.pd_emergency_contact_relation) && (
+                      <option value={draft.pd_emergency_contact_relation}>
+                        {draft.pd_emergency_contact_relation}
+                      </option>
+                    )}
+                </select>
               </div>
             </div>
           </div>

@@ -7,6 +7,7 @@ import PayrollHeadLayout from './components/PayrollHeadLayout';
 import PmDashboardHome from './pages/PmDashboardHome';
 import PmClientDetail from './pages/PmClientDetail';
 import PayrollLeadDashboardHome from './pages/PayrollLeadDashboardHome';
+import PayrollLeadClientsPage from './pages/PayrollLeadClientsPage';
 import PayrollClientDashboardHome from './pages/PayrollClientDashboardHome';
 import PayrollClientApprovedEmployeesPage from './pages/PayrollClientApprovedEmployeesPage';
 import PayrollClientFinalApprovedEmployeesPage from './pages/PayrollClientFinalApprovedEmployeesPage';
@@ -17,6 +18,7 @@ import PayrollClientPolicyPage from './pages/PayrollClientPolicyPage';
 import PayrollClientAssignPmPage from './pages/PayrollClientAssignPmPage';
 import PayrollHeadDashboardHome from './pages/PayrollHeadDashboardHome';
 import PayrollHeadClientsPage from './pages/PayrollHeadClientsPage';
+import PmClientsPage from './pages/PmClientsPage';
 import OnboardingForm from './pages/OnboardingForm';
 import OnboardingStatusPage from './pages/OnboardingStatusPage';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -45,7 +47,7 @@ export default function App() {
       >
         <Route path="/dashboard" element={<Navigate to="/dashboard/dashboard" replace />} />
         <Route path="/dashboard/dashboard" element={<PayrollLeadDashboardHome />} />
-        <Route path="/dashboard/clients" element={<Navigate to="/dashboard/dashboard" replace />} />
+        <Route path="/dashboard/clients" element={<PayrollLeadClientsPage />} />
         <Route path="/clients/new" element={<ClientForm />} />
         <Route path="/clients/:id/edit" element={<ClientForm />} />
         <Route path="/dashboard/client/:id">
@@ -71,7 +73,7 @@ export default function App() {
       >
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<PmDashboardHome />} />
-        <Route path="clients" element={<Navigate to="/pm-dashboard/dashboard" replace />} />
+        <Route path="clients" element={<PmClientsPage />} />
         <Route path="client/:id" element={<PmClientDefaultRedirect />} />
         <Route path="client/:id/:tab" element={<PmClientDetail />} />
       </Route>

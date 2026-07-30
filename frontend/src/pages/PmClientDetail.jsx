@@ -195,7 +195,44 @@ export default function PmClientDetail() {
     }
   };
 
+  /** Background refresh without loading spinner — picks up employee submit / status changes. */
+  const softRefresh = async () => {
+    if (!id) return;
+    try {
+      const [clients, emps] = await Promise.all([
+        api.listPmClients(),
+        api.listEmployees(id),
+      ]);
+      const found = clients.find((c) => c.id === id);
+      if (!found) return;
+      setPmClients(clients);
+      setClient(found);
+      setEmployees(emps);
+    } catch {
+      // Keep current UI on background refresh failure.
+    }
+  };
+
   useEffect(() => { loadAll(); }, [id]);
+
+  // Slow poll so PM sees Form Submitted / status changes without a manual refresh.
+  useEffect(() => {
+    if (!id) return undefined;
+    const POLL_MS = 10000;
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      softRefresh();
+    };
+    const intervalId = setInterval(tick, POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') softRefresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [id]);
 
   useEffect(() => {
     if (tabSegment === 'testing') {
@@ -690,8 +727,8 @@ export default function PmClientDetail() {
     setBulkRoleForceSendOnboarding(false);
   };
 
-  const closeResponseModal = () => {
-    if (responseDecisionLoading) return;
+  const closeResponseModal = (opts = {}) => {
+    if (responseDecisionLoading && !opts.force) return;
     setResponseModalOpen(false);
     setResponseModalEmployee(null);
     setResponseModalForm(null);
@@ -742,7 +779,8 @@ export default function PmClientDetail() {
       setToast(msg);
       await loadAll();
       setTimeout(() => setToast(null), 3000);
-      closeResponseModal();
+      // force: close while decision loading is still true (finally clears it after)
+      closeResponseModal({ force: true });
     } catch (err) {
       setResponseModalError(err.message || 'Could not submit review decision.');
     } finally {
@@ -1168,45 +1206,35 @@ export default function PmClientDetail() {
                 </div>
               </div>
 
-              <nav className="mt-4 flex flex-wrap items-center gap-2" aria-label="Client views">
-                <NavLink
-                  to={pmClientTabUrl(id, 'client_dashboard')}
-                  className={({ isActive }) =>
-                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`
-                  }
-                >
-                  Dashboard
-                </NavLink>
-                <NavLink
-                  to={pmClientTabUrl(id, 'testing')}
-                  className={({ isActive }) =>
-                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`
-                  }
-                >
-                  Onboarding in Progress
-                  <span className="ml-1.5 tabular-nums font-medium text-slate-500">({employees.length})</span>
-                </NavLink>
-                <NavLink
-                  to={pmClientTabUrl(id, 'attendance')}
-                  className={({ isActive }) =>
-                    `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
-                      isActive
-                        ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
-                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                    }`
-                  }
-                >
-                  Attendance
-                </NavLink>
-              </nav>
+              {activeTab !== 'attendance' && (
+                <nav className="mt-4 flex flex-wrap items-center gap-2" aria-label="Client views">
+                  <NavLink
+                    to={pmClientTabUrl(id, 'client_dashboard')}
+                    className={({ isActive }) =>
+                      `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                        isActive
+                          ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                      }`
+                    }
+                  >
+                    Dashboard
+                  </NavLink>
+                  <NavLink
+                    to={pmClientTabUrl(id, 'testing')}
+                    className={({ isActive }) =>
+                      `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                        isActive
+                          ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                      }`
+                    }
+                  >
+                    Onboarding in Progress
+                    <span className="ml-1.5 tabular-nums font-medium text-slate-500">({employees.length})</span>
+                  </NavLink>
+                </nav>
+              )}
             </div>
           </header>
         )}
