@@ -207,20 +207,20 @@ export default function PayrollClientPolicyPage() {
 
   if (loading) {
     return (
-      <main className="mx-auto max-w-5xl px-6 py-8 text-slate-500">Loading policy...</main>
+      <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8 text-slate-500">Loading policy...</main>
     );
   }
 
   if (error && !client) {
     return (
-      <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-8">
+    <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-slate-900">Policy Configuration</h1>
         <p className="mt-1 text-sm text-slate-500">

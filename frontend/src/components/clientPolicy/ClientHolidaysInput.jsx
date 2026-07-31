@@ -59,17 +59,17 @@ export default function ClientHolidaysInput({ value, onChange }) {
       ) : (
         <div className="space-y-2">
           {holidays.map((h, i) => (
-            <div key={i} className="flex flex-nowrap items-center gap-2">
+            <div key={i} className="flex flex-wrap items-center gap-2">
               <input
                 type="date"
                 value={h.holiday_date ?? ''}
                 onChange={(e) => updateRow(i, { holiday_date: e.target.value })}
-                className="input w-auto shrink-0"
+                className="input w-full min-w-0 sm:w-auto sm:shrink-0"
               />
               <select
                 value={normalizeHolidayType(h.holiday_type)}
                 onChange={(e) => updateRow(i, { holiday_type: e.target.value })}
-                className="input w-auto min-w-[12rem] shrink-0"
+                className="input w-full min-w-0 sm:w-auto sm:min-w-[12rem] sm:shrink-0"
               >
                 {HOLIDAY_TYPES.map((opt) => (
                   <option key={opt.value} value={opt.value}>

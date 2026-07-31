@@ -169,29 +169,19 @@ export function SidebarBackLink({ to, label = 'Back', onClick, collapsed }) {
   );
 }
 
-function IconPanelLeft({ className }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M9 4.5v15m-4.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125z"
-      />
-    </svg>
-  );
-}
-
-/** Content-header toggle matching the panel icon in the design reference. */
+/** Edge-mounted circular collapse control shared across layouts. */
 export function SidebarCollapseToggle({ collapsed, onToggle, className = '' }) {
   return (
     <button
       type="button"
       onClick={onToggle}
-      className={`inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 ${className}`.trim()}
+      className={`pointer-events-auto absolute right-0 top-8 z-50 hidden h-8 w-8 translate-x-1/2 items-center justify-center rounded-full border border-white/30 bg-[#1a1f3a] text-white shadow-[0_2px_8px_rgba(0,0,0,0.35)] transition hover:bg-[#252b4a] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300 lg:flex ${className}`.trim()}
       aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      title={collapsed ? 'Expand menu' : 'Collapse menu'}
     >
-      <IconPanelLeft className="h-5 w-5" />
+      <IconChevronLeft
+        className={`h-4 w-4 transition-transform duration-200 ${collapsed ? 'rotate-180' : ''}`}
+      />
     </button>
   );
 }
@@ -289,15 +279,10 @@ export default function CollapsibleAppSidebar({
       }`}
     >
       {showCollapseToggle && (
-        <button
-          type="button"
-          onClick={() => setCollapsed((v) => !v)}
-          className="absolute -right-3.5 top-8 z-20 flex h-8 w-8 items-center justify-center rounded-full border-2 border-indigo-300 bg-indigo-600 text-white shadow-lg shadow-indigo-900/50 transition hover:scale-105 hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300"
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={collapsed ? 'Expand menu' : 'Collapse menu'}
-        >
-          <IconChevronLeft className={`h-4 w-4 transition-transform ${collapsed ? 'rotate-180' : ''}`} />
-        </button>
+        <SidebarCollapseToggle
+          collapsed={collapsed}
+          onToggle={() => setCollapsed((v) => !v)}
+        />
       )}
 
       <div

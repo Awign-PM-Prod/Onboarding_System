@@ -10,6 +10,8 @@
 
 html, body, #root {
   height: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -17,4 +19,10 @@ body {
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   background-color: #f8fafc;
   color: #0f172a;
+}
+
+/* Keep native selects within the phone viewport */
+select {
+  max-width: 100%;
+  box-sizing: border-box;
 }

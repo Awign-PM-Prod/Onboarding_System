@@ -49,16 +49,16 @@ export default function PayrollLeadClientsPage() {
   });
 
   return (
-    <main className="mx-auto max-w-7xl px-6 py-8">
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Clients</h1>
           <p className="mt-1 text-sm text-slate-500">
             Select a client to open its workspace, or add a new client.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="w-56 shrink-0 sm:w-64">
+        <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
+          <div className="min-w-0 flex-1 sm:w-64 sm:flex-none">
             <input
               type="search"
               placeholder="Search clients…"

@@ -9,7 +9,7 @@ export default function PayrollClientAttendancePage() {
   }
 
   return (
-    <div className="px-6 pb-8">
+    <div className="px-4 pb-8 sm:px-6">
       <AttendancePanel clientId={clientId} role="PAYROLL_LEAD" />
     </div>
   );

@@ -9,6 +9,12 @@ const empty = {
   emp_code: ''
 };
 
+const TEN_DIGIT_REGEX = /^\d{10}$/;
+
+function normalizeMobile(raw) {
+  return String(raw ?? '').replace(/\D/g, '').slice(0, 10);
+}
+
 export default function AddEmployeeModal({ clientId, onClose, onCreated, embedded = false }) {
   const [form, setForm] = useState(empty);
   const [submitting, setSubmitting] = useState(false);
@@ -21,6 +27,7 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
     const errs = {};
     if (!form.name.trim()) errs.name = 'Required';
     if (!form.mobile.trim()) errs.mobile = 'Required';
+    else if (!TEN_DIGIT_REGEX.test(form.mobile)) errs.mobile = 'Must be 10 digits';
     if (!form.email.trim()) errs.email = 'Required';
     if (!form.emp_code.trim()) errs.emp_code = 'Required';
     return errs;
@@ -78,7 +85,14 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Mobile" error={fieldErrors.mobile}>
-              <input className="input" value={form.mobile} onChange={e => set({ mobile: e.target.value })} />
+              <input
+                className="input"
+                value={form.mobile}
+                onChange={e => set({ mobile: normalizeMobile(e.target.value) })}
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="10-digit mobile"
+              />
             </Field>
             <Field label="Email" error={fieldErrors.email}>
               <input className="input" type="email" value={form.email} onChange={e => set({ email: e.target.value })} />

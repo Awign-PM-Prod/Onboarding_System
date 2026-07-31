@@ -237,7 +237,7 @@ export default function PmLayout() {
     );
   };
 
-  const renderSidebar = ({ forceExpanded = false } = {}) => (
+  const renderSidebar = ({ forceExpanded = false, labeledRail = false } = {}) => (
     <TwoPaneSidebar
       homeTo="/pm-dashboard/dashboard"
       profile={profile}
@@ -247,13 +247,14 @@ export default function PmLayout() {
       railItems={railItems}
       panelVisible={Boolean(clientId)}
       panelExpanded={Boolean(clientId) && (panelOpen || forceExpanded)}
-      onPanelExpandedChange={setPanelOpenPersist}
+      onPanelExpandedChange={labeledRail ? undefined : setPanelOpenPersist}
+      labeledRail={labeledRail}
       panel={renderPanel(() => setMobileNavOpen(false))}
     />
   );
 
   return (
-    <div className="flex h-screen max-h-screen overflow-hidden bg-slate-100">
+    <div className="flex h-screen max-h-screen w-full min-w-0 overflow-hidden bg-slate-100">
       <aside className="relative z-30 hidden h-screen max-h-screen min-h-0 shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
         {renderSidebar()}
       </aside>
@@ -272,11 +273,11 @@ export default function PmLayout() {
           mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {renderSidebar({ forceExpanded: Boolean(clientId) })}
+        {renderSidebar({ forceExpanded: true, labeledRail: true })}
       </aside>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="z-20 flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur lg:hidden">
+      <div className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="z-20 flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur lg:hidden">
           <button
             type="button"
             onClick={() => setMobileNavOpen((v) => !v)}
@@ -286,10 +287,23 @@ export default function PmLayout() {
           >
             {mobileNavOpen ? <IconClose className="h-6 w-6" /> : <IconMenu className="h-6 w-6" />}
           </button>
-          <span className="min-w-0 truncate text-sm font-semibold text-slate-900">Staffing-Go</span>
+          {clientId ? (
+            <button
+              type="button"
+              onClick={() => navigate('/pm-dashboard/clients')}
+              className="inline-flex min-w-0 items-center gap-1.5 truncate text-sm font-medium text-slate-600 hover:text-slate-900"
+            >
+              <span aria-hidden className="text-base leading-none">
+                ←
+              </span>
+              <span className="truncate">Back to Clients</span>
+            </button>
+          ) : (
+            <span className="min-w-0 truncate text-sm font-semibold text-slate-900">Staffing-Go</span>
+          )}
         </header>
 
-        <div ref={mainScrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
+        <div ref={mainScrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain">
           <Outlet />
         </div>
       </div>

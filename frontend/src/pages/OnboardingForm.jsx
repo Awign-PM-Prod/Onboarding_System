@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import UanWorkflowGuide from '../components/UanWorkflowGuide';
 import { api } from '../lib/api';
@@ -156,9 +156,143 @@ function cityFromJobForm(f) {
 
 function fieldClass(readOnly) {
   return readOnly
-    ? 'w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-slate-800 select-none'
-    : 'w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-slate-900';
+    ? 'box-border w-full max-w-full min-w-0 cursor-not-allowed rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-3 text-base text-slate-800 select-none sm:text-sm'
+    : 'box-border w-full max-w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-base text-slate-900 sm:text-sm';
 }
+
+/**
+ * Custom dropdown — native <select> popups ignore CSS width and overflow the mobile form.
+ * Menu is locked to the trigger width (left-0 right-0 / w-full).
+ */
+function FormSelect({
+  id,
+  value = '',
+  onChange,
+  options = [],
+  placeholder = 'Select',
+  disabled = false,
+  allowEmpty = true,
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const autoId = useId();
+  const fieldId = id || autoId;
+  const listId = `${fieldId}-listbox`;
+
+  const baseOptions = options.map((o) =>
+    typeof o === 'string' ? { value: o, label: o } : { value: String(o.value), label: String(o.label ?? o.value) }
+  );
+  const current = String(value ?? '');
+  const normalized =
+    current && !baseOptions.some((o) => o.value === current)
+      ? [...baseOptions, { value: current, label: current }]
+      : baseOptions;
+
+  const selected = normalized.find((o) => o.value === current);
+  const display = selected?.label || placeholder;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointer = (e) => {
+      if (!rootRef.current?.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const pick = (next) => {
+    onChange?.(next);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className="relative w-full max-w-full min-w-0">
+      <button
+        type="button"
+        id={fieldId}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => {
+          if (!disabled) setOpen((v) => !v);
+        }}
+        className={`${fieldClass(disabled)} flex items-center justify-between gap-2 text-left ${
+          selected ? '' : 'text-slate-500'
+        }`}
+      >
+        <span className="min-w-0 flex-1 truncate">{display}</span>
+        <svg
+          className={`h-4 w-4 shrink-0 text-slate-500 transition ${open ? 'rotate-180' : ''}`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          aria-hidden
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </button>
+      {open && !disabled && (
+        <ul
+          id={listId}
+          role="listbox"
+          className="absolute left-0 right-0 z-50 mt-1 max-h-56 w-full max-w-full overflow-y-auto overflow-x-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          {allowEmpty && (
+            <li role="option" aria-selected={!current}>
+              <button
+                type="button"
+                className={`block w-full max-w-full truncate px-3.5 py-2.5 text-left text-sm ${
+                  !current ? 'bg-indigo-50 font-medium text-indigo-900' : 'text-slate-500 hover:bg-slate-50'
+                }`}
+                onClick={() => pick('')}
+              >
+                {placeholder}
+              </button>
+            </li>
+          )}
+          {normalized.map((opt) => {
+            const active = opt.value === current;
+            return (
+              <li key={opt.value} role="option" aria-selected={active}>
+                <button
+                  type="button"
+                  className={`block w-full max-w-full truncate px-3.5 py-2.5 text-left text-sm ${
+                    active ? 'bg-indigo-50 font-medium text-indigo-900' : 'text-slate-900 hover:bg-slate-50'
+                  }`}
+                  onClick={() => pick(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const NAV_BTN_PREV =
+  'inline-flex w-full min-h-[48px] items-center justify-center gap-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50';
+const NAV_BTN_NEXT =
+  'inline-flex w-full min-h-[48px] items-center justify-center gap-1 rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60';
+const NAV_BTN_SUBMIT =
+  'inline-flex w-full min-h-[48px] items-center justify-center gap-1 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60';
+const NAV_ROW = 'grid grid-cols-2 gap-3 border-t border-slate-200 pt-6';
+const FORM_SHELL = 'mx-auto w-full max-w-3xl min-w-0 overflow-x-hidden px-4 py-5 sm:py-8';
+const SECTION_DIVIDER = 'border-t border-slate-200 pt-6';
+const FIELD_WRAP = 'min-w-0 max-w-full';
 
 function fileNameFromStorageUrl(url) {
   const raw = String(url ?? '').trim();
@@ -207,7 +341,7 @@ function UploadedFileBanner({ href, fileName = '', onRemove, removing = false })
           rel="noopener noreferrer"
           className="mt-1 inline-block text-xs font-medium text-indigo-600 underline underline-offset-2 hover:text-indigo-800"
         >
-          View uploaded document ↗
+          View
         </a>
       </div>
       {typeof onRemove === 'function' && (
@@ -225,7 +359,10 @@ function UploadedFileBanner({ href, fileName = '', onRemove, removing = false })
 }
 
 const FILE_INPUT_CLASS =
-  'block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60';
+  'block w-full cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60';
+
+const FILE_INPUT_DASHED_CLASS =
+  'mx-auto block max-w-full cursor-pointer text-sm text-slate-700 file:mr-2 file:rounded-lg file:border file:border-slate-300 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60';
 
 function DocUploadField({
   label,
@@ -398,47 +535,52 @@ function ContactVerificationField({
     inputType === 'email' ? EMAIL_REGEX.test(normalizedValue) : TEN_DIGIT_REGEX.test(normalizedValue);
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <label className="mb-1.5 block text-sm font-medium text-slate-800">
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-slate-700">
         {label} {required && <span className="text-rose-500">*</span>}
       </label>
       {hint && <p className="mb-2 text-xs text-slate-500">{hint}</p>}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-        <input
-          type={inputType}
-          inputMode={inputMode}
-          maxLength={maxLength}
-          autoComplete={inputType === 'email' ? 'email' : 'tel'}
-          className={`${fieldClass(false)} sm:flex-1`}
-          placeholder={placeholder}
-          value={displayValue}
-          onChange={(e) => onValueChange(typeof normalizeInput === 'function' ? normalizeInput(e.target.value) : e.target.value)}
-        />
+        <div className="relative min-w-0 flex-1">
+          <input
+            type={inputType}
+            inputMode={inputMode}
+            maxLength={maxLength}
+            autoComplete={inputType === 'email' ? 'email' : 'tel'}
+            className={`${fieldClass(false)} ${verified ? 'pr-11' : ''}`}
+            placeholder={placeholder}
+            value={displayValue}
+            onChange={(e) => onValueChange(typeof normalizeInput === 'function' ? normalizeInput(e.target.value) : e.target.value)}
+          />
+          {verified && (
+            <IconCheckCircle className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
+          )}
+        </div>
         <button
           type="button"
           onClick={onSendOtp}
           disabled={!valueValid || sendingOtp || verified}
-          className="shrink-0 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+          className="min-h-[48px] shrink-0 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {sendingOtp ? 'Sending…' : verified ? 'Verified' : otpSent ? 'Resend OTP' : 'Send OTP'}
         </button>
       </div>
       {verified && (
-        <div className="mt-3 flex items-center gap-2 text-sm font-medium text-emerald-700">
-          <IconCheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
+        <div className="mt-2 flex items-center gap-2 text-sm font-medium text-emerald-700">
+          <IconCheckCircle className="h-4 w-4 shrink-0 text-emerald-600" />
           Verified
         </div>
       )}
       {!verified && otpSent && (
-        <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/80 p-4">
-          <label className="mb-2 block text-sm font-medium text-slate-800">Enter OTP</label>
+        <div className="mt-4 space-y-3">
+          <label className="block text-sm font-medium text-slate-700">Enter OTP</label>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <input
               type="text"
               inputMode="numeric"
               maxLength={6}
               autoComplete="one-time-code"
-              className="w-full max-w-xs rounded-lg border border-slate-300 bg-white px-4 py-3 text-center text-lg tracking-[0.25em] text-slate-900 tabular-nums"
+              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-center text-lg tracking-[0.25em] text-slate-900 tabular-nums sm:max-w-xs"
               placeholder="6-digit OTP"
               value={otp}
               onChange={(e) => onOtpChange(normalizeOtp(e.target.value))}
@@ -447,13 +589,13 @@ function ContactVerificationField({
               type="button"
               onClick={onVerifyOtp}
               disabled={!SIX_DIGIT_REGEX.test(otp) || verifyingOtp}
-              className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="min-h-[44px] rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {verifyingOtp ? 'Verifying…' : 'Verify OTP'}
             </button>
           </div>
           {import.meta.env.DEV && (
-            <p className="mt-2 text-xs text-slate-500">In development, the demo OTP is 123123.</p>
+            <p className="text-xs text-slate-500">In development, the demo OTP is 123123.</p>
           )}
         </div>
       )}
@@ -465,12 +607,9 @@ function ContactVerificationField({
 function AlternateMobileField({ label, required = false, value, onChange }) {
   return (
     <div>
-      <label className="mb-1.5 block text-sm font-medium text-slate-800">
+      <label className="mb-1.5 block text-sm font-medium text-slate-700">
         {label} {required && <span className="text-rose-500">*</span>}
       </label>
-      <p className="mb-2 text-xs text-slate-500">
-        Use a second number we can reach you on if your primary mobile is unavailable.
-      </p>
       <input
         type="text"
         inputMode="numeric"
@@ -527,44 +666,85 @@ function FormStepper({ currentStep }) {
     { n: 1, label: 'Personal' },
     { n: 2, label: 'Qualification' },
     { n: 3, label: 'KYC' },
-    { n: 4, label: 'Final Compliance Details' },
+    { n: 4, label: 'Final Compliance Detail' },
   ];
   return (
-    <nav className="mb-8" aria-label="Form progress">
-      <div className="flex items-start justify-between gap-1 sm:gap-2">
-        {steps.map((s) => {
+    <nav className="mb-6" aria-label="Form progress">
+      <ol className="flex w-full items-start">
+        {steps.map((s, i) => {
           const done = currentStep > s.n;
           const active = currentStep === s.n;
+          const lineDone = currentStep > s.n;
           return (
-            <div key={s.n} className="flex min-w-0 flex-1 flex-col items-center">
-              <div
-                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
-                  done
-                    ? 'bg-emerald-500 text-white'
-                    : active
-                      ? 'bg-indigo-600 text-white ring-4 ring-indigo-100'
-                      : 'bg-slate-200 text-slate-500'
+            <li key={s.n} className="relative flex min-w-0 flex-1 flex-col items-center">
+              <div className="relative flex w-full items-center justify-center">
+                {i > 0 && (
+                  <span
+                    className={`absolute right-1/2 left-0 top-1/2 h-0.5 -translate-y-1/2 ${
+                      currentStep >= s.n ? 'bg-emerald-500' : 'bg-slate-200'
+                    }`}
+                    aria-hidden
+                  />
+                )}
+                {i < steps.length - 1 && (
+                  <span
+                    className={`absolute left-1/2 right-0 top-1/2 h-0.5 -translate-y-1/2 ${
+                      lineDone ? 'bg-emerald-500' : 'bg-slate-200'
+                    }`}
+                    aria-hidden
+                  />
+                )}
+                <div
+                  className={`relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold sm:h-10 sm:w-10 ${
+                    done
+                      ? 'bg-emerald-500 text-white'
+                      : active
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-200 text-slate-500'
+                  }`}
+                >
+                  {done ? <IconCheckCircle className="h-5 w-5" /> : s.n}
+                </div>
+              </div>
+              <span
+                className={`mt-2 w-full px-0.5 text-center text-[9px] leading-tight break-words sm:text-xs ${
+                  active ? 'font-semibold text-slate-900' : 'font-medium text-slate-500'
                 }`}
               >
-                {done ? (
-                  <IconCheckCircle className="h-5 w-5" />
-                ) : active && s.n === 4 ? (
-                  <IconCamera className="h-5 w-5" />
-                ) : (
-                  s.n
-                )}
-              </div>
-              <span className="mt-2 max-w-[4.5rem] text-center text-[10px] font-medium leading-tight text-slate-600 sm:max-w-none sm:text-xs">
                 {s.label}
               </span>
-            </div>
+            </li>
           );
         })}
-      </div>
-      <p className="mt-4 text-center text-sm text-slate-500">
+      </ol>
+      <p className="mt-4 text-left text-xs text-slate-500 sm:text-sm">
         Step {currentStep} of 4 · {steps[currentStep - 1]?.label ?? ''}
       </p>
     </nav>
+  );
+}
+
+function IconUser({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"
+      />
+    </svg>
+  );
+}
+
+function IconUploadCloud({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3.75 3.75 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z"
+      />
+    </svg>
   );
 }
 
@@ -801,35 +981,30 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
     <div className="space-y-8">
       <FormStepper currentStep={2} />
 
-      <div className="flex items-center gap-2 text-slate-900">
-        <IconDocument className="h-8 w-8 text-indigo-600" />
-        <h2 className="text-xl font-semibold sm:text-2xl">Qualification</h2>
+      <div>
+        <div className="flex items-center gap-2 text-slate-900">
+          <IconDocument className="h-7 w-7 text-indigo-600" />
+          <h2 className="text-xl font-bold sm:text-2xl">Qualification</h2>
+        </div>
       </div>
 
       <div className="space-y-6">
         {shouldShow('qual_highest_qualification') && <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="qual-highest">
+          <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="qual-highest">
             Highest Qualification <span className="text-rose-500">*</span>
           </label>
-          <select
+          <FormSelect
             id="qual-highest"
-            className={fieldClass(false)}
             value={highest}
-            onChange={(e) => {
-              const next = e.target.value;
+            placeholder="Select Highest Qualification"
+            options={HIGHEST_QUALIFICATION_OPTIONS}
+            onChange={(next) => {
               setHighest(next);
               setHighestDocUrl('');
               setHighestDocFileName('');
               setHighestDocError('');
             }}
-          >
-            <option value="">Select Highest Qualification</option>
-            {HIGHEST_QUALIFICATION_OPTIONS.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
+          />
         </div>}
 
         {shouldShowHighestDoc && (
@@ -840,7 +1015,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
             accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             uploading={highestDocUploading}
             error={highestDocError}
-            hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
+            hint="Max file size: 12MB. Supported: image, pdf, .docx"
             url={highestDocUrl}
             uploadedFileName={highestDocFileName}
             onRemove={handleRemoveHighestDocFile}
@@ -857,7 +1032,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
             accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             uploading={eduUploading}
             error={eduError}
-            hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
+            hint="Max file size: 12MB. Supported: image, pdf, .docx"
             url={eduUrl}
             uploadedFileName={eduFileName}
             onRemove={handleRemoveEducationFile}
@@ -866,36 +1041,31 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
           />
         )}
 
-        {shouldShow('qual_additional_certificates_url') && <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-800">Additional Certificates (Optional)</label>
-          <div className="rounded-xl border-2 border-dashed border-slate-300 bg-slate-50/80 px-4 py-8 text-center">
-            <p className="mb-3 text-sm text-slate-600">Add Certificate</p>
+        {shouldShow('qual_additional_certificates_url') && <div className={SECTION_DIVIDER}>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700">Additional Certificates (Optional)</label>
+          <div className="rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 py-8 text-center">
+            <IconUploadCloud className="mx-auto mb-3 h-8 w-8 text-slate-400" />
             <input
               type="file"
               accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               disabled={addUploading}
               onChange={handleAdditionalFile}
-              className="mx-auto block max-w-full cursor-pointer text-sm text-slate-700 file:mr-2 file:rounded-lg file:border-0 file:bg-indigo-600 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className={FILE_INPUT_DASHED_CLASS}
             />
-            <p className="mt-2 text-xs text-slate-500">Same limits as above. You can add multiple files.</p>
+            <p className="mt-2 text-xs text-slate-500">Max file size: 12MB. Supported: image, pdf, .docx</p>
           </div>
           {addUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
           {addError && <p className="mt-2 text-sm text-rose-600">{addError}</p>}
           {additionalUrls.length > 0 && (
             <ul className="mt-3 space-y-2">
               {additionalUrls.map((u, idx) => (
-                <li
-                  key={`${u}-${idx}`}
-                  className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:flex-row sm:items-start sm:justify-between sm:gap-3"
-                >
-                  <div className="min-w-0 flex-1">
-                    <UploadedFileBanner
-                      href={u}
-                      fileName={additionalFileNames[idx] ?? fileNameFromStorageUrl(u)}
-                      onRemove={() => handleRemoveAdditionalFile(u, idx)}
-                      removing={additionalRemoving.includes(u)}
-                    />
-                  </div>
+                <li key={`${u}-${idx}`}>
+                  <UploadedFileBanner
+                    href={u}
+                    fileName={additionalFileNames[idx] ?? fileNameFromStorageUrl(u)}
+                    onRemove={() => handleRemoveAdditionalFile(u, idx)}
+                    removing={additionalRemoving.includes(u)}
+                  />
                 </li>
               ))}
             </ul>
@@ -905,24 +1075,14 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
 
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
-      <div className="flex flex-col gap-4 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
-        <button
-          type="button"
-          onClick={onPrevious}
-          className="inline-flex items-center justify-center gap-1 rounded-xl border-2 border-indigo-600 bg-white px-5 py-3 text-sm font-semibold text-indigo-600 hover:bg-indigo-50"
-        >
+      <div className={NAV_ROW}>
+        <button type="button" onClick={onPrevious} className={NAV_BTN_PREV}>
           <span aria-hidden>‹</span> Previous
         </button>
-        <button
-          type="button"
-          disabled={!canNext || saving}
-          onClick={handleNext}
-          className="inline-flex items-center justify-center gap-1 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <button type="button" disabled={!canNext || saving} onClick={handleNext} className={NAV_BTN_NEXT}>
           {saving ? 'Saving…' : 'Next'} <span aria-hidden>›</span>
         </button>
       </div>
-      <p className="text-center text-xs text-slate-500">Step 2 of 4 · Qualification</p>
     </div>
   );
 }
@@ -1402,25 +1562,25 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     <div className="space-y-8">
       <FormStepper currentStep={3} />
 
-      <div className="flex items-center gap-2 text-slate-900">
-        <IconDocument className="h-8 w-8 text-indigo-600" />
-        <h2 className="text-xl font-semibold sm:text-2xl">KYC Documents</h2>
+      <div>
+        <div className="flex items-center gap-2 text-slate-900">
+          <IconDocument className="h-7 w-7 text-indigo-600" />
+          <h2 className="text-xl font-bold sm:text-2xl">KYC &amp; Documents</h2>
+        </div>
+        {aadhaarVerified && (
+          <p className="mt-2 text-sm text-slate-600">
+            Your Aadhaar is verified. Upload the required documents.
+          </p>
+        )}
       </div>
 
-      {aadhaarVerified && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          Your Aadhaar is already verified from the earlier step. Upload clear photos of your Aadhaar card
-          (front and back) below.
-        </div>
-      )}
-
       {(shouldShow('kyc_aadhar_front_url') || shouldShow('kyc_aadhar_back_url')) && (
-      <section className="space-y-5 rounded-xl border border-slate-200 bg-slate-50/60 p-5">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Aadhaar card</h3>
-        <div className="grid gap-5 sm:grid-cols-2">
+      <section className="space-y-5">
+        <h3 className="text-sm font-bold uppercase tracking-wide text-slate-800">Aadhaar Card</h3>
+        <div className="grid gap-5">
           {shouldShow('kyc_aadhar_front_url') && (
             <DocUploadField
-              label="Aadhaar front"
+              label="Aadhaar Front"
               required={isRequired('kyc_aadhar_front_url', true)}
               inputId="kyc-aad-front"
               accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
@@ -1450,7 +1610,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           )}
           {shouldShow('kyc_aadhar_back_url') && (
             <DocUploadField
-              label="Aadhaar back"
+              label="Aadhaar Back"
               required={isRequired('kyc_aadhar_back_url', true)}
               inputId="kyc-aad-back"
               accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
@@ -1483,13 +1643,13 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       )}
 
       {(shouldShow('kyc_pan_number') || shouldShow('kyc_pan_card_url')) && (
-      <section className="space-y-5 rounded-xl border border-slate-200 bg-slate-50/60 p-5">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">PAN</h3>
-        {shouldShow('kyc_pan_number') && <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="min-w-0 flex-1">
-            <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-pan-num">
-              PAN number {isRequired('kyc_pan_number', true) && <span className="text-rose-500">*</span>}
-            </label>
+      <section className={`${SECTION_DIVIDER} space-y-5`}>
+        <h3 className="text-sm font-bold uppercase tracking-wide text-slate-800">PAN Card</h3>
+        {shouldShow('kyc_pan_number') && <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="kyc-pan-num">
+            PAN Number {isRequired('kyc_pan_number', true) && <span className="text-rose-500">*</span>}
+          </label>
+          <div className="flex gap-2">
             <input
               id="kyc-pan-num"
               type="text"
@@ -1500,31 +1660,31 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
                 setPanVerified(false);
                 setPanVerifyMsg('');
               }}
-              className={fieldClass(false)}
+              className={`${fieldClass(false)} min-w-0 flex-1`}
               placeholder="ABCDE1234F"
               maxLength={10}
               autoComplete="off"
             />
+            <button
+              type="button"
+              onClick={handleVerifyPan}
+              disabled={panVerifying || panVerified}
+              className={`min-h-[48px] shrink-0 rounded-lg px-4 py-3 text-sm font-semibold text-white ${
+                panVerified
+                  ? 'cursor-not-allowed bg-emerald-600'
+                  : 'bg-slate-800 hover:bg-slate-900'
+              }`}
+            >
+              {panVerifying ? 'Verifying…' : panVerified ? 'Verified' : 'Verify'}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleVerifyPan}
-            disabled={panVerifying || panVerified}
-            className={`shrink-0 rounded-lg px-4 py-3 text-sm font-semibold text-white ${
-              panVerified
-                ? 'cursor-not-allowed bg-emerald-600'
-                : 'bg-indigo-600 hover:bg-indigo-700'
-            }`}
-          >
-            {panVerifying ? 'Verifying…' : panVerified ? 'Verified' : 'Verify PAN'}
-          </button>
         </div>}
         {shouldShow('kyc_pan_number') && panVerifyMsg && (
           <p className={`text-sm ${panVerified ? 'text-emerald-700' : 'text-rose-600'}`}>{panVerifyMsg}</p>
         )}
         {shouldShow('kyc_pan_card_url') && (
           <DocUploadField
-            label="PAN card image"
+            label="PAN Card Image"
             required={isRequired('kyc_pan_card_url', true)}
             inputId="kyc-pan-card"
             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
@@ -1546,7 +1706,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             onChange={!panVerified ? undefined : handlePanCard}
           >
             {!panVerified && !panCardUrl && (
-              <p className="mt-1.5 text-xs text-amber-700">Verify PAN number first to enable upload.</p>
+              <p className="mt-1.5 text-xs text-rose-600">Note: Verify PAN number above before uploading.</p>
             )}
             {panCardHint && (
               <p className={`mt-2 text-sm ${panCardHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
@@ -1559,11 +1719,11 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       )}
 
       {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code') || shouldShow('kyc_bank_passbook_url')) && (
-      <section className="space-y-5 rounded-xl border border-slate-200 bg-slate-50/60 p-5">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Bank account</h3>
+      <section className={`${SECTION_DIVIDER} space-y-5`}>
+        <h3 className="text-sm font-bold uppercase tracking-wide text-slate-800">Bank Account Details</h3>
         {shouldShow('kyc_account_holder_name') && <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-acc-name">
-            Account holder name {isRequired('kyc_account_holder_name', true) && <span className="text-rose-500">*</span>}
+          <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="kyc-acc-name">
+            Account Holder Name {isRequired('kyc_account_holder_name', true) && <span className="text-rose-500">*</span>}
           </label>
           <input
             id="kyc-acc-name"
@@ -1581,54 +1741,52 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             autoComplete="name"
           />
         </div>}
-        {(shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) && <div className="grid gap-4 sm:grid-cols-2">
-          {shouldShow('kyc_account_number') && <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-acc-no">
-              Account number {isRequired('kyc_account_number', true) && <span className="text-rose-500">*</span>}
-            </label>
-            <input
-              id="kyc-acc-no"
-              type="text"
-              inputMode="numeric"
-              value={accountNumber}
-              onChange={(e) => {
-                setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 18));
-                setBankVerified(false);
-                setBankVerifyMsg('');
-                setBankBranchSummary(null);
-                setBankBranchConfirmed(false);
-              }}
-              className={fieldClass(false)}
-              placeholder="Account number"
-              autoComplete="off"
-            />
-          </div>}
-          {shouldShow('kyc_ifsc_code') && <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="kyc-ifsc">
-              IFSC {isRequired('kyc_ifsc_code', true) && <span className="text-rose-500">*</span>}
-            </label>
-            <input
-              id="kyc-ifsc"
-              type="text"
-              value={ifsc}
-              onChange={(e) => {
-                setIfsc(e.target.value.replace(/\s/g, '').toUpperCase().slice(0, 11));
-                setBankVerified(false);
-                setBankVerifyMsg('');
-                setBankBranchSummary(null);
-                setBankBranchConfirmed(false);
-              }}
-              className={fieldClass(false)}
-              placeholder="HDFC0001234"
-              autoComplete="off"
-            />
-          </div>}
+        {shouldShow('kyc_account_number') && <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="kyc-acc-no">
+            Account Number {isRequired('kyc_account_number', true) && <span className="text-rose-500">*</span>}
+          </label>
+          <input
+            id="kyc-acc-no"
+            type="text"
+            inputMode="numeric"
+            value={accountNumber}
+            onChange={(e) => {
+              setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 18));
+              setBankVerified(false);
+              setBankVerifyMsg('');
+              setBankBranchSummary(null);
+              setBankBranchConfirmed(false);
+            }}
+            className={fieldClass(false)}
+            placeholder="Enter bank account number"
+            autoComplete="off"
+          />
+        </div>}
+        {shouldShow('kyc_ifsc_code') && <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="kyc-ifsc">
+            IFSC Code {isRequired('kyc_ifsc_code', true) && <span className="text-rose-500">*</span>}
+          </label>
+          <input
+            id="kyc-ifsc"
+            type="text"
+            value={ifsc}
+            onChange={(e) => {
+              setIfsc(e.target.value.replace(/\s/g, '').toUpperCase().slice(0, 11));
+              setBankVerified(false);
+              setBankVerifyMsg('');
+              setBankBranchSummary(null);
+              setBankBranchConfirmed(false);
+            }}
+            className={fieldClass(false)}
+            placeholder="Enter bank ifsc code"
+            autoComplete="off"
+          />
         </div>}
         {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) && <button
           type="button"
           onClick={handleVerifyBank}
           disabled={bankVerifying || bankVerified}
-          className={`rounded-lg px-4 py-3 text-sm font-semibold text-white ${
+          className={`min-h-[48px] w-full rounded-lg px-4 py-3 text-sm font-semibold text-white sm:w-auto ${
             bankVerified
               ? 'cursor-not-allowed bg-emerald-600'
               : 'bg-indigo-600 hover:bg-indigo-700'
@@ -1647,13 +1805,13 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) &&
           bankVerified &&
           (bankBranchSummary || bankBranchConfirmed) && (
-            <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3">
+            <div className="space-y-2">
               {bankBranchSummary && (
-                <p className="text-sm font-medium text-sky-900">
+                <p className="text-sm font-medium text-slate-800">
                   {bankBranchSummary.bankName || '—'}, {bankBranchSummary.branch || '—'}, {bankBranchSummary.state || '—'}
                 </p>
               )}
-              <label className="mt-2 inline-flex items-start gap-2 text-sm text-slate-800">
+              <label className="inline-flex items-start gap-2 text-sm text-slate-800">
                 <input
                   type="checkbox"
                   checked={bankBranchConfirmed}
@@ -1663,7 +1821,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
                 <span>I confirm this is my bank branch.</span>
               </label>
               {!bankBranchConfirmed && (
-                <p className="mt-1 text-xs text-amber-700">
+                <p className="text-xs text-amber-700">
                   Please confirm the bank branch details to continue.
                 </p>
               )}
@@ -1671,7 +1829,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           )}
         {shouldShow('kyc_bank_passbook_url') && (
           <DocUploadField
-            label="Bank passbook / statement"
+            label="Bank Passbook / Statement"
             required={isRequired('kyc_bank_passbook_url', true)}
             inputId="kyc-passbook"
             accept="image/jpeg,image/jpg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
@@ -1697,24 +1855,14 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
 
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
-      <div className="flex flex-col gap-4 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
-        <button
-          type="button"
-          onClick={onPrevious}
-          className="inline-flex items-center justify-center gap-1 rounded-xl border-2 border-indigo-600 bg-white px-5 py-3 text-sm font-semibold text-indigo-600 hover:bg-indigo-50"
-        >
+      <div className={NAV_ROW}>
+        <button type="button" onClick={onPrevious} className={NAV_BTN_PREV}>
           <span aria-hidden>‹</span> Previous
         </button>
-        <button
-          type="button"
-          disabled={!canNext || saving}
-          onClick={handleNext}
-          className="inline-flex items-center justify-center gap-1 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <button type="button" disabled={!canNext || saving} onClick={handleNext} className={NAV_BTN_NEXT}>
           {saving ? 'Saving…' : 'Next'} <span aria-hidden>›</span>
         </button>
       </div>
-      <p className="text-center text-xs text-slate-500">Step 3 of 4 · KYC</p>
     </div>
   );
 }
@@ -1936,30 +2084,28 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
 
   if (submitted) {
     return (
-      <div className="mx-auto max-w-lg py-2 sm:py-4">
-        <div className="rounded-2xl border border-slate-100 bg-white px-6 py-10 text-center shadow-lg sm:px-10 sm:py-12">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
-            <IconCheckCircle className="h-9 w-9 text-emerald-600" aria-hidden />
-          </div>
-          <h2 className="mt-6 text-xl font-bold text-emerald-600 sm:text-2xl">Application Submitted Successfully!</h2>
-          <p className="mt-4 text-sm leading-relaxed text-slate-800 sm:text-base">
-            Thank you for applying with us. Our HR team will review your application and contact you within 3-5
-            business days.
-          </p>
-          <div className="mt-8 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4 text-center text-sm leading-relaxed text-blue-900 sm:text-base">
-            <p>
-              <span className="font-bold">Important:</span> Please keep your phone accessible as we may call you for
-              further verification or interview scheduling.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onGoToStatus}
-            className="mt-6 w-full rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white hover:bg-indigo-700"
-          >
-            Go to Next Page
-          </button>
+      <div className="mx-auto max-w-lg py-6 text-center sm:py-10">
+        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 ring-8 ring-emerald-50">
+          <IconCheckCircle className="h-11 w-11 text-emerald-500" aria-hidden />
         </div>
+        <h2 className="mt-6 text-2xl font-bold text-slate-900">Application Submitted Successfully!</h2>
+        <p className="mt-3 text-sm leading-relaxed text-slate-600 sm:text-base">
+          Thanks for applying. Our HR team will review your application and contact you in 3-5 days.
+        </p>
+        <div className="mt-8 rounded-xl bg-amber-50 px-5 py-4 text-left">
+          <p className="text-sm font-bold text-amber-800">Important Notice</p>
+          <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm text-amber-900">
+            <li>Keep your phone accessible for verification or interview scheduling.</li>
+            <li>Check your email to view further status.</li>
+          </ul>
+        </div>
+        <button
+          type="button"
+          onClick={onGoToStatus}
+          className="mt-8 w-full min-h-[48px] rounded-xl bg-indigo-600 px-5 py-3.5 text-sm font-semibold text-white hover:bg-indigo-700"
+        >
+          Check your status
+        </button>
       </div>
     );
   }
@@ -1968,9 +2114,11 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     <div className="space-y-8">
       <FormStepper currentStep={4} />
 
-      <div className="flex items-center gap-2 text-slate-900">
-        <IconCamera className="h-8 w-8 text-indigo-600" />
-        <h2 className="text-xl font-semibold sm:text-2xl">Bank &amp; Photo</h2>
+      <div>
+        <div className="flex items-center gap-2 text-slate-900">
+          <IconCamera className="h-7 w-7 text-indigo-600" />
+          <h2 className="text-xl font-bold sm:text-2xl">Bank &amp; Photo / Final Compliance</h2>
+        </div>
       </div>
 
       <div className="space-y-6">
@@ -1999,11 +2147,9 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         )}
 
         {(shouldShow('bp_esic_number') || shouldShow('bp_pf_uan_number') || shouldShow('bp_police_verification_url')) && (
-        <div className="border-t border-slate-200 pt-6">
-          <p className="mb-4 text-sm font-medium text-slate-700">Additional information</p>
-          <div className="space-y-4">
+        <div className="space-y-5">
             {shouldShow('bp_esic_number') && <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-esic">
+              <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="bp-esic">
                 ESIC Number (Optional)
               </label>
               <input
@@ -2012,16 +2158,16 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                 value={esic}
                 onChange={(e) => setEsic(e.target.value)}
                 className={fieldClass(false)}
-                placeholder="ESIC Number (Optional)"
+                placeholder="Enter 17-digit ESIC number (Optional)"
                 autoComplete="off"
               />
             </div>}
             {shouldShow('bp_pf_uan_number') && <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
                 Do you already have a PF UAN number? <span className="text-rose-500">*</span>
               </label>
-              <div className="flex flex-wrap items-center gap-5">
-                <label className="inline-flex items-center gap-2 text-sm text-slate-800" htmlFor="bp-pf-uan-yes">
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-5">
+                <label className="inline-flex min-h-[44px] items-center gap-2 text-sm text-slate-800" htmlFor="bp-pf-uan-yes">
                   <input
                     id="bp-pf-uan-yes"
                     type="radio"
@@ -2033,7 +2179,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                   />
                   Yes, I have a UAN
                 </label>
-                <label className="inline-flex items-center gap-2 text-sm text-slate-800" htmlFor="bp-pf-uan-no">
+                <label className="inline-flex min-h-[44px] items-center gap-2 text-sm text-slate-800" htmlFor="bp-pf-uan-no">
                   <input
                     id="bp-pf-uan-no"
                     type="radio"
@@ -2054,14 +2200,14 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
               </div>
               {hasPfUanChoiceError && <p className="mt-1.5 text-sm text-rose-600">{hasPfUanChoiceError}</p>}
               {showPfUanWorkflow && (
-                <div className="mt-4">
+                <div className="mt-4 rounded-xl bg-indigo-50/60 px-3 py-4 sm:px-4">
                   <UanWorkflowGuide
                     path={
                       hasPfUan === 'no' || (hasPfUan !== 'yes' && pfUan.length < 12) ? 'no' : 'yes'
                     }
                     uanNumberField={
                       <div>
-                        <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-pf-uan">
+                        <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="bp-pf-uan">
                           PF UAN number <span className="text-rose-500">*</span>
                         </label>
                         <input
@@ -2072,7 +2218,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                           value={pfUan}
                           onChange={(e) => setPfUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
                           className={fieldClass(false)}
-                          placeholder="Enter your 12-digit PF UAN number"
+                          placeholder="Enter your 12-digit PF UAN no."
                           autoComplete="off"
                         />
                         {pfUanError && <p className="mt-1.5 text-sm text-rose-600">{pfUanError}</p>}
@@ -2080,7 +2226,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                     }
                     screenshotField={
                       <DocUploadField
-                        label="PF UAN face authentication screenshot"
+                        label="Upload confirmation screenshot"
                         required
                         inputId="bp-pf-uan-face-auth"
                         accept="image/*"
@@ -2113,7 +2259,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                 accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 uploading={policeUp}
                 error={policeErr}
-                hint="Max file size: 12MB. Supported: image/*, application/pdf, .doc, .docx"
+                hint="Max file size: 12MB. Supported: Image, pdf, .docx"
                 url={policeUrl}
                 uploadedFileName={policeFileName}
                 onRemove={() => handleRemoveBankPhotoDocument({
@@ -2128,37 +2274,32 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                 onChange={handlePoliceFile}
               />
             )}
-          </div>
         </div>
         )}
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-4">
-        <h3 className="text-sm font-semibold text-slate-800">Verification Status</h3>
-        <ul className="mt-3 space-y-2">
+      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+        <h3 className="text-xs font-bold uppercase tracking-wide text-slate-700">Verification Status</h3>
+        <ul className="mt-3 space-y-2.5">
           <li className="flex items-center gap-2 text-sm text-slate-800">
             <IconCheckCircle className="h-5 w-5 shrink-0 text-emerald-500" aria-hidden />
-            Aadhaar
+            Aadhaar Verified
           </li>
           <li className="flex items-center gap-2 text-sm text-slate-800">
             <IconCheckCircle className="h-5 w-5 shrink-0 text-emerald-500" aria-hidden />
-            PAN
+            PAN Verified
           </li>
           <li className="flex items-center gap-2 text-sm text-slate-800">
             <IconCheckCircle className="h-5 w-5 shrink-0 text-emerald-500" aria-hidden />
-            Bank Account
+            Bank Account Verified
           </li>
         </ul>
       </div>
 
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
-      <div className="flex flex-col gap-4 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
-        <button
-          type="button"
-          onClick={onPrevious}
-          className="inline-flex items-center justify-center gap-1 rounded-xl border-2 border-indigo-600 bg-white px-5 py-3 text-sm font-semibold text-indigo-600 hover:bg-indigo-50"
-        >
+      <div className={NAV_ROW}>
+        <button type="button" onClick={onPrevious} className={NAV_BTN_PREV}>
           <span aria-hidden>‹</span> Previous
         </button>
         <button
@@ -2171,12 +2312,11 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
             Boolean(pfUanScreenshotError)
           }
           onClick={handleSubmit}
-          className="inline-flex items-center justify-center gap-1 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className={NAV_BTN_SUBMIT}
         >
           {saving ? 'Submitting…' : 'Submit'}
         </button>
       </div>
-      <p className="text-center text-xs text-slate-500">Step 4 of 4 · Final Compliance Details</p>
     </div>
   );
 }
@@ -2571,7 +2711,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             />
           )}
           {(shouldShow('pd_father_name') || shouldShow('pd_mother_name') || (isMarried && shouldShow('pd_spouse_name'))) && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="space-y-3">
               <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Family Details</h4>
               <div className="space-y-3">
                 {shouldShow('pd_father_name') && (
@@ -2624,7 +2764,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             shouldShow('pd_current_state') ||
             shouldShow('pd_current_city') ||
             shouldShow('pd_current_pincode')) && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="space-y-3">
               <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Current Address</h4>
               {shouldShow('pd_current_address_same_as_aadhaar') && (
                 <div>
@@ -2740,21 +2880,14 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               <label className="mb-1.5 block text-sm font-medium text-slate-800">
                 Marital Status {isRequired('pd_marital_status', true) && <span className="text-rose-500">*</span>}
               </label>
-              <select
-                className={fieldClass(false)}
+              <FormSelect
                 value={draft.pd_marital_status}
-                onChange={(e) => {
-                  const next = e.target.value;
+                placeholder="Select Marital Status"
+                options={MARITAL_OPTIONS}
+                onChange={(next) => {
                   setDraft((d) => ({ ...d, pd_marital_status: next, pd_spouse_name: next === 'Married' ? d.pd_spouse_name : '' }));
                 }}
-              >
-                <option value="">Select Marital Status</option>
-                {MARITAL_OPTIONS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           )}
           {shouldShow('pd_driving_license') && (
@@ -2762,11 +2895,11 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               <label className="mb-1.5 block text-sm font-medium text-slate-800">
                 Do you have a Driving License? {isRequired('pd_driving_license', true) && <span className="text-rose-500">*</span>}
               </label>
-              <select
-                className={fieldClass(false)}
+              <FormSelect
                 value={draft.pd_driving_license}
-                onChange={(e) => {
-                  const v = e.target.value;
+                placeholder="Select"
+                options={DRIVING_OPTIONS}
+                onChange={(v) => {
                   setDraft((d) => ({ ...d, pd_driving_license: v }));
                   if (v !== 'Yes') {
                     setLicenseImageUrl('');
@@ -2774,14 +2907,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                     setLicenseError('');
                   }
                 }}
-              >
-                <option value="">Select</option>
-                {DRIVING_OPTIONS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           )}
           {shouldShow('pd_driving_license_url') && needsLicenseImage && (
@@ -2803,7 +2929,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           {(shouldShow('pd_emergency_contact_name') ||
             shouldShow('pd_alternate_number') ||
             shouldShow('pd_emergency_contact_relation')) && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+            <div className="space-y-3">
               <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Emergency Contact</h4>
               <div className="space-y-3">
                 {shouldShow('pd_emergency_contact_name') && (
@@ -2841,24 +2967,12 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                     <label className="mb-1.5 block text-sm font-medium text-slate-800">
                       Relation {isRequired('pd_emergency_contact_relation', true) && <span className="text-rose-500">*</span>}
                     </label>
-                    <select
-                      className={fieldClass(false)}
+                    <FormSelect
                       value={draft.pd_emergency_contact_relation}
-                      onChange={(e) => setDraft((d) => ({ ...d, pd_emergency_contact_relation: e.target.value }))}
-                    >
-                      <option value="">Select Relation</option>
-                      {RELATION_OPTIONS.map((r) => (
-                        <option key={r} value={r}>
-                          {r}
-                        </option>
-                      ))}
-                      {draft.pd_emergency_contact_relation &&
-                        !RELATION_OPTIONS.includes(draft.pd_emergency_contact_relation) && (
-                          <option value={draft.pd_emergency_contact_relation}>
-                            {draft.pd_emergency_contact_relation}
-                          </option>
-                        )}
-                    </select>
+                      placeholder="Select Relation"
+                      options={RELATION_OPTIONS}
+                      onChange={(next) => setDraft((d) => ({ ...d, pd_emergency_contact_relation: next }))}
+                    />
                   </div>
                 )}
               </div>
@@ -2870,31 +2984,27 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           type="button"
           disabled={!requiredOk || saving}
           onClick={handleSave}
-          className="mt-2 w-full rounded-xl bg-indigo-600 py-4 text-base font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-2 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {saving ? 'Saving...' : 'Save & continue'}
+          {saving ? 'Saving...' : 'Next'}
         </button>
       </div>
     );
   }
 
   return (
-    <div className="space-y-10">
-      <div className="text-center">
-        <h2 className="text-2xl font-semibold text-slate-900">Personal Info</h2>
-        <p className="mt-2 text-sm text-slate-600">Confirm details from your Aadhaar and add emergency contact details.</p>
+    <div className="space-y-8">
+      <div>
+        <div className="flex items-center gap-2 text-slate-900">
+          <IconUser className="h-7 w-7 text-indigo-600" />
+          <h2 className="text-xl font-bold sm:text-2xl">Personal</h2>
+        </div>
+        <p className="mt-2 text-sm text-slate-600">Some fields are auto-filled from Aadhaar and can&apos;t be edited.</p>
       </div>
 
-      {/* Section A — read-only Aadhaar-matched */}
-      <section>
-        <div className="mb-5 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-          <p>Fields below are auto-filled from your Aadhaar verification and cannot be edited.</p>
-        </div>
-
-        <div className="space-y-4">
+      <div className="space-y-5">
           <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">
               Full Name (As per Aadhaar) <span className="text-rose-500">*</span>
             </label>
             <input
@@ -2906,30 +3016,25 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             />
           </div>
           <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              Mobile Number <span className="text-rose-500">*</span>
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">
+              Current Mobile Number <span className="text-rose-500">*</span>
             </label>
-            <div className="select-none rounded-lg border border-sky-200 bg-sky-50 px-4 py-3">
-              <p className="font-medium tabular-nums text-slate-900">{mobile}</p>
-              <p className="mt-1 text-xs text-sky-900">This mobile number is locked and cannot be changed.</p>
+            <div className="relative">
+              <input
+                type="text"
+                readOnly
+                tabIndex={-1}
+                className={`${fieldClass(true)} pr-11 tabular-nums`}
+                value={mobile}
+              />
+              <IconCheckCircle className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
             </div>
           </div>
-        </div>
-      </section>
-
-      <hr className="border-slate-200" />
-
-      {/* Section B — Aadhaar-locked identity + editable application fields */}
-      <section>
-        <div className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-          <p>
-            State, city, address, pincode, date of birth, age, and gender come from your Aadhaar record and cannot be
-            edited here.
-          </p>
-        </div>
-        <h3 className="mb-4 text-lg font-semibold text-slate-900">Personal Details</h3>
-        <div className="space-y-4">
+          <AlternateMobileField
+            label="Alternate Mobile Number"
+            value={draft.pd_secondary_mobile}
+            onChange={(next) => setDraft((d) => ({ ...d, pd_secondary_mobile: next }))}
+          />
           <ContactVerificationField
             label="Email Address"
             required
@@ -2954,14 +3059,9 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             error={emailVerifyError}
             normalizeInput={normalizeEmail}
           />
-          <AlternateMobileField
-            label="Alternate Mobile Number"
-            value={draft.pd_secondary_mobile}
-            onChange={(next) => setDraft((d) => ({ ...d, pd_secondary_mobile: next }))}
-          />
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
-              Father&apos;s Name <span className="text-rose-500">*</span>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">
+              Father&apos;s/Guardian Name <span className="text-rose-500">*</span>
             </label>
             <input
               type="text"
@@ -2972,7 +3072,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">
               Mother&apos;s Name <span className="text-rose-500">*</span>
             </label>
             <input
@@ -2984,7 +3084,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             />
           </div>
           <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
+            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">
               Complete Address (As per Aadhaar) <span className="text-rose-500">*</span>
             </label>
             <textarea
@@ -2995,176 +3095,53 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               value={jobForm.aad_address ?? ''}
             />
           </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              State <span className="text-rose-500">*</span>
-            </label>
-            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={jobForm.aad_state ?? ''} />
+
+          <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-3">
+            <div className={`${FIELD_WRAP} cursor-not-allowed`}>
+              <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">
+                Date of Birth <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                readOnly
+                tabIndex={-1}
+                className={`${fieldClass(true)} tabular-nums`}
+                value={formatAadDob(jobForm.aad_dob)}
+              />
+            </div>
+            <div className="cursor-not-allowed">
+              <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">Gender</label>
+              <input
+                type="text"
+                readOnly
+                tabIndex={-1}
+                className={fieldClass(true)}
+                value={formatAadGender(jobForm.aad_gender)}
+              />
+            </div>
+            <div className="cursor-not-allowed">
+              <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">Age</label>
+              <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={ageDisplay} placeholder="—" />
+            </div>
           </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              City <span className="text-rose-500">*</span>
-            </label>
-            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={cityFromJobForm(jobForm)} />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              Pincode <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              readOnly
-              tabIndex={-1}
-              className={`${fieldClass(true)} tabular-nums`}
-              value={jobForm.aad_pincode ?? ''}
-            />
-          </div>
+
           <div>
-            <h4 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-700">Current Address</h4>
-            <p className="mb-2 text-sm font-medium text-slate-800">
-              Same as Aadhaar Address? <span className="text-rose-500">*</span>
-            </p>
-            <div className="mb-3 flex items-center gap-5">
-              <label className="inline-flex items-center gap-2 text-sm text-slate-800">
-                <input
-                  type="radio"
-                  name="current-address-same"
-                  checked={sameAsAadhaarChoice === 'yes'}
-                  onChange={() =>
-                    setDraft((d) => ({
-                      ...d,
-                      pd_current_address_same_as_aadhaar: 'yes',
-                      pd_current_address: String(jobForm?.aad_address ?? ''),
-                      pd_current_state: aadCurrentState,
-                      pd_current_city: aadCurrentCity === '—' ? '' : aadCurrentCity,
-                      pd_current_pincode: aadCurrentPincode,
-                    }))
-                  }
-                />
-                Yes
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm text-slate-800">
-                <input
-                  type="radio"
-                  name="current-address-same"
-                  checked={sameAsAadhaarChoice === 'no'}
-                  onChange={() =>
-                    setDraft((d) => ({
-                      ...d,
-                      pd_current_address_same_as_aadhaar: 'no',
-                      pd_current_address: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_address,
-                      pd_current_state: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_state,
-                      pd_current_city: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_city,
-                      pd_current_pincode: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_pincode,
-                    }))
-                  }
-                />
-                No
-              </label>
-            </div>
-            {sameAsAadhaarChoice === 'no' && (
-              <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
-            )}
-            <textarea
-              rows={3}
-              className={`${fieldClass(sameAsAadhaarChoice === 'yes')} resize-none`}
-              value={sameAsAadhaarChoice === 'yes' ? String(jobForm?.aad_address ?? '') : draft.pd_current_address}
-              onChange={(e) => setDraft((d) => ({ ...d, pd_current_address: e.target.value }))}
-              readOnly={sameAsAadhaarChoice === 'yes'}
-              placeholder="Enter your full current address"
-            />
-            <div className="mt-3">
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
-                Current State <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                className={fieldClass(sameAsAadhaarChoice === 'yes')}
-                value={sameAsAadhaarChoice === 'yes' ? aadCurrentState : draft.pd_current_state}
-                onChange={(e) => setDraft((d) => ({ ...d, pd_current_state: e.target.value }))}
-                readOnly={sameAsAadhaarChoice === 'yes'}
-                placeholder="Enter current state"
-              />
-            </div>
-            <div className="mt-3">
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
-                Current City <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                className={fieldClass(sameAsAadhaarChoice === 'yes')}
-                value={sameAsAadhaarChoice === 'yes' ? (aadCurrentCity === '—' ? '' : aadCurrentCity) : draft.pd_current_city}
-                onChange={(e) => setDraft((d) => ({ ...d, pd_current_city: e.target.value }))}
-                readOnly={sameAsAadhaarChoice === 'yes'}
-                placeholder="Enter current city"
-              />
-            </div>
-            <div className="mt-3">
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
-                Current Pincode <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                className={fieldClass(sameAsAadhaarChoice === 'yes')}
-                value={sameAsAadhaarChoice === 'yes' ? aadCurrentPincode : draft.pd_current_pincode}
-                onChange={(e) => setDraft((d) => ({ ...d, pd_current_pincode: e.target.value.replace(/\D/g, '').slice(0, 6) }))}
-                readOnly={sameAsAadhaarChoice === 'yes'}
-                placeholder="6-digit pincode"
-              />
-            </div>
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">
-              Date of Birth <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              readOnly
-              tabIndex={-1}
-              className={`${fieldClass(true)} tabular-nums`}
-              value={formatAadDob(jobForm.aad_dob)}
-            />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">Age</label>
-            <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={ageDisplay} placeholder="—" />
-          </div>
-          <div className="cursor-not-allowed">
-            <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-800">Gender</label>
-            <input
-              type="text"
-              readOnly
-              tabIndex={-1}
-              className={fieldClass(true)}
-              value={formatAadGender(jobForm.aad_gender)}
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-800">
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">
               Marital Status <span className="text-rose-500">*</span>
             </label>
-            <select
-              className={fieldClass(false)}
+            <FormSelect
               value={draft.pd_marital_status}
-              onChange={(e) => {
-                const next = e.target.value;
+              placeholder="Select Marital Status"
+              options={MARITAL_OPTIONS}
+              onChange={(next) => {
                 setDraft((d) => ({ ...d, pd_marital_status: next, pd_spouse_name: next === 'Married' ? d.pd_spouse_name : '' }));
               }}
-            >
-              <option value="">Select Marital Status</option>
-              {MARITAL_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+            />
           </div>
           {isMarried && (
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
-                {spouseLabel} <span className="text-rose-500">*</span>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                {spouseLabel} (If married) <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
@@ -3177,14 +3154,14 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           )}
           {shouldShow('pd_driving_license') && (
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-800">
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
                 Do you have a Driving License? <span className="text-rose-500">*</span>
               </label>
-              <select
-                className={fieldClass(false)}
+              <FormSelect
                 value={draft.pd_driving_license}
-                onChange={(e) => {
-                  const v = e.target.value;
+                placeholder="Select"
+                options={DRIVING_OPTIONS}
+                onChange={(v) => {
                   setDraft((d) => ({ ...d, pd_driving_license: v }));
                   if (v !== 'Yes') {
                     setLicenseImageUrl('');
@@ -3192,14 +3169,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                     setLicenseError('');
                   }
                 }}
-              >
-                <option value="">Select</option>
-                {DRIVING_OPTIONS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           )}
 
@@ -3219,11 +3189,140 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               onChange={handleLicenseFile}
             />
           )}
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-            <h4 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Emergency Contact</h4>
+
+          <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-3">
+            <div className={`${FIELD_WRAP} cursor-not-allowed`}>
+              <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">
+                City <span className="text-rose-500">*</span>
+              </label>
+              <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={cityFromJobForm(jobForm)} />
+            </div>
+            <div className="cursor-not-allowed">
+              <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">
+                State <span className="text-rose-500">*</span>
+              </label>
+              <input type="text" readOnly tabIndex={-1} className={fieldClass(true)} value={jobForm.aad_state ?? ''} />
+            </div>
+            <div className="cursor-not-allowed">
+              <label className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700">
+                Pincode <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                readOnly
+                tabIndex={-1}
+                className={`${fieldClass(true)} tabular-nums`}
+                value={jobForm.aad_pincode ?? ''}
+              />
+            </div>
+          </div>
+
+          <div className={SECTION_DIVIDER}>
+            <h4 className="mb-3 text-base font-bold text-slate-900">Current Address</h4>
+            <p className="mb-2 text-sm font-medium text-slate-700">
+              Same as Aadhaar Address? <span className="text-rose-500">*</span>
+            </p>
+            <div className="mb-3 flex items-center gap-5">
+              <label className="inline-flex min-h-[44px] items-center gap-2 text-sm text-slate-800">
+                <input
+                  type="radio"
+                  name="current-address-same"
+                  checked={sameAsAadhaarChoice === 'yes'}
+                  onChange={() =>
+                    setDraft((d) => ({
+                      ...d,
+                      pd_current_address_same_as_aadhaar: 'yes',
+                      pd_current_address: String(jobForm?.aad_address ?? ''),
+                      pd_current_state: aadCurrentState,
+                      pd_current_city: aadCurrentCity === '—' ? '' : aadCurrentCity,
+                      pd_current_pincode: aadCurrentPincode,
+                    }))
+                  }
+                  className="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                Yes
+              </label>
+              <label className="inline-flex min-h-[44px] items-center gap-2 text-sm text-slate-800">
+                <input
+                  type="radio"
+                  name="current-address-same"
+                  checked={sameAsAadhaarChoice === 'no'}
+                  onChange={() =>
+                    setDraft((d) => ({
+                      ...d,
+                      pd_current_address_same_as_aadhaar: 'no',
+                      pd_current_address: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_address,
+                      pd_current_state: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_state,
+                      pd_current_city: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_city,
+                      pd_current_pincode: d.pd_current_address_same_as_aadhaar === 'yes' ? '' : d.pd_current_pincode,
+                    }))
+                  }
+                  className="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                No
+              </label>
+            </div>
+            {sameAsAadhaarChoice === 'no' && (
+              <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
+            )}
+            <textarea
+              rows={3}
+              className={`${fieldClass(sameAsAadhaarChoice === 'yes')} resize-none`}
+              value={sameAsAadhaarChoice === 'yes' ? String(jobForm?.aad_address ?? '') : draft.pd_current_address}
+              onChange={(e) => setDraft((d) => ({ ...d, pd_current_address: e.target.value }))}
+              readOnly={sameAsAadhaarChoice === 'yes'}
+              placeholder="Enter your current address"
+            />
+            <div className="mt-3 grid grid-cols-1 gap-4 min-[480px]:grid-cols-3">
+              <div className={FIELD_WRAP}>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                  Current State <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                  value={sameAsAadhaarChoice === 'yes' ? aadCurrentState : draft.pd_current_state}
+                  onChange={(e) => setDraft((d) => ({ ...d, pd_current_state: e.target.value }))}
+                  readOnly={sameAsAadhaarChoice === 'yes'}
+                  placeholder="Enter current state"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                  Current City <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                  value={sameAsAadhaarChoice === 'yes' ? (aadCurrentCity === '—' ? '' : aadCurrentCity) : draft.pd_current_city}
+                  onChange={(e) => setDraft((d) => ({ ...d, pd_current_city: e.target.value }))}
+                  readOnly={sameAsAadhaarChoice === 'yes'}
+                  placeholder="Enter current city"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                  Pincode <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  className={fieldClass(sameAsAadhaarChoice === 'yes')}
+                  value={sameAsAadhaarChoice === 'yes' ? aadCurrentPincode : draft.pd_current_pincode}
+                  onChange={(e) => setDraft((d) => ({ ...d, pd_current_pincode: e.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                  readOnly={sameAsAadhaarChoice === 'yes'}
+                  placeholder="6-digit pincode"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className={SECTION_DIVIDER}>
+            <h4 className="mb-3 text-base font-bold text-slate-900">Emergency Contact</h4>
             <div className="space-y-4">
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
                   Name <span className="text-rose-500">*</span>
                 </label>
                 <input
@@ -3237,7 +3336,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
                   Number <span className="text-rose-500">*</span>
                 </label>
                 <input
@@ -3253,33 +3352,20 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
                   Relation <span className="text-rose-500">*</span>
                 </label>
-                <select
-                  className={fieldClass(false)}
+                <FormSelect
                   value={draft.pd_emergency_contact_relation}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, pd_emergency_contact_relation: e.target.value }))
+                  placeholder="Select Relation"
+                  options={RELATION_OPTIONS}
+                  onChange={(next) =>
+                    setDraft((d) => ({ ...d, pd_emergency_contact_relation: next }))
                   }
-                >
-                  <option value="">Select Relation</option>
-                  {RELATION_OPTIONS.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                  {draft.pd_emergency_contact_relation &&
-                    !RELATION_OPTIONS.includes(draft.pd_emergency_contact_relation) && (
-                      <option value={draft.pd_emergency_contact_relation}>
-                        {draft.pd_emergency_contact_relation}
-                      </option>
-                    )}
-                </select>
+                />
               </div>
             </div>
           </div>
-        </div>
 
         {error && <p className="text-sm text-rose-600">{error}</p>}
 
@@ -3287,11 +3373,11 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           type="button"
           disabled={!requiredOk || saving}
           onClick={handleSave}
-          className="mt-8 w-full rounded-xl bg-indigo-600 py-4 text-base font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-2 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {saving ? 'Saving...' : 'Save & continue'}
+          {saving ? 'Saving...' : 'Next'}
         </button>
-      </section>
+      </div>
     </div>
   );
 }
@@ -3634,23 +3720,25 @@ export default function OnboardingForm() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-5">
-          <h1 className="text-2xl font-semibold text-slate-900">Job Application Form</h1>
+    <div className="min-h-screen max-w-[100vw] overflow-x-hidden bg-[#F5F6FA]">
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-3xl min-w-0 items-center justify-between gap-3 px-4 py-3.5 sm:py-4">
+          <h1 className="min-w-0 truncate text-lg font-bold text-slate-900 sm:text-xl">Job Application Form</h1>
           <button
             type="button"
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+            className="inline-flex shrink-0 min-h-[40px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
           >
             English
+            <svg className="h-3.5 w-3.5 text-slate-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+              <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+            </svg>
           </button>
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl px-4 py-8">
+      <main className={FORM_SHELL}>
         {formView === 'photo' && jobFormRow ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-            <BankPhotoForm
+          <BankPhotoForm
               jobForm={jobFormRow}
               mobile={mobile}
               employeeId={employeeId}
@@ -3665,10 +3753,8 @@ export default function OnboardingForm() {
               }}
               onGoToStatus={() => navigateToStatus(mobile)}
             />
-          </div>
         ) : formView === 'kyc' && jobFormRow ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-            <KycDocumentsForm
+          <KycDocumentsForm
               jobForm={jobFormRow}
               mobile={mobile}
               employeeId={employeeId}
@@ -3683,10 +3769,8 @@ export default function OnboardingForm() {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
             />
-          </div>
         ) : formView === 'qualification' && jobFormRow ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-            <QualificationForm
+          <QualificationForm
               jobForm={jobFormRow}
               mobile={mobile}
               employeeId={employeeId}
@@ -3701,9 +3785,8 @@ export default function OnboardingForm() {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
             />
-          </div>
         ) : formView === 'personal' && jobFormRow ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+          <>
             <FormStepper currentStep={1} />
             <PersonalDetailsForm
               jobForm={jobFormRow}
@@ -3716,13 +3799,15 @@ export default function OnboardingForm() {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
             />
-          </div>
+          </>
         ) : (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-            <div className="mb-8 text-center">
-              <p className="mb-4 text-sm font-semibold text-indigo-600">Onboarding Portal</p>
-              <h2 className="mb-2 text-3xl font-semibold text-slate-900">Welcome to Our Job Portal</h2>
-              <p className="text-slate-600">
+          <div>
+            <div className="mb-8 text-left">
+              <span className="mb-3 inline-block rounded-md bg-emerald-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-emerald-800">
+                Onboarding Portal
+              </span>
+              <h2 className="mb-2 text-2xl font-bold text-slate-900 sm:text-3xl">Welcome to Our Job Portal</h2>
+              <p className="text-sm text-slate-600 sm:text-base">
                 {prefillLoading
                   ? 'Validating your secure onboarding link...'
                   : !mobileVerified
@@ -3739,42 +3824,49 @@ export default function OnboardingForm() {
               <div className={mobileVerified ? 'cursor-not-allowed' : undefined}>
                 <label
                   htmlFor="onboarding-mobile"
-                  className={`mb-2 block text-xl font-medium text-slate-800 ${mobileVerified ? 'cursor-inherit' : ''}`}
+                  className={`mb-1.5 block text-sm font-medium text-slate-700 ${mobileVerified ? 'cursor-inherit' : ''}`}
                 >
                   Mobile Number <span className="text-rose-500">*</span>
                 </label>
-                <input
-                  id="onboarding-mobile"
-                  type="text"
-                  value={mobile}
-                  onChange={(e) => {
-                    if (employeeSpecificLink || mobileVerified || prefillLoading) return;
-                    setMobile(normalizeMobile(e.target.value));
-                  }}
-                  inputMode="numeric"
-                  maxLength={10}
-                  readOnly={employeeSpecificLink || mobileVerified || prefillLoading}
-                  className={`w-full rounded-xl border px-5 py-4 text-2xl text-slate-900 ${
-                    employeeSpecificLink || mobileVerified || prefillLoading
-                      ? 'cursor-not-allowed select-none border-slate-200 bg-sky-50'
-                      : 'border-slate-300 bg-white'
-                  }`}
-                  placeholder={employeeSpecificLink ? 'Registered mobile number' : 'Enter 10-digit mobile number'}
-                />
+                <div className="relative">
+                  <input
+                    id="onboarding-mobile"
+                    type="text"
+                    value={mobile}
+                    onChange={(e) => {
+                      if (employeeSpecificLink || mobileVerified || prefillLoading) return;
+                      setMobile(normalizeMobile(e.target.value));
+                    }}
+                    inputMode="numeric"
+                    maxLength={10}
+                    readOnly={employeeSpecificLink || mobileVerified || prefillLoading}
+                    className={`w-full rounded-lg border px-3.5 py-3 text-base tabular-nums text-slate-900 ${
+                      mobileVerified || employeeSpecificLink || prefillLoading ? 'pr-11' : ''
+                    } ${
+                      employeeSpecificLink || mobileVerified || prefillLoading
+                        ? 'cursor-not-allowed select-none border-slate-200 bg-white'
+                        : 'border-slate-300 bg-white'
+                    }`}
+                    placeholder={employeeSpecificLink ? 'Registered mobile number' : 'Enter 10-digit mobile number'}
+                  />
+                  {(mobileVerified || (employeeSpecificLink && hasValidMobile)) && (
+                    <IconCheckCircle className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
+                  )}
+                </div>
 
                 {!mobileVerified && !employeeSpecificLink && !prefillLoading && (
                   <button
                     type="button"
                     onClick={handleMobileContinue}
                     disabled={!hasValidMobile || mobileSubmitting}
-                    className="mt-5 w-full rounded-xl bg-indigo-600 py-4 text-xl font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    className="mt-5 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {mobileSubmitting ? 'Checking...' : 'Continue'}
                   </button>
                 )}
 
                 {mobileVerified && (
-                  <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900">
+                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-emerald-900">
                     <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
                     <p className="text-sm font-medium">
                       Mobile number verified: <span className="tabular-nums">{mobile}</span>
@@ -3797,11 +3889,11 @@ export default function OnboardingForm() {
 
               {mobileVerified && !aadhaarComplete && (
                 <>
-                  <hr className="my-10 border-slate-200" />
+                  <hr className="my-8 border-slate-200" />
 
-                  <div className="mb-4 flex items-center gap-2 text-slate-900">
-                    <IconShield className="h-7 w-7 text-indigo-600" />
-                    <h3 className="text-lg font-semibold">Aadhaar Verification</h3>
+                  <div className="mb-3 flex items-center gap-2 text-slate-900">
+                    <IconShield className="h-6 w-6 text-indigo-600" />
+                    <h3 className="text-lg font-bold">Aadhaar Verification</h3>
                   </div>
 
                   {aadhaarResumeFlow && (aadhaarPhase === 'resume_input' || aadhaarPhase === 'resume_otp') && (
@@ -3809,7 +3901,7 @@ export default function OnboardingForm() {
                       <div className="cursor-not-allowed">
                         <label
                           htmlFor="onboarding-aadhaar-resume"
-                          className="mb-2 block cursor-inherit text-xl font-medium text-slate-800"
+                          className="mb-1.5 block cursor-inherit text-sm font-medium text-slate-700"
                         >
                           Aadhaar Number
                         </label>
@@ -3818,18 +3910,18 @@ export default function OnboardingForm() {
                           type="text"
                           value={aadhaar}
                           readOnly
-                          className="w-full cursor-not-allowed select-none rounded-xl border border-slate-200 bg-sky-50 px-5 py-4 text-2xl tabular-nums tracking-widest text-slate-900"
+                          className="w-full cursor-not-allowed select-none rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-3 text-base tabular-nums tracking-widest text-slate-900"
                         />
-                        <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900">
+                        <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-emerald-900">
                           <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
                           <p className="text-sm font-medium">Aadhaar already verified</p>
                         </div>
                       </div>
 
-                      <div className="mt-8 rounded-xl border border-indigo-100 bg-indigo-50 p-5">
+                      <div className="mt-6 space-y-4">
                         {aadhaarPhase === 'resume_input' ? (
                           <>
-                            <p className="mb-4 text-sm text-indigo-900">
+                            <p className="text-sm text-slate-600">
                               To continue, we will send a one-time password to your registered mobile{' '}
                               <span className="font-semibold tabular-nums">{mobile}</span>.
                             </p>
@@ -3837,18 +3929,18 @@ export default function OnboardingForm() {
                               type="button"
                               onClick={handleSendAadhaarResumeOtp}
                               disabled={aadhaarSubmitting}
-                              className="w-full rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-10"
+                              className="w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {aadhaarSubmitting ? 'Sending OTP...' : 'Send OTP'}
                             </button>
                           </>
                         ) : (
                           <>
-                            <p className="mb-4 text-sm text-indigo-900">
+                            <p className="text-sm text-slate-600">
                               OTP sent to your mobile{' '}
                               <span className="font-semibold tabular-nums">{mobile}</span>. Enter it below.
                             </p>
-                            <label htmlFor="onboarding-resume-otp" className="mb-2 block text-sm font-medium text-slate-800">
+                            <label htmlFor="onboarding-resume-otp" className="mb-1.5 block text-sm font-medium text-slate-700">
                               Enter OTP <span className="text-rose-500">*</span>
                             </label>
                             <input
@@ -3858,28 +3950,26 @@ export default function OnboardingForm() {
                               onChange={(e) => setOtp(normalizeOtp(e.target.value))}
                               inputMode="numeric"
                               maxLength={6}
-                              className="mb-4 w-full max-w-xs rounded-lg border border-slate-300 bg-white px-4 py-3 text-center text-xl tracking-[0.3em] text-slate-900 tabular-nums"
+                              className="mb-4 w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-center text-lg tracking-[0.3em] text-slate-900 tabular-nums"
                               placeholder="6-digit OTP"
                               autoComplete="one-time-code"
                             />
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                              <button
-                                type="button"
-                                onClick={handleVerifyOtp}
-                                disabled={!hasValidOtp || otpVerifying}
-                                className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {otpVerifying ? 'Verifying...' : 'Verify OTP'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleSendAadhaarResumeOtp}
-                                disabled={aadhaarSubmitting}
-                                className="inline-flex items-center justify-center rounded-lg border border-indigo-400 bg-white px-6 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-                              >
-                                {aadhaarSubmitting ? 'Resending...' : 'Resend OTP'}
-                              </button>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={handleVerifyOtp}
+                              disabled={!hasValidOtp || otpVerifying}
+                              className="w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {otpVerifying ? 'Verifying...' : 'Verify OTP'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSendAadhaarResumeOtp}
+                              disabled={aadhaarSubmitting}
+                              className="mt-3 w-full text-center text-sm font-semibold text-indigo-600 hover:text-indigo-800 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {aadhaarSubmitting ? 'Resending...' : 'Resend OTP'}
+                            </button>
                           </>
                         )}
                       </div>
@@ -3892,7 +3982,7 @@ export default function OnboardingForm() {
                         Enter the 12-digit Aadhaar number. We will send an OTP to your Aadhaar-registered mobile
                         number.
                       </p>
-                      <label htmlFor="onboarding-aadhaar" className="mb-2 block text-sm font-medium text-slate-800">
+                      <label htmlFor="onboarding-aadhaar" className="mb-1.5 block text-sm font-medium text-slate-700">
                         Aadhaar Number <span className="text-rose-500">*</span>
                       </label>
                       <input
@@ -3902,7 +3992,7 @@ export default function OnboardingForm() {
                         onChange={(e) => setAadhaar(normalizeAadhaar(e.target.value))}
                         inputMode="numeric"
                         maxLength={12}
-                        className="w-full rounded-lg border border-slate-300 px-4 py-3 text-lg tracking-widest text-slate-900 tabular-nums"
+                        className="w-full rounded-lg border border-slate-300 px-3.5 py-3 text-base tracking-widest text-slate-900 tabular-nums"
                         placeholder="12-digit Aadhaar"
                         autoComplete="off"
                       />
@@ -3910,7 +4000,7 @@ export default function OnboardingForm() {
                         type="button"
                         onClick={handleSendAadhaarOtp}
                         disabled={!hasValidAadhaar || aadhaarSubmitting}
-                        className="mt-5 w-full rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-8"
+                        className="mt-5 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {aadhaarSubmitting ? 'Sending...' : 'Send OTP'}
                       </button>
@@ -3919,11 +4009,11 @@ export default function OnboardingForm() {
 
                   {!aadhaarResumeFlow && aadhaarPhase === 'otp' && (
                     <>
-                      <div className="mb-5 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                      <p className="mb-4 text-sm text-slate-600">
                         OTP sent to your Aadhaar-registered mobile number.
-                      </div>
+                      </p>
 
-                      <label htmlFor="onboarding-aadhaar-otp" className="mb-2 block text-sm font-medium text-slate-800">
+                      <label htmlFor="onboarding-aadhaar-otp" className="mb-1.5 block text-sm font-medium text-slate-700">
                         Enter OTP <span className="text-rose-500">*</span>
                       </label>
                       <input
@@ -3933,33 +4023,30 @@ export default function OnboardingForm() {
                         onChange={(e) => setOtp(normalizeOtp(e.target.value))}
                         inputMode="numeric"
                         maxLength={6}
-                        className="mb-6 w-full max-w-xs rounded-lg border border-slate-300 px-4 py-3 text-center text-xl tracking-[0.3em] text-slate-900 tabular-nums"
+                        className="mb-5 w-full rounded-lg border border-slate-300 px-4 py-3 text-center text-lg tracking-[0.3em] text-slate-900 tabular-nums"
                         placeholder="6-digit OTP"
                         autoComplete="one-time-code"
                       />
 
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                        <button
-                          type="button"
-                          onClick={handleVerifyOtp}
-                          disabled={!hasValidOtp || otpVerifying}
-                          className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {otpVerifying ? 'Verifying...' : 'Verify OTP'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAadhaarPhase('input');
-                            setOtp('');
-                            setAadhaarError('');
-                          }}
-                          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-indigo-600 bg-white px-6 py-2.5 text-sm font-semibold text-indigo-600 hover:bg-indigo-50"
-                        >
-                          <IconArrowLeft className="h-4 w-4" />
-                          Change Number
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={handleVerifyOtp}
+                        disabled={!hasValidOtp || otpVerifying}
+                        className="w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {otpVerifying ? 'Verifying...' : 'Verify OTP'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAadhaarPhase('input');
+                          setOtp('');
+                          setAadhaarError('');
+                        }}
+                        className="mt-4 w-full text-center text-sm font-semibold text-indigo-600 hover:text-indigo-800"
+                      >
+                        Change Number
+                      </button>
                     </>
                   )}
 
@@ -3969,74 +4056,70 @@ export default function OnboardingForm() {
 
               {aadhaarComplete && aadhaarKyc && (
                 <>
-                  <hr className="my-10 border-slate-200" />
+                  <hr className="my-8 border-slate-200" />
                   <div>
-                    <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2 text-slate-900">
-                        <IconShield className="h-7 w-7 text-indigo-600" />
-                        <h3 className="text-lg font-semibold">Aadhaar Verification</h3>
+                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                      <div className="flex items-start gap-3 border-b border-slate-100 px-4 py-4">
+                        {aadhaarKyc.aad_profile_photo ? (
+                          <img
+                            src={aadhaarKyc.aad_profile_photo}
+                            alt="Aadhaar profile photo"
+                            className="h-14 w-14 shrink-0 rounded-lg border border-slate-200 object-cover"
+                            width={56}
+                            height={56}
+                          />
+                        ) : (
+                          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+                            <IconUser className="h-7 w-7 text-slate-400" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-base font-bold text-slate-900">{aadhaarKyc.aad_name || '—'}</p>
+                        </div>
+                        <span className="inline-flex shrink-0 items-center rounded-md bg-teal-50 px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-teal-700">
+                          Verified
+                        </span>
                       </div>
-                      <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-800">
-                        Verified
-                      </span>
-                    </div>
 
-                    <div className="mb-6 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900">
-                      <IconCheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-                      <p className="text-sm font-semibold">Aadhaar Verified Successfully</p>
-                    </div>
-
-                    <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
-                      <div className="shrink-0 sm:pt-0.5">
-                        <img
-                          src={aadhaarKyc.aad_profile_photo}
-                          alt="Aadhaar profile photo"
-                          className="h-32 w-32 rounded-xl border border-slate-200 object-cover shadow-sm"
-                          width={128}
-                          height={128}
-                        />
-                      </div>
-                      <dl className="min-w-0 flex-1 space-y-4 text-sm">
+                      <dl className="space-y-4 px-4 py-4 text-sm">
                         <div>
-                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Name</dt>
-                          <dd className="mt-0.5 text-base font-medium text-slate-900">{aadhaarKyc.aad_name}</dd>
+                          <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Name</dt>
+                          <dd className="mt-0.5 text-base font-semibold text-slate-900">{aadhaarKyc.aad_name || '—'}</dd>
                         </div>
                         <div>
-                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Father / Guardian</dt>
-                          <dd className="mt-0.5 text-slate-800">{aadhaarKyc.aad_care_of}</dd>
+                          <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Father / Guardian</dt>
+                          <dd className="mt-0.5 font-semibold text-slate-900">{aadhaarKyc.aad_care_of || '—'}</dd>
                         </div>
                         <div>
-                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Date of birth</dt>
-                          <dd className="mt-0.5 font-medium tabular-nums text-slate-900">
+                          <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">DOB</dt>
+                          <dd className="mt-0.5 font-semibold tabular-nums text-slate-900">
                             {formatAadDob(aadhaarKyc.aad_dob)}
                           </dd>
                         </div>
                         <div>
-                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Gender</dt>
-                          <dd className="mt-0.5 text-slate-800">{formatAadGender(aadhaarKyc.aad_gender)}</dd>
+                          <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Gender</dt>
+                          <dd className="mt-0.5 font-semibold text-slate-900">{formatAadGender(aadhaarKyc.aad_gender)}</dd>
+                        </div>
+                        <div className="border-t border-slate-100 pt-4">
+                          <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Address</dt>
+                          <dd className="mt-0.5 whitespace-pre-line font-semibold text-slate-900">{aadhaarKyc.aad_address || '—'}</dd>
                         </div>
                         <div>
-                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Address</dt>
-                          <dd className="mt-0.5 whitespace-pre-line text-slate-800">{aadhaarKyc.aad_address}</dd>
+                          <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">State</dt>
+                          <dd className="mt-0.5 font-semibold text-slate-900">{aadhaarKyc.aad_state || '—'}</dd>
                         </div>
-                        <div className="grid gap-4 sm:grid-cols-3">
-                          <div>
-                            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">State</dt>
-                            <dd className="mt-0.5 text-slate-800">{aadhaarKyc.aad_state}</dd>
-                          </div>
-                          <div>
-                            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">District</dt>
-                            <dd className="mt-0.5 text-slate-800">{aadhaarKyc.aad_district}</dd>
-                          </div>
-                          <div>
-                            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Pincode</dt>
-                            <dd className="mt-0.5 font-medium tabular-nums text-slate-800">{aadhaarKyc.aad_pincode}</dd>
-                          </div>
+                        <div>
+                          <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">District</dt>
+                          <dd className="mt-0.5 font-semibold text-slate-900">{aadhaarKyc.aad_district || '—'}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Pincode</dt>
+                          <dd className="mt-0.5 font-semibold tabular-nums text-slate-900">{aadhaarKyc.aad_pincode || '—'}</dd>
                         </div>
                       </dl>
                     </div>
 
-                    <p className="mb-2 mt-6 text-xs text-slate-500">
+                    <p className="mb-2 mt-5 text-xs text-slate-500">
                       Aadhaar KYC details are fetched from verification response and stored on your application record.
                     </p>
                     {proceedError && <p className="mt-2 text-sm text-rose-600">{proceedError}</p>}
@@ -4044,13 +4127,9 @@ export default function OnboardingForm() {
                       type="button"
                       onClick={handleProceedToPersonal}
                       disabled={proceedLoading}
-                      className="mt-2 w-full rounded-xl bg-indigo-600 py-4 text-base font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-2 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {proceedLoading ? 'Loading...' : (
-                        <>
-                          Proceed to Personal Details <span aria-hidden>›</span>
-                        </>
-                      )}
+                      {proceedLoading ? 'Loading...' : 'Proceed to Personal Details'}
                     </button>
                   </div>
                 </>

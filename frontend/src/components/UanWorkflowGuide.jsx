@@ -219,7 +219,7 @@ export default function UanWorkflowGuide({ path, uanNumberField, screenshotField
 
   return (
     <>
-      <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4 sm:p-5">
+      <div className="sm:p-1">
         <div className="mb-4">
           <h3 className="text-sm font-semibold text-slate-900">
             {path === 'yes' ? 'Steps for existing UAN' : 'Steps to create and activate UAN'}

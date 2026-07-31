@@ -51,7 +51,7 @@ export default function ClientProjectMetaHeader({
   return (
     <div className={className}>
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="min-w-0 text-2xl font-semibold tracking-tight text-indigo-950">
+        <h1 className="min-w-0 break-words text-xl font-semibold tracking-tight text-indigo-950 sm:text-2xl">
           {title || 'Client Dashboard'}
         </h1>
         {insuranceApplicable && (
@@ -61,7 +61,7 @@ export default function ClientProjectMetaHeader({
         )}
       </div>
 
-      <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-5 lg:items-start lg:gap-x-8">
+      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 xl:items-start xl:gap-x-8">
         <MetaItem label="Contract Code">
           <span className="font-mono">{contractCode || '—'}</span>
         </MetaItem>

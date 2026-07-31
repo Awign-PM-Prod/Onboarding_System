@@ -47,15 +47,15 @@ export default function PayrollHeadClientsPage() {
   });
 
   return (
-    <main className="mx-auto max-w-7xl px-6 py-8">
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">All Clients</h1>
           <p className="mt-1 text-sm text-slate-500">
             Read-only view of every client across all Payroll Leads.
           </p>
         </div>
-        <div className="w-64 shrink-0">
+        <div className="w-full min-w-0 sm:w-64 sm:shrink-0">
           <input
             type="search"
             placeholder="Search clients…"

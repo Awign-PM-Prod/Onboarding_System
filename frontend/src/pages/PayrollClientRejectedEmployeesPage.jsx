@@ -59,7 +59,7 @@ export default function PayrollClientRejectedEmployeesPage() {
   );
 
   return (
-    <main className="mx-auto max-w-6xl px-6 pb-8 pt-4">
+    <main className="mx-auto max-w-6xl px-4 pb-8 pt-4 sm:px-6">
       <div className="mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Rejected Employees</h1>
@@ -85,7 +85,7 @@ export default function PayrollClientRejectedEmployeesPage() {
       )}
 
       {!loading && !error && rejectedRows.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-600">
               <tr>

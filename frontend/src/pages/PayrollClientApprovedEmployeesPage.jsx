@@ -150,7 +150,7 @@ export default function PayrollClientApprovedEmployeesPage() {
   };
 
   return (
-    <main className="mx-auto max-w-6xl px-6 pb-8 pt-4">
+    <main className="mx-auto max-w-6xl px-4 pb-8 pt-4 sm:px-6">
       {toast && (
         <div className="fixed bottom-6 left-1/2 z-[110] max-w-md -translate-x-1/2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-lg">
           {toast}
@@ -181,7 +181,7 @@ export default function PayrollClientApprovedEmployeesPage() {
       )}
 
       {!loading && !error && awaitingPlRows.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-600">
               <tr>

@@ -1298,22 +1298,22 @@ export default function AttendancePanel({ clientId, role, projectName }) {
         </div>
       ) : (
         <>
-          <div className="flex w-full min-w-0 flex-nowrap items-center gap-2">
+          <div className="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             <input
               type="search"
               placeholder="Search employee name or code…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               disabled={!sheet}
-              className="min-w-[8rem] flex-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+              className="min-w-0 w-full flex-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm disabled:bg-slate-50 disabled:text-slate-400 sm:min-w-[8rem]"
             />
-            <label className="flex shrink-0 items-center gap-2 text-sm text-slate-600">
+            <label className="flex min-w-0 shrink-0 items-center gap-2 text-sm text-slate-600">
               <span className="whitespace-nowrap">Leave Type:</span>
               <select
                 value={leaveType}
                 onChange={(e) => setLeaveType(e.target.value)}
                 disabled={!sheet}
-                className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-800 disabled:bg-slate-50 disabled:text-slate-400"
+                className="min-w-0 max-w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-800 disabled:bg-slate-50 disabled:text-slate-400"
               >
                 {LEAVE_TYPE_OPTIONS.map((opt) => (
                   <option key={opt.value || 'all'} value={opt.value}>
@@ -1324,7 +1324,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
             </label>
             {sheet && <CalendarViewToggle value={calendarView} onChange={setCalendarView} />}
 
-            <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:shrink-0 sm:flex-nowrap">
               {sheet && sheet.locked && !(isPl && (canLock || canUnlock)) && (
                 <LockedStatusPill />
               )}
@@ -2196,7 +2196,7 @@ function LegendBar() {
     { code: 'R/T/-', label: 'Not considered', cls: 'bg-slate-100 text-slate-500' }
   ];
   return (
-    <div className="flex w-full min-w-0 flex-nowrap items-center justify-between gap-x-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+    <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
       {items.map((it) => (
         <span key={it.code} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-slate-600">
           <span

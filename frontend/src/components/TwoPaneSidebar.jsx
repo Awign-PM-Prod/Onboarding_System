@@ -1,4 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
+import { SidebarCollapseToggle } from './CollapsibleAppSidebar';
 import ProfileLogoutMenu from './ProfileLogoutMenu';
 
 const PANEL_KEY = 'obs.sidebar.panelOpen';
@@ -39,6 +40,14 @@ function IconChevronLeft({ className }) {
   );
 }
 
+function IconArrowLeft({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+    </svg>
+  );
+}
+
 function IconPlus({ className }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden>
@@ -63,10 +72,17 @@ function panelItemClass(active) {
   }`;
 }
 
-function RailItem({ item, onNavigate }) {
+function RailItem({ item, onNavigate, labeled = false }) {
   const { to, label, active, icon, onClick } = item;
-  const className = railItemClass(active);
-  const body = <span className="flex h-6 w-6 shrink-0 items-center justify-center">{icon}</span>;
+  const className = labeled ? panelItemClass(active) : railItemClass(active);
+  const body = (
+    <>
+      <span className={`flex shrink-0 items-center justify-center ${labeled ? 'h-5 w-5' : 'h-6 w-6'}`}>
+        {icon}
+      </span>
+      {labeled && <span className="truncate">{label}</span>}
+    </>
+  );
 
   if (to) {
     return (
@@ -210,7 +226,7 @@ export function SidebarModulesPanel({
             title="Back to Clients"
             aria-label="Back to Clients"
           >
-            <IconChevronLeft className="h-3.5 w-3.5 shrink-0" />
+            <IconArrowLeft className="h-3.5 w-3.5 shrink-0" />
             {!collapsed && 'Back to Clients'}
           </button>
         )}
@@ -273,7 +289,9 @@ export default function TwoPaneSidebar({
   profile,
   user,
   onSignOut,
-  onNavigate
+  onNavigate,
+  /** Mobile drawer: show labeled nav instead of icon-only rail */
+  labeledRail = false
 }) {
   const visible = typeof panelVisible === 'boolean' ? panelVisible : Boolean(panelOpen);
   const expanded = visible && (typeof panelExpanded === 'boolean' ? panelExpanded : Boolean(panelOpen));
@@ -286,10 +304,22 @@ export default function TwoPaneSidebar({
   const resolvedPanel = typeof panel === 'function' ? panel(collapsed) : panel;
 
   return (
-    <div className="relative flex h-full min-h-0 max-h-screen overflow-visible bg-[#1a1f3a]">
-      {/* Icon rail */}
-      <div className="flex h-full min-h-0 w-[4.5rem] shrink-0 flex-col overflow-visible">
-        <div className="flex shrink-0 items-center justify-center px-2 pb-3 pt-5">
+    <div
+      className={`relative flex h-full min-h-0 max-h-screen overflow-visible bg-[#1a1f3a] ${
+        labeledRail ? 'w-72 flex-col' : ''
+      }`}
+    >
+      {/* Icon rail (or labeled rail in mobile drawer) */}
+      <div
+        className={`flex min-h-0 shrink-0 flex-col overflow-visible ${
+          labeledRail ? 'w-full' : 'h-full w-[4.5rem]'
+        } ${labeledRail && visible ? 'max-h-[45%]' : labeledRail ? 'h-full' : 'h-full'}`}
+      >
+        <div
+          className={`flex shrink-0 items-center ${
+            labeledRail ? 'gap-3 px-4 pb-3 pt-5' : 'justify-center px-2 pb-3 pt-5'
+          }`}
+        >
           <NavLink
             to={homeTo}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white transition-opacity hover:opacity-80"
@@ -299,53 +329,78 @@ export default function TwoPaneSidebar({
           >
             <IconLogo className="h-9 w-9" />
           </NavLink>
+          {labeledRail && (
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-white">Staffing-Go</p>
+            </div>
+          )}
         </div>
 
         <nav
-          className="flex min-h-0 flex-1 flex-col items-stretch gap-1.5 overflow-x-hidden overflow-y-auto px-2 py-2"
+          className={`flex min-h-0 flex-1 flex-col items-stretch gap-1.5 overflow-x-hidden overflow-y-auto py-2 ${
+            labeledRail ? 'px-3' : 'px-2'
+          }`}
           aria-label="Modules"
         >
           {railItems.map((item) => (
-            <RailItem key={item.id} item={item} onNavigate={handleNav} />
+            <RailItem key={item.id} item={item} onNavigate={handleNav} labeled={labeledRail} />
           ))}
         </nav>
 
-        <div className="relative z-20 shrink-0 overflow-visible border-t border-white/10 px-2 py-3">
-          <ProfileLogoutMenu
-            profile={profile}
-            user={user}
-            onSignOut={onSignOut}
-            variant="dark"
-            align="rail"
-            className="flex justify-center"
-          />
-        </div>
-      </div>
-
-      {/* Contextual panel: hidden | icon-collapsed | expanded */}
-      <div
-        className={`relative h-full min-h-0 overflow-visible border-l border-white/10 transition-[width] duration-200 ease-out ${
-          !visible ? 'w-0 border-l-0' : expanded ? 'w-64' : 'w-[4.5rem]'
-        }`}
-      >
-        <div className={`h-full overflow-hidden ${expanded ? 'w-64' : 'w-[4.5rem]'}`}>
-          {resolvedPanel}
-        </div>
-
-        {visible && onPanelExpandedChange && (
-          <button
-            type="button"
-            onClick={() => onPanelExpandedChange(!expanded)}
-            className="absolute -right-3.5 top-8 z-30 hidden h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-[#252b4a] text-slate-200 shadow-md transition hover:bg-[#2f3658] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300 lg:flex"
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={collapsed ? 'Expand menu' : 'Collapse menu'}
+        {(!labeledRail || !visible) && (
+          <div
+            className={`relative z-20 shrink-0 overflow-visible border-t border-white/10 py-3 ${
+              labeledRail ? 'px-3' : 'px-2'
+            }`}
           >
-            <IconChevronLeft
-              className={`h-3.5 w-3.5 transition-transform duration-200 ${collapsed ? 'rotate-180' : ''}`}
+            <ProfileLogoutMenu
+              profile={profile}
+              user={user}
+              onSignOut={onSignOut}
+              variant="dark"
+              align={labeledRail ? 'left' : 'rail'}
+              className={labeledRail ? '' : 'flex justify-center'}
             />
-          </button>
+          </div>
         )}
       </div>
+
+      {/* Desktop contextual panel */}
+      {!labeledRail && (
+        <div
+          className={`relative h-full min-h-0 overflow-hidden border-l border-white/10 transition-[width] duration-200 ease-out ${
+            !visible ? 'w-0 border-l-0' : expanded ? 'w-64' : 'w-[4.5rem]'
+          }`}
+        >
+          <div className={`h-full overflow-hidden ${expanded ? 'w-64' : 'w-[4.5rem]'}`}>
+            {resolvedPanel}
+          </div>
+        </div>
+      )}
+
+      {/* Mobile drawer: client modules stacked under labeled rail */}
+      {labeledRail && visible && (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-white/10">
+          <div className="min-h-0 flex-1 overflow-y-auto">{typeof panel === 'function' ? panel(false) : panel}</div>
+          <div className="relative z-20 shrink-0 border-t border-white/10 px-3 py-3">
+            <ProfileLogoutMenu
+              profile={profile}
+              user={user}
+              onSignOut={onSignOut}
+              variant="dark"
+              align="left"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Outer-edge collapse control — desktop only */}
+      {!labeledRail && visible && onPanelExpandedChange && (
+        <SidebarCollapseToggle
+          collapsed={collapsed}
+          onToggle={() => onPanelExpandedChange(!expanded)}
+        />
+      )}
     </div>
   );
 }

@@ -320,7 +320,7 @@ export default function PayrollClientDashboardHome() {
   const visibleRecords = payrollRecords.slice(0, RECORDS_PREVIEW_COUNT);
 
   return (
-    <main className="mx-auto max-w-7xl px-6 pb-8 pt-4">
+    <main className="mx-auto max-w-7xl px-4 pb-8 pt-4 sm:px-6">
       <ClientProjectMetaHeader
         className="mb-6"
         title={client?.client_name || 'Client Dashboard'}

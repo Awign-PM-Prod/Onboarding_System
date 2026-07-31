@@ -161,12 +161,12 @@ export default function ClientForm() {
 
   if (loading || pmsLoading) {
     return (
-      <main className="mx-auto max-w-5xl px-6 py-8 text-slate-500">Loading...</main>
+      <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8 text-slate-500">Loading...</main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-8">
+    <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6">
         <Link to="/dashboard/clients" className="text-sm text-indigo-600 hover:text-indigo-800">
           &larr; Back to clients
