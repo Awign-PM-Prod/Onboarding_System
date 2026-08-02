@@ -1164,7 +1164,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
         />
       )}
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-2">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-slate-900">
@@ -1236,7 +1236,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 border-t border-slate-100 pt-3 text-sm sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
           <Meta label="Contract Code" value={sheet?.contract_code || client?.contract_code} />
           <Meta label="Client" value={displayProjectName || client?.client_name} />
           <Meta label="Entity" value={sheet?.entity} />

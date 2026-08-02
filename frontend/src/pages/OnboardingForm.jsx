@@ -1705,9 +1705,6 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             removing={panCardRemoving}
             onChange={!panVerified ? undefined : handlePanCard}
           >
-            {!panVerified && !panCardUrl && (
-              <p className="mt-1.5 text-xs text-rose-600">Note: Verify PAN number above before uploading.</p>
-            )}
             {panCardHint && (
               <p className={`mt-2 text-sm ${panCardHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
                 {panCardHint.text}
