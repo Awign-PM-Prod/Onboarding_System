@@ -1803,11 +1803,16 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           bankVerified &&
           (bankBranchSummary || bankBranchConfirmed) && (
             <div className="space-y-2">
-              {bankBranchSummary && (
-                <p className="text-sm font-medium text-slate-800">
-                  {bankBranchSummary.bankName || '—'}, {bankBranchSummary.branch || '—'}, {bankBranchSummary.state || '—'}
-                </p>
-              )}
+              {(() => {
+                const summaryParts = bankBranchSummary
+                  ? [bankBranchSummary.bankName, bankBranchSummary.branch, bankBranchSummary.state]
+                      .map((part) => String(part || '').trim())
+                      .filter(Boolean)
+                  : [];
+                return summaryParts.length > 0 ? (
+                  <p className="text-sm font-medium text-slate-800">{summaryParts.join(', ')}</p>
+                ) : null;
+              })()}
               <label className="inline-flex items-start gap-2 text-sm text-slate-800">
                 <input
                   type="checkbox"
