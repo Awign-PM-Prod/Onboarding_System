@@ -1,18 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-
-function formatDate(dateStr) {
-  if (!dateStr) return '—';
-  try {
-    return new Date(dateStr).toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
-    });
-  } catch {
-    return dateStr;
-  }
-}
+import { formatContractPeriod } from '../lib/clientCsv';
 
 export default function PayrollHeadClientsPage() {
   const [clients, setClients] = useState([]);
@@ -126,12 +114,19 @@ export default function PayrollHeadClientsPage() {
                     <td className="px-4 py-3 text-slate-700">{c.payroll_lead_name || '—'}</td>
                     <td className="px-4 py-3 text-slate-700">{c.program_manager_name || '—'}</td>
                     <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
-                      {formatDate(c.contract_start_date)} – {formatDate(c.contract_end_date)}
+                      {formatContractPeriod(
+                        c.contract_start_date,
+                        c.contract_end_date,
+                        c.open_ended_contract
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {c.insurance_applicable ? (
                         <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
                           {c.insurance_name || 'Yes'}
+                          {c.insurance_amount != null && c.insurance_amount !== ''
+                            ? ` · ₹${Number(c.insurance_amount).toLocaleString('en-IN')}`
+                            : ''}
                         </span>
                       ) : (
                         <span className="text-xs text-slate-400">None</span>

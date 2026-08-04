@@ -1159,6 +1159,9 @@ export default function PmClientDetail() {
                 contractCode={client.contract_code}
                 contractStartDate={client.contract_start_date}
                 contractEndDate={client.contract_end_date}
+                openEndedContract={Boolean(client.open_ended_contract)}
+                entity={client.entity}
+                state={client.state}
                 designations={client.designations}
                 plApprovedCount={plApprovedRows.length}
                 plRejectedCount={plRejectedRows.length}

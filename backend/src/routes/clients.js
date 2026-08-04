@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { supabaseAdmin } from '../supabase.js';
 import {
   fetchClientPolicyBundle,
@@ -13,6 +14,12 @@ import {
 import { normalizeAttendancePolicy } from '../utils/clientPolicyCore.js';
 import { recalculateAllAttendanceSheetsForClient } from '../utils/attendanceRecalc.js';
 import { diffClientPolicyBundles, summarizePolicyChanges } from '../utils/clientPolicyDiff.js';
+import { buildClientTemplateCsv, buildClientExportCsv, csvRowToClientPayload, parseClientCsvText } from '../utils/clientCsv.js';
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
 
 async function savePolicyWithAudit(clientId, body, actor) {
   const beforeBundle = await fetchClientPolicyBundle(clientId);
@@ -90,19 +97,32 @@ function applyDashboardCounts(target, employeeRow, formRow) {
   if (payrollReviewStatus === 'PAYROLL_REJECTED') target.payroll_rejected += 1;
 }
 
+function parseOpenEnded(body) {
+  if (typeof body.open_ended_contract === 'boolean') return body.open_ended_contract;
+  const raw = String(body.open_ended_contract ?? '').trim().toLowerCase();
+  if (raw === 'true' || raw === '1' || raw === 'yes') return true;
+  if (raw === 'false' || raw === '0' || raw === 'no' || raw === '') return false;
+  return null;
+}
+
 function validateClientPayload(body) {
   const errors = {};
   const required = [
     'client_name',
     'contract_code',
     'contract_start_date',
-    'contract_end_date',
-    'program_manager_id'
+    'program_manager_id',
+    'entity',
+    'state'
   ];
   for (const key of required) {
-    if (body[key] === undefined || body[key] === null || body[key] === '') {
+    if (body[key] === undefined || body[key] === null || String(body[key]).trim() === '') {
       errors[key] = 'required';
     }
+  }
+  const openEnded = parseOpenEnded(body);
+  if (openEnded === null) {
+    errors.open_ended_contract = 'must be boolean';
   }
   if (typeof body.insurance_applicable !== 'boolean') {
     errors.insurance_applicable = 'must be boolean';
@@ -117,9 +137,22 @@ function validateClientPayload(body) {
     if (!body.insurance_name || !String(body.insurance_name).trim()) {
       errors.insurance_name = 'required when insurance is applicable';
     }
+    const amount = body.insurance_amount;
+    if (amount === undefined || amount === null || amount === '') {
+      errors.insurance_amount = 'required when insurance is applicable';
+    } else if (Number.isNaN(Number(amount)) || Number(amount) < 0) {
+      errors.insurance_amount = 'must be a non-negative number';
+    }
   }
-  if (body.contract_start_date && body.contract_end_date) {
-    if (new Date(body.contract_end_date) < new Date(body.contract_start_date)) {
+  if (openEnded === true) {
+    if (body.contract_end_date) {
+      errors.contract_end_date = 'must be empty when contract is open-ended';
+    }
+  } else if (openEnded === false) {
+    if (!body.contract_end_date) {
+      errors.contract_end_date = 'required';
+    } else if (body.contract_start_date
+        && new Date(body.contract_end_date) < new Date(body.contract_start_date)) {
       errors.contract_end_date = 'must be on or after contract_start_date';
     }
   }
@@ -140,6 +173,61 @@ function validateClientPayload(body) {
   validateHolidaysPayload(body.holidays, errors);
 
   return errors;
+}
+
+function buildClientCorePayload(body, { includeCreatedBy = false, createdBy } = {}) {
+  const openEnded = parseOpenEnded(body) === true;
+  const payload = {
+    client_name: String(body.client_name).trim(),
+    contract_code: String(body.contract_code).trim(),
+    entity: String(body.entity).trim(),
+    state: String(body.state).trim(),
+    contract_start_date: body.contract_start_date,
+    contract_end_date: openEnded ? null : body.contract_end_date,
+    open_ended_contract: openEnded,
+    program_manager_id: body.program_manager_id,
+    insurance_applicable: body.insurance_applicable,
+    insurance_name: body.insurance_applicable ? String(body.insurance_name).trim() : null,
+    insurance_amount: body.insurance_applicable ? Number(body.insurance_amount) : null,
+    require_license_upload: body.require_license_upload,
+    require_qualification_certificate_upload: body.require_qualification_certificate_upload
+  };
+  if (includeCreatedBy) payload.created_by = createdBy;
+  return payload;
+}
+
+async function createClientRecord(body, createdBy) {
+  const insertPayload = buildClientCorePayload(body, {
+    includeCreatedBy: true,
+    createdBy
+  });
+
+  const { data: created, error: insertErr } = await supabaseAdmin
+    .from('clients')
+    .insert(insertPayload)
+    .select()
+    .single();
+  if (insertErr) throw insertErr;
+
+  const designations = normalizedDesignations(body.designations);
+  if (designations.length) {
+    const rows = designations.map((name) => ({ client_id: created.id, name }));
+    const { error: desigErr } = await supabaseAdmin.from('designations').insert(rows);
+    if (desigErr) {
+      await supabaseAdmin.from('clients').delete().eq('id', created.id);
+      throw desigErr;
+    }
+  }
+
+  try {
+    await upsertClientPolicyBundle(created.id, body);
+    await ensureBaselinePolicyVersion(created.id);
+  } catch (policyErr) {
+    await supabaseAdmin.from('clients').delete().eq('id', created.id);
+    throw policyErr;
+  }
+
+  return fetchClientWithRelations(created.id);
 }
 
 function normalizedDesignations(input) {
@@ -354,51 +442,107 @@ router.post('/', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid program_manager_id' });
     }
 
-    const insertPayload = {
-      client_name: req.body.client_name.trim(),
-      contract_code: req.body.contract_code.trim(),
-      contract_start_date: req.body.contract_start_date,
-      contract_end_date: req.body.contract_end_date,
-      program_manager_id: req.body.program_manager_id,
-      insurance_applicable: req.body.insurance_applicable,
-      insurance_name: req.body.insurance_applicable ? req.body.insurance_name.trim() : null,
-      require_license_upload: req.body.require_license_upload,
-      require_qualification_certificate_upload: req.body.require_qualification_certificate_upload,
-      created_by: req.user.id
-    };
-
-    const { data: created, error: insertErr } = await supabaseAdmin
-      .from('clients')
-      .insert(insertPayload)
-      .select()
-      .single();
-    if (insertErr) {
-      if (insertErr.code === '23505') {
-        return res.status(409).json({ error: 'contract_code already exists' });
-      }
-      throw insertErr;
-    }
-
-    const designations = normalizedDesignations(req.body.designations);
-    if (designations.length) {
-      const rows = designations.map(name => ({ client_id: created.id, name }));
-      const { error: desigErr } = await supabaseAdmin.from('designations').insert(rows);
-      if (desigErr) {
-        await supabaseAdmin.from('clients').delete().eq('id', created.id);
-        throw desigErr;
-      }
-    }
-
-    try {
-      await upsertClientPolicyBundle(created.id, req.body);
-      await ensureBaselinePolicyVersion(created.id);
-    } catch (policyErr) {
-      await supabaseAdmin.from('clients').delete().eq('id', created.id);
-      throw policyErr;
-    }
-
-    const full = await fetchClientWithRelations(created.id);
+    const full = await createClientRecord(req.body, req.user.id);
     res.status(201).json(full);
+  } catch (err) {
+    if (err?.code === '23505') {
+      return res.status(409).json({ error: 'contract_code already exists' });
+    }
+    next(err);
+  }
+});
+
+router.post('/import', upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file?.buffer) {
+      return res.status(400).json({ error: 'CSV file is required.' });
+    }
+    const text = req.file.buffer.toString('utf8');
+    let rows;
+    try {
+      rows = parseClientCsvText(text);
+    } catch (parseErr) {
+      return res.status(400).json({ error: parseErr.message || 'Could not parse CSV.' });
+    }
+    if (!rows.length) {
+      return res.status(400).json({ error: 'CSV has no data rows.' });
+    }
+
+    const emails = [...new Set(
+      rows
+        .map((r) => String(r.program_manager_email ?? '').trim().toLowerCase())
+        .filter(Boolean)
+    )];
+    const pmByEmail = new Map();
+    if (emails.length) {
+      const { data: pms, error: pmErr } = await supabaseAdmin
+        .from('users')
+        .select('id, email, role')
+        .eq('role', 'PROGRAM_MANAGER');
+      if (pmErr) throw pmErr;
+      for (const pm of pms ?? []) {
+        const key = String(pm.email ?? '').trim().toLowerCase();
+        if (key && emails.includes(key)) pmByEmail.set(key, pm);
+      }
+    }
+
+    let created = 0;
+    let skipped = 0;
+    const errors = [];
+    const createdClients = [];
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const rowNumber = i + 2; // header is row 1
+      try {
+        const payload = csvRowToClientPayload(rows[i]);
+        if (!payload.program_manager_email) {
+          errors.push({ row: rowNumber, error: 'program_manager_email is required' });
+          skipped += 1;
+          continue;
+        }
+        const pm = pmByEmail.get(payload.program_manager_email);
+        if (!pm) {
+          errors.push({
+            row: rowNumber,
+            error: `Unknown program manager email: ${payload.program_manager_email}`
+          });
+          skipped += 1;
+          continue;
+        }
+        const body = {
+          ...payload,
+          program_manager_id: pm.id
+        };
+        const validationErrors = validateClientPayload(body);
+        if (Object.keys(validationErrors).length) {
+          errors.push({ row: rowNumber, error: 'Validation failed', details: validationErrors });
+          skipped += 1;
+          continue;
+        }
+        const full = await createClientRecord(body, req.user.id);
+        created += 1;
+        createdClients.push({
+          id: full.id,
+          client_name: full.client_name,
+          contract_code: full.contract_code
+        });
+      } catch (rowErr) {
+        if (rowErr?.code === '23505') {
+          errors.push({ row: rowNumber, error: 'contract_code already exists' });
+        } else {
+          errors.push({ row: rowNumber, error: rowErr.message || 'Failed to create client' });
+        }
+        skipped += 1;
+      }
+    }
+
+    return res.json({
+      created,
+      skipped,
+      total: rows.length,
+      errors,
+      clients: createdClients
+    });
   } catch (err) {
     next(err);
   }
@@ -433,17 +577,7 @@ router.put('/:id', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid program_manager_id' });
     }
 
-    const updatePayload = {
-      client_name: req.body.client_name.trim(),
-      contract_code: req.body.contract_code.trim(),
-      contract_start_date: req.body.contract_start_date,
-      contract_end_date: req.body.contract_end_date,
-      program_manager_id: req.body.program_manager_id,
-      insurance_applicable: req.body.insurance_applicable,
-      insurance_name: req.body.insurance_applicable ? req.body.insurance_name.trim() : null,
-      require_license_upload: req.body.require_license_upload,
-      require_qualification_certificate_upload: req.body.require_qualification_certificate_upload,
-    };
+    const updatePayload = buildClientCorePayload(req.body);
 
     const { error: updateErr } = await supabaseAdmin
       .from('clients')
@@ -496,6 +630,41 @@ router.put('/:id', async (req, res, next) => {
       attendance_recalculated: attendanceRecalc.sheets_recalculated,
       attendance_recalc_error: attendanceRecalc.recalc_error
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/csv-template', (_req, res) => {
+  const csv = buildClientTemplateCsv();
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="client-creation-template.csv"');
+  return res.send(csv);
+});
+
+router.get('/:id/export', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { data: existing, error: findErr } = await supabaseAdmin
+      .from('clients')
+      .select('id, created_by')
+      .eq('id', id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing || existing.created_by !== req.user.id) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+    const full = await fetchClientWithRelations(id);
+    const csv = buildClientExportCsv(full);
+    const safeCode = String(full.contract_code || 'client')
+      .replace(/[^a-zA-Z0-9_-]+/g, '-')
+      .slice(0, 40);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="client-${safeCode}-export.csv"`
+    );
+    return res.send(csv);
   } catch (err) {
     next(err);
   }

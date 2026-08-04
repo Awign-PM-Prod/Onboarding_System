@@ -16,6 +16,13 @@ export default function LeaveAllowancesTable({ value, onChange, error }) {
     onChange(next);
   };
 
+  const applyRowToAll = (sourceIndex) => {
+    const source = rows[sourceIndex];
+    if (!source) return;
+    const leaveValues = Object.fromEntries(FIELDS.map((f) => [f.key, source[f.key]]));
+    onChange(rows.map((r) => ({ ...r, ...leaveValues })));
+  };
+
   if (!rows.length) {
     return (
       <p className="text-sm text-slate-500">
@@ -24,11 +31,20 @@ export default function LeaveAllowancesTable({ value, onChange, error }) {
     );
   }
 
+  const canApplyToAll = rows.length > 1;
+
   return (
     <div>
-      <label className="block text-sm font-medium text-slate-700 mb-2">
-        Leave Allowances per Role (annual)
-      </label>
+      <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+        <label className="block text-sm font-medium text-slate-700">
+          Leave Allowances per Role (annual)
+        </label>
+        {canApplyToAll && (
+          <p className="text-xs text-slate-500">
+            Fill the first role, then click Apply to all to copy those values to every role.
+          </p>
+        )}
+      </div>
       <div className="overflow-x-auto border border-slate-200 rounded-lg">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-600">
@@ -39,6 +55,11 @@ export default function LeaveAllowancesTable({ value, onChange, error }) {
                   {f.label}
                 </th>
               ))}
+              {canApplyToAll && (
+                <th className="px-2 py-2 font-medium text-right align-middle">
+                  <span className="sr-only">Actions</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -59,6 +80,20 @@ export default function LeaveAllowancesTable({ value, onChange, error }) {
                     </div>
                   </td>
                 ))}
+                {canApplyToAll && (
+                  <td className="px-2 py-1.5 text-right align-middle whitespace-nowrap">
+                    {i === 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => applyRowToAll(0)}
+                        className="text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                        title={`Copy ${row.designation} leave values to all roles`}
+                      >
+                        Apply to all
+                      </button>
+                    ) : null}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

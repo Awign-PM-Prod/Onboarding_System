@@ -164,6 +164,7 @@ export default function PayrollClientPolicyPage() {
             program_manager_id: client.program_manager_id,
             insurance_applicable: client.insurance_applicable,
             insurance_name: client.insurance_applicable ? client.insurance_name : null,
+            insurance_amount: client.insurance_applicable ? client.insurance_amount : null,
             require_license_upload: client.require_license_upload !== false,
             require_qualification_certificate_upload: client.require_qualification_certificate_upload !== false,
             designations,

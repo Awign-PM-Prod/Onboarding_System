@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { formatContractDate, formatDesignationLabel } from '../lib/formatLabels';
+import { formatDesignationLabel } from '../lib/formatLabels';
+import { formatContractPeriod } from '../lib/clientCsv';
 
 const DESIGNATION_PREVIEW_COUNT = 4;
 
@@ -21,6 +22,9 @@ export default function ClientProjectMetaHeader({
   contractCode,
   contractStartDate,
   contractEndDate,
+  openEndedContract = false,
+  entity,
+  state,
   designations = [],
   plApprovedCount = 0,
   plRejectedCount = 0,
@@ -44,8 +48,9 @@ export default function ClientProjectMetaHeader({
       : designationLabels.slice(0, DESIGNATION_PREVIEW_COUNT);
 
   const duration =
-    contractStartDate || contractEndDate
-      ? `${formatContractDate(contractStartDate)} - ${formatContractDate(contractEndDate)}`
+    contractStartDate || contractEndDate || openEndedContract
+      ? formatContractPeriod(contractStartDate, contractEndDate, openEndedContract)
+          .replace(' – ', ' - ')
       : '—';
 
   return (
@@ -65,6 +70,12 @@ export default function ClientProjectMetaHeader({
         <MetaItem label="Contract Code">
           <span className="font-mono">{contractCode || '—'}</span>
         </MetaItem>
+
+        {(entity || state) && (
+          <MetaItem label="Entity / State">
+            {[entity, state].filter(Boolean).join(' · ') || '—'}
+          </MetaItem>
+        )}
 
         <MetaItem label="Duration">{duration}</MetaItem>
 

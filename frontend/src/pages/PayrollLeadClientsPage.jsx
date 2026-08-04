@@ -1,29 +1,33 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { formatContractPeriod } from '../lib/clientCsv';
+import ClientCsvImportModal from '../components/ClientCsvImportModal';
 
-function formatDate(dateStr) {
-  if (!dateStr) return '—';
-  try {
-    return new Date(dateStr).toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
-    });
-  } catch {
-    return dateStr;
-  }
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export default function PayrollLeadClientsPage() {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [search, setSearch] = useState('');
+  const [exportingId, setExportingId] = useState(null);
+  const [showImport, setShowImport] = useState(false);
 
   const load = async () => {
     setLoading(true);
     setError('');
+    setActionError('');
     try {
       const data = await api.listClients();
       setClients(Array.isArray(data) ? data : []);
@@ -38,13 +42,41 @@ export default function PayrollLeadClientsPage() {
     load();
   }, []);
 
+  const downloadTemplate = async () => {
+    setActionError('');
+    try {
+      const blob = await api.downloadClientCsvTemplate();
+      downloadBlob(blob, 'client-creation-template.csv');
+    } catch (err) {
+      setActionError(err.message || 'Could not download CSV template.');
+    }
+  };
+
+  const exportClient = async (client) => {
+    setExportingId(client.id);
+    setActionError('');
+    try {
+      const blob = await api.exportClientCsv(client.id);
+      const safeCode = String(client.contract_code || 'client')
+        .replace(/[^a-zA-Z0-9_-]+/g, '-')
+        .slice(0, 40);
+      downloadBlob(blob, `client-${safeCode}-export.csv`);
+    } catch (err) {
+      setActionError(err.message || 'Could not export client details.');
+    } finally {
+      setExportingId(null);
+    }
+  };
+
   const filtered = clients.filter((c) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return (
       c.client_name?.toLowerCase().includes(q) ||
       c.contract_code?.toLowerCase().includes(q) ||
-      c.program_manager_name?.toLowerCase().includes(q)
+      c.program_manager_name?.toLowerCase().includes(q) ||
+      c.entity?.toLowerCase().includes(q) ||
+      c.state?.toLowerCase().includes(q)
     );
   });
 
@@ -67,6 +99,20 @@ export default function PayrollLeadClientsPage() {
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
+          <button
+            type="button"
+            onClick={downloadTemplate}
+            className="inline-flex shrink-0 items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            CSV Template
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowImport(true)}
+            className="inline-flex shrink-0 items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            Import CSV
+          </button>
           <Link
             to="/clients/new"
             className="inline-flex shrink-0 items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700"
@@ -88,6 +134,12 @@ export default function PayrollLeadClientsPage() {
           <button type="button" onClick={load} className="text-sm underline">
             Retry
           </button>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+          {actionError}
         </div>
       )}
 
@@ -121,6 +173,8 @@ export default function PayrollLeadClientsPage() {
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="px-4 py-2.5 text-left font-medium">Client</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Entity</th>
+                  <th className="px-4 py-2.5 text-left font-medium">State</th>
                   <th className="px-4 py-2.5 text-left font-medium">Contract Code</th>
                   <th className="px-4 py-2.5 text-left font-medium">Program Manager</th>
                   <th className="px-4 py-2.5 text-left font-medium">Contract Period</th>
@@ -145,29 +199,48 @@ export default function PayrollLeadClientsPage() {
                         </p>
                       )}
                     </td>
+                    <td className="px-4 py-3 text-slate-700">{c.entity || '—'}</td>
+                    <td className="px-4 py-3 text-slate-700">{c.state || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-700">
                       {c.contract_code || '—'}
                     </td>
                     <td className="px-4 py-3 text-slate-700">{c.program_manager_name || '—'}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-slate-500">
-                      {formatDate(c.contract_start_date)} – {formatDate(c.contract_end_date)}
+                      {formatContractPeriod(
+                        c.contract_start_date,
+                        c.contract_end_date,
+                        c.open_ended_contract
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {c.insurance_applicable ? (
                         <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
                           {c.insurance_name || 'Yes'}
+                          {c.insurance_amount != null && c.insurance_amount !== ''
+                            ? ` · ₹${Number(c.insurance_amount).toLocaleString('en-IN')}`
+                            : ''}
                         </span>
                       ) : (
                         <span className="text-xs text-slate-400">None</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <Link
-                        to={`/clients/${c.id}/edit`}
-                        className="text-sm font-medium text-slate-600 hover:text-indigo-700 hover:underline"
-                      >
-                        Edit
-                      </Link>
+                      <div className="flex items-center justify-end gap-3">
+                        <button
+                          type="button"
+                          disabled={exportingId === c.id}
+                          onClick={() => exportClient(c)}
+                          className="text-sm font-medium text-slate-600 hover:text-indigo-700 hover:underline disabled:opacity-60"
+                        >
+                          {exportingId === c.id ? 'Exporting…' : 'Export'}
+                        </button>
+                        <Link
+                          to={`/clients/${c.id}/edit`}
+                          className="text-sm font-medium text-slate-600 hover:text-indigo-700 hover:underline"
+                        >
+                          Edit
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -175,6 +248,16 @@ export default function PayrollLeadClientsPage() {
             </table>
           </div>
         </div>
+      )}
+
+      {showImport && (
+        <ClientCsvImportModal
+          onClose={() => setShowImport(false)}
+          onDone={() => {
+            setShowImport(false);
+            load();
+          }}
+        />
       )}
     </main>
   );

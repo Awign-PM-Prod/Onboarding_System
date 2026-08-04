@@ -140,6 +140,14 @@ export const api = {
   listClientPolicyChanges: (id) =>
     request(`/api/clients/${encodeURIComponent(id)}/policy-changes`),
   getPayrollDashboardStats: () => request('/api/clients/dashboard-stats'),
+  downloadClientCsvTemplate: () => fileRequest('/api/clients/csv-template'),
+  exportClientCsv: (id) =>
+    fileRequest(`/api/clients/${encodeURIComponent(id)}/export`),
+  importClientsCsv: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return uploadRequest('/api/clients/import', fd);
+  },
   createClient: (payload) =>
     request('/api/clients', { method: 'POST', body: JSON.stringify(payload) }),
   updateClient: (id, payload) =>

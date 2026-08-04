@@ -1,19 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-
-function formatDate(dateStr) {
-  if (!dateStr) return '—';
-  try {
-    return new Date(dateStr).toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
-    });
-  } catch {
-    return dateStr;
-  }
-}
+import { formatContractPeriod } from '../lib/clientCsv';
 
 export default function PmClientsPage() {
   const [clients, setClients] = useState([]);
@@ -124,7 +112,11 @@ export default function PmClientsPage() {
                       {c.contract_code || '—'}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-slate-500">
-                      {formatDate(c.contract_start_date)} – {formatDate(c.contract_end_date)}
+                      {formatContractPeriod(
+                        c.contract_start_date,
+                        c.contract_end_date,
+                        c.open_ended_contract
+                      )}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       {c.designations?.length > 0 ? (
