@@ -24,11 +24,12 @@ const RELATION_OPTIONS = [
   'Other',
 ];
 const DRIVING_OPTIONS = ['Yes', 'No'];
-const DRIVING_LICENSE_MAX_BYTES = 12 * 1024 * 1024;
-const QUALIFICATION_MAX_BYTES = 12 * 1024 * 1024;
-const KYC_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+const DRIVING_LICENSE_MAX_BYTES = UPLOAD_MAX_BYTES;
+const QUALIFICATION_MAX_BYTES = UPLOAD_MAX_BYTES;
+const KYC_IMAGE_MAX_BYTES = UPLOAD_MAX_BYTES;
 const KYC_IMAGE_HINT = 'Only JPG, JPEG, PNG, WEBP · max 5MB upload · stored optimized to ~150 KB';
-const BP_MAX_BYTES = 12 * 1024 * 1024;
+const BP_MAX_BYTES = UPLOAD_MAX_BYTES;
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const ACCOUNT_NUMBER_REGEX = /^[0-9]{9,18}$/;
@@ -442,7 +443,7 @@ const STEP_PREFIX_RULES = {
   photo: ['bp_']
 };
 const STEP_OPTIONAL_FIELDS = {
-  personal: ['pd_secondary_mobile'],
+  personal: [],
   qualification: ['qual_additional_certificates_url'],
   kyc: [],
   photo: ['bp_esic_number', 'bp_police_verification_url']
@@ -488,6 +489,9 @@ const STEP_ALL_FIELDS = {
     'bp_pf_uan_number',
     'bp_pf_uan_face_auth_screenshot_url',
     'bp_police_verification_url',
+    'bp_nominee_name',
+    'bp_nominee_relation',
+    'bp_nominee_mobile',
   ],
 };
 
@@ -528,6 +532,8 @@ function ContactVerificationField({
   verifyingOtp,
   error,
   normalizeInput,
+  showDemoOtpHint = false,
+  otpSentHint = '',
 }) {
   const displayValue = value ?? '';
   const normalizedValue = typeof normalizeInput === 'function' ? normalizeInput(displayValue) : String(displayValue).trim();
@@ -594,32 +600,14 @@ function ContactVerificationField({
               {verifyingOtp ? 'Verifying…' : 'Verify OTP'}
             </button>
           </div>
-          {import.meta.env.DEV && (
+          {otpSentHint ? (
+            <p className="text-xs text-slate-500">{otpSentHint}</p>
+          ) : showDemoOtpHint && import.meta.env.DEV ? (
             <p className="text-xs text-slate-500">In development, the demo OTP is 123123.</p>
-          )}
+          ) : null}
         </div>
       )}
       {error && <p className="mt-2 text-sm text-rose-600">{error}</p>}
-    </div>
-  );
-}
-
-function AlternateMobileField({ label, required = false, value, onChange }) {
-  return (
-    <div>
-      <label className="mb-1.5 block text-sm font-medium text-slate-700">
-        {label} {required && <span className="text-rose-500">*</span>}
-      </label>
-      <input
-        type="text"
-        inputMode="numeric"
-        maxLength={10}
-        autoComplete="tel"
-        className={fieldClass(false)}
-        placeholder="10-digit alternate mobile number"
-        value={value}
-        onChange={(e) => onChange(normalizeMobile(e.target.value))}
-      />
     </div>
   );
 }
@@ -837,7 +825,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
       throw new Error('Use an image, PDF, or Word document (.doc / .docx).');
     }
     if (file.size > QUALIFICATION_MAX_BYTES) {
-      throw new Error('File must be 12 MB or smaller.');
+      throw new Error('File must be 5 MB or smaller.');
     }
     const { url } = await api.uploadQualificationCertificate({ mobile, employeeId, file, kind });
     return url ?? '';
@@ -1015,7 +1003,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
             accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             uploading={highestDocUploading}
             error={highestDocError}
-            hint="Max file size: 12MB. Supported: image, pdf, .docx"
+            hint="Max file size: 5MB. Supported: image, pdf, .docx"
             url={highestDocUrl}
             uploadedFileName={highestDocFileName}
             onRemove={handleRemoveHighestDocFile}
@@ -1032,7 +1020,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
             accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             uploading={eduUploading}
             error={eduError}
-            hint="Max file size: 12MB. Supported: image, pdf, .docx"
+            hint="Max file size: 5MB. Supported: image, pdf, .docx"
             url={eduUrl}
             uploadedFileName={eduFileName}
             onRemove={handleRemoveEducationFile}
@@ -1052,7 +1040,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
               onChange={handleAdditionalFile}
               className={FILE_INPUT_DASHED_CLASS}
             />
-            <p className="mt-2 text-xs text-slate-500">Max file size: 12MB. Supported: image, pdf, .docx</p>
+            <p className="mt-2 text-xs text-slate-500">Max file size: 5MB. Supported: image, pdf, .docx</p>
           </div>
           {addUploading && <p className="mt-2 text-sm text-slate-600">Uploading…</p>}
           {addError && <p className="mt-2 text-sm text-rose-600">{addError}</p>}
@@ -1891,6 +1879,11 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   const [pfUanScreenshotRemoving, setPfUanScreenshotRemoving] = useState(false);
   const [policeUrl, setPoliceUrl] = useState(() => jobForm.bp_police_verification_url ?? '');
   const [policeFileName, setPoliceFileName] = useState(() => fileNameFromStorageUrl(jobForm.bp_police_verification_url ?? ''));
+  const [nomineeName, setNomineeName] = useState(() => jobForm.bp_nominee_name ?? '');
+  const [nomineeRelation, setNomineeRelation] = useState(() => jobForm.bp_nominee_relation ?? '');
+  const [nomineeMobile, setNomineeMobile] = useState(() =>
+    jobForm.bp_nominee_mobile ? normalizeMobile(jobForm.bp_nominee_mobile) : ''
+  );
   const [photoUp, setPhotoUp] = useState(false);
   const [policeUp, setPoliceUp] = useState(false);
   const [photoRemoving, setPhotoRemoving] = useState(false);
@@ -1926,6 +1919,15 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     const nextPoliceUrl = visible?.has('bp_police_verification_url') ? '' : (jobForm.bp_police_verification_url ?? '');
     setPoliceUrl(nextPoliceUrl);
     setPoliceFileName(visible?.has('bp_police_verification_url') ? '' : fileNameFromStorageUrl(nextPoliceUrl));
+    setNomineeName(visible?.has('bp_nominee_name') ? '' : (jobForm.bp_nominee_name ?? ''));
+    setNomineeRelation(visible?.has('bp_nominee_relation') ? '' : (jobForm.bp_nominee_relation ?? ''));
+    setNomineeMobile(
+      visible?.has('bp_nominee_mobile')
+        ? ''
+        : jobForm.bp_nominee_mobile
+          ? normalizeMobile(jobForm.bp_nominee_mobile)
+          : ''
+    );
     setPhotoErr('');
     setPoliceErr('');
     setPfUanScreenshotErr('');
@@ -1949,7 +1951,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
       return;
     }
     if (file.size > BP_MAX_BYTES) {
-      setPhotoErr('File must be 12 MB or smaller.');
+      setPhotoErr('File must be 5 MB or smaller.');
       return;
     }
     setPhotoErr('');
@@ -1974,7 +1976,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
       return;
     }
     if (file.size > BP_MAX_BYTES) {
-      setPoliceErr('File must be 12 MB or smaller.');
+      setPoliceErr('File must be 5 MB or smaller.');
       return;
     }
     setPoliceErr('');
@@ -2013,7 +2015,11 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   const shouldShow = (field) => !correction?.active || correction.visibleFields.has(field);
   const isRequired = (field, fallbackRequired = false) =>
     correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
-  const canSubmit = !isRequired('bp_passport_photo_url', true) || Boolean(String(photoUrl).trim());
+  const canSubmit =
+    (!isRequired('bp_passport_photo_url', true) || Boolean(String(photoUrl).trim())) &&
+    (!isRequired('bp_nominee_name', true) || String(nomineeName).trim().length >= 2) &&
+    (!isRequired('bp_nominee_relation', true) || String(nomineeRelation).trim().length >= 2) &&
+    (!isRequired('bp_nominee_mobile', true) || TEN_DIGIT_REGEX.test(normalizeMobile(nomineeMobile)));
   const pfUanRequired = isRequired('bp_pf_uan_number', true);
   const showPfUanWorkflow =
     hasPfUan === 'yes' ||
@@ -2039,7 +2045,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
       return;
     }
     if (file.size > BP_MAX_BYTES) {
-      setPfUanScreenshotErr('File must be 12 MB or smaller.');
+      setPfUanScreenshotErr('File must be 5 MB or smaller.');
       return;
     }
     setPfUanScreenshotErr('');
@@ -2062,6 +2068,21 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
 
   const handleSubmit = async () => {
     if (!canSubmit || saving || hasPfUanChoiceError || pfUanError || pfUanScreenshotError) return;
+    const nomineeNameTrim = String(nomineeName).trim();
+    const nomineeRelationTrim = String(nomineeRelation).trim();
+    const nomineeMobileNorm = normalizeMobile(nomineeMobile);
+    if (isRequired('bp_nominee_name', true) && nomineeNameTrim.length < 2) {
+      setError('Nominee name is required.');
+      return;
+    }
+    if (isRequired('bp_nominee_relation', true) && nomineeRelationTrim.length < 2) {
+      setError('Nominee relation is required.');
+      return;
+    }
+    if (isRequired('bp_nominee_mobile', true) && !TEN_DIGIT_REGEX.test(nomineeMobileNorm)) {
+      setError('Nominee mobile number must be 10 digits.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -2074,6 +2095,9 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         bp_pf_uan_number: pfUan,
         bp_pf_uan_face_auth_screenshot_url: String(pfUanScreenshotUrl).trim(),
         bp_police_verification_url: String(policeUrl).trim() || null,
+        bp_nominee_name: nomineeNameTrim,
+        bp_nominee_relation: nomineeRelationTrim,
+        bp_nominee_mobile: nomineeMobileNorm,
       });
       setSubmitted(true);
       onSubmitted?.(form);
@@ -2132,7 +2156,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
             accept="image/*"
             uploading={photoUp}
             error={photoErr}
-            hint="Max file size: 12MB. Supported: image/*"
+            hint="Max file size: 5MB. Supported: image/*"
             url={photoUrl}
             uploadedFileName={photoFileName}
             onRemove={() => handleRemoveBankPhotoDocument({
@@ -2148,7 +2172,12 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
           />
         )}
 
-        {(shouldShow('bp_esic_number') || shouldShow('bp_pf_uan_number') || shouldShow('bp_police_verification_url')) && (
+        {(shouldShow('bp_esic_number') ||
+          shouldShow('bp_pf_uan_number') ||
+          shouldShow('bp_police_verification_url') ||
+          shouldShow('bp_nominee_name') ||
+          shouldShow('bp_nominee_relation') ||
+          shouldShow('bp_nominee_mobile')) && (
         <div className="space-y-5">
             {shouldShow('bp_esic_number') && <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="bp-esic">
@@ -2234,7 +2263,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                         accept="image/*"
                         uploading={pfUanScreenshotUp}
                         error={pfUanScreenshotErr || pfUanScreenshotError}
-                        hint="Screenshot only · max 12MB · image (JPG, PNG, etc.)"
+                        hint="Screenshot only · max 5MB · image (JPG, PNG, etc.)"
                         url={pfUanScreenshotUrl}
                         uploadedFileName={pfUanScreenshotFileName}
                         onRemove={() => handleRemoveBankPhotoDocument({
@@ -2261,7 +2290,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                 accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 uploading={policeUp}
                 error={policeErr}
-                hint="Max file size: 12MB. Supported: Image, pdf, .docx"
+                hint="Max file size: 5MB. Supported: Image, pdf, .docx"
                 url={policeUrl}
                 uploadedFileName={policeFileName}
                 onRemove={() => handleRemoveBankPhotoDocument({
@@ -2275,6 +2304,62 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                 removing={policeRemoving}
                 onChange={handlePoliceFile}
               />
+            )}
+            {(shouldShow('bp_nominee_name') ||
+              shouldShow('bp_nominee_relation') ||
+              shouldShow('bp_nominee_mobile')) && (
+              <div className="space-y-4 border-t border-slate-200 pt-5">
+                <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-700">E-Nomination</h4>
+                {shouldShow('bp_nominee_name') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-nominee-name">
+                      Nominee Name {isRequired('bp_nominee_name', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input
+                      id="bp-nominee-name"
+                      type="text"
+                      className={fieldClass(false)}
+                      placeholder="Enter nominee full name"
+                      value={nomineeName}
+                      onChange={(e) => setNomineeName(e.target.value)}
+                      autoComplete="name"
+                    />
+                  </div>
+                )}
+                {shouldShow('bp_nominee_relation') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800">
+                      Relation with Nominee{' '}
+                      {isRequired('bp_nominee_relation', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <FormSelect
+                      value={nomineeRelation}
+                      placeholder="Select Relation"
+                      options={RELATION_OPTIONS}
+                      onChange={setNomineeRelation}
+                    />
+                  </div>
+                )}
+                {shouldShow('bp_nominee_mobile') && (
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-800" htmlFor="bp-nominee-mobile">
+                      Nominee Mobile Number{' '}
+                      {isRequired('bp_nominee_mobile', true) && <span className="text-rose-500">*</span>}
+                    </label>
+                    <input
+                      id="bp-nominee-mobile"
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={10}
+                      className={fieldClass(false)}
+                      placeholder="10-digit nominee mobile number"
+                      value={nomineeMobile}
+                      onChange={(e) => setNomineeMobile(normalizeMobile(e.target.value))}
+                      autoComplete="tel"
+                    />
+                  </div>
+                )}
+              </div>
             )}
         </div>
         )}
@@ -2341,6 +2426,17 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   const [emailSending, setEmailSending] = useState(false);
   const [emailVerifying, setEmailVerifying] = useState(false);
   const [emailVerifyError, setEmailVerifyError] = useState('');
+  const [secondaryMobileVerified, setSecondaryMobileVerified] = useState(
+    () =>
+      jobForm.pd_secondary_mobile_verified === true &&
+      TEN_DIGIT_REGEX.test(normalizeMobile(jobForm.pd_secondary_mobile))
+  );
+  const [secondaryMobileOtp, setSecondaryMobileOtp] = useState('');
+  const [secondaryMobileOtpSent, setSecondaryMobileOtpSent] = useState(false);
+  const [secondaryMobileOtpHint, setSecondaryMobileOtpHint] = useState('');
+  const [secondaryMobileSending, setSecondaryMobileSending] = useState(false);
+  const [secondaryMobileVerifying, setSecondaryMobileVerifying] = useState(false);
+  const [secondaryMobileVerifyError, setSecondaryMobileVerifyError] = useState('');
 
   useEffect(() => {
     const base = buildPersonalDraft(jobForm);
@@ -2383,6 +2479,14 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       jobForm.email_verified === true &&
         EMAIL_REGEX.test(normalizeEmail(base.email)) &&
         !(correction?.active && correction.visibleFields.has('email'))
+    );
+    setSecondaryMobileOtp('');
+    setSecondaryMobileOtpSent(false);
+    setSecondaryMobileVerifyError('');
+    setSecondaryMobileVerified(
+      jobForm.pd_secondary_mobile_verified === true &&
+        TEN_DIGIT_REGEX.test(normalizeMobile(base.pd_secondary_mobile)) &&
+        !(correction?.active && correction.visibleFields.has('pd_secondary_mobile'))
     );
   }, [jobForm, correction]);
 
@@ -2441,9 +2545,8 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
 
   const requiredOk =
     (!isRequired('email', true) || (EMAIL_REGEX.test(normalizeEmail(draft.email)) && emailVerified)) &&
-    (!isRequired('pd_secondary_mobile', false) ||
-      !normalizeMobile(draft.pd_secondary_mobile) ||
-      TEN_DIGIT_REGEX.test(normalizeMobile(draft.pd_secondary_mobile))) &&
+    (!isRequired('pd_secondary_mobile', true) ||
+      (TEN_DIGIT_REGEX.test(normalizeMobile(draft.pd_secondary_mobile)) && secondaryMobileVerified)) &&
     (!isRequired('pd_father_name', true) || fatherName) &&
     (!isRequired('pd_mother_name', true) || motherName) &&
     (!isRequired('pd_spouse_name', true) || !isMarried || spouseName) &&
@@ -2499,6 +2602,64 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
     }
   };
 
+  const handleSendSecondaryMobileOtp = async () => {
+    const secondaryMobile = normalizeMobile(draft.pd_secondary_mobile);
+    if (!TEN_DIGIT_REGEX.test(secondaryMobile) || secondaryMobileSending) return;
+    if (secondaryMobile === normalizeMobile(mobile)) {
+      setSecondaryMobileVerifyError('Alternate mobile must be different from your primary mobile number.');
+      return;
+    }
+    setSecondaryMobileSending(true);
+    setSecondaryMobileVerifyError('');
+    try {
+      const result = await api.sendSecondaryMobileOtp({ mobile, employeeId, secondaryMobile });
+      setSecondaryMobileOtpSent(true);
+      setSecondaryMobileOtp('');
+      setSecondaryMobileVerified(false);
+      setSecondaryMobileOtpHint(result?.message || 'OTP sent to this number on WhatsApp.');
+    } catch (err) {
+      setSecondaryMobileOtpSent(false);
+      setSecondaryMobileOtpHint('');
+      setSecondaryMobileVerifyError(err.message || 'Could not send OTP.');
+    } finally {
+      setSecondaryMobileSending(false);
+    }
+  };
+
+  const handleVerifySecondaryMobileOtp = async () => {
+    const secondaryMobile = normalizeMobile(draft.pd_secondary_mobile);
+    if (
+      !TEN_DIGIT_REGEX.test(secondaryMobile) ||
+      !SIX_DIGIT_REGEX.test(secondaryMobileOtp) ||
+      secondaryMobileVerifying
+    ) {
+      return;
+    }
+    setSecondaryMobileVerifying(true);
+    setSecondaryMobileVerifyError('');
+    try {
+      const result = await api.verifySecondaryMobileOtp({
+        mobile,
+        employeeId,
+        secondaryMobile,
+        otp: secondaryMobileOtp,
+      });
+      if (result?.form) {
+        setDraft((d) => ({
+          ...d,
+          pd_secondary_mobile: normalizeMobile(result.form.pd_secondary_mobile ?? secondaryMobile),
+        }));
+      }
+      setSecondaryMobileVerified(true);
+      setSecondaryMobileOtpSent(false);
+      setSecondaryMobileOtp('');
+    } catch (err) {
+      setSecondaryMobileVerifyError(err.message || 'Could not verify OTP.');
+    } finally {
+      setSecondaryMobileVerifying(false);
+    }
+  };
+
   const handleLicenseFile = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -2508,7 +2669,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       return;
     }
     if (file.size > DRIVING_LICENSE_MAX_BYTES) {
-      setLicenseError('File must be 12 MB or smaller.');
+      setLicenseError('File must be 5 MB or smaller.');
       return;
     }
     setLicenseError('');
@@ -2564,7 +2725,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           return;
         }
       }
-      if (secondaryMobile || isRequired('pd_secondary_mobile', false)) {
+      if (isRequired('pd_secondary_mobile', true)) {
         if (!TEN_DIGIT_REGEX.test(secondaryMobile)) {
           setError('Alternate mobile number must be 10 digits.');
           setSaving(false);
@@ -2577,6 +2738,11 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
         }
         if (secondaryMobile === alt) {
           setError('Alternate mobile must be different from emergency contact number.');
+          setSaving(false);
+          return;
+        }
+        if (!secondaryMobileVerified) {
+          setError('Please verify your alternate mobile number before continuing.');
           setSaving(false);
           return;
         }
@@ -2701,15 +2867,39 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               sendingOtp={emailSending}
               verifyingOtp={emailVerifying}
               error={emailVerifyError}
+              showDemoOtpHint
               normalizeInput={normalizeEmail}
             />
           )}
           {shouldShow('pd_secondary_mobile') && (
-            <AlternateMobileField
+            <ContactVerificationField
               label="Alternate Mobile Number"
-              required={isRequired('pd_secondary_mobile', false)}
+              required={isRequired('pd_secondary_mobile', true)}
               value={draft.pd_secondary_mobile}
-              onChange={(next) => setDraft((d) => ({ ...d, pd_secondary_mobile: next }))}
+              onValueChange={(next) => {
+                setDraft((d) => ({ ...d, pd_secondary_mobile: next }));
+                setSecondaryMobileVerified(false);
+                setSecondaryMobileOtpSent(false);
+                setSecondaryMobileOtp('');
+                setSecondaryMobileOtpHint('');
+                setSecondaryMobileVerifyError('');
+              }}
+              verified={secondaryMobileVerified}
+              inputType="text"
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="10-digit alternate mobile number"
+              hint="OTP is sent to this number on WhatsApp."
+              otp={secondaryMobileOtp}
+              onOtpChange={setSecondaryMobileOtp}
+              otpSent={secondaryMobileOtpSent}
+              otpSentHint={secondaryMobileOtpHint}
+              onSendOtp={handleSendSecondaryMobileOtp}
+              onVerifyOtp={handleVerifySecondaryMobileOtp}
+              sendingOtp={secondaryMobileSending}
+              verifyingOtp={secondaryMobileVerifying}
+              error={secondaryMobileVerifyError}
+              normalizeInput={normalizeMobile}
             />
           )}
           {(shouldShow('pd_father_name') || shouldShow('pd_mother_name') || (isMarried && shouldShow('pd_spouse_name'))) && (
@@ -2920,7 +3110,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               accept="image/*"
               uploading={licenseUploading}
               error={licenseError}
-              hint="Max file size: 12MB. Supported: image/*"
+              hint="Max file size: 5MB. Supported: image/*"
               url={licenseImageUrl}
               uploadedFileName={licenseFileName}
               onRemove={handleRemoveLicenseFile}
@@ -3032,10 +3222,34 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               <IconCheckCircle className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
             </div>
           </div>
-          <AlternateMobileField
+          <ContactVerificationField
             label="Alternate Mobile Number"
+            required
             value={draft.pd_secondary_mobile}
-            onChange={(next) => setDraft((d) => ({ ...d, pd_secondary_mobile: next }))}
+            onValueChange={(next) => {
+              setDraft((d) => ({ ...d, pd_secondary_mobile: next }));
+              setSecondaryMobileVerified(false);
+              setSecondaryMobileOtpSent(false);
+              setSecondaryMobileOtp('');
+              setSecondaryMobileOtpHint('');
+              setSecondaryMobileVerifyError('');
+            }}
+            verified={secondaryMobileVerified}
+            inputType="text"
+            inputMode="numeric"
+            maxLength={10}
+            placeholder="10-digit alternate mobile number"
+            hint="OTP is sent to this number on WhatsApp."
+            otp={secondaryMobileOtp}
+            onOtpChange={setSecondaryMobileOtp}
+            otpSent={secondaryMobileOtpSent}
+            otpSentHint={secondaryMobileOtpHint}
+            onSendOtp={handleSendSecondaryMobileOtp}
+            onVerifyOtp={handleVerifySecondaryMobileOtp}
+            sendingOtp={secondaryMobileSending}
+            verifyingOtp={secondaryMobileVerifying}
+            error={secondaryMobileVerifyError}
+            normalizeInput={normalizeMobile}
           />
           <ContactVerificationField
             label="Email Address"
@@ -3059,6 +3273,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             sendingOtp={emailSending}
             verifyingOtp={emailVerifying}
             error={emailVerifyError}
+            showDemoOtpHint
             normalizeInput={normalizeEmail}
           />
           <div>
@@ -3183,7 +3398,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               accept="image/*"
               uploading={licenseUploading}
               error={licenseError}
-              hint="Max file size: 12MB. Supported: image/* (JPEG, PNG, WebP, GIF, HEIC, etc.)"
+              hint="Max file size: 5MB. Supported: image/* (JPEG, PNG, WebP, GIF, HEIC, etc.)"
               url={licenseImageUrl}
               uploadedFileName={licenseFileName}
               onRemove={handleRemoveLicenseFile}

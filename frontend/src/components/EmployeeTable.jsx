@@ -5,11 +5,16 @@ import {
 } from '../lib/employeeStatusBadge';
 import { formatDesignationLabel } from '../lib/formatLabels';
 
-function formatCtc(type, value) {
-  if (!type || value === null || value === undefined || value === '') return '-';
+function formatPayAmount(payType, period, value) {
+  if (value === null || value === undefined || value === '') return '-';
   const v = Number(value ?? 0);
+  if (!Number.isFinite(v)) return '-';
   const formatted = new Intl.NumberFormat('en-IN').format(v);
-  return type === 'ANNUAL' ? `${formatted} / yr` : `${formatted} / mo`;
+  const kind = String(payType ?? '').toUpperCase();
+  if (kind === 'NET_PAY') return `${formatted} (Net Pay)`;
+  if (!period) return kind === 'CTC' ? `${formatted} (CTC)` : formatted;
+  const periodLabel = period === 'ANNUAL' ? '/ yr' : '/ mo';
+  return kind === 'CTC' ? `${formatted} ${periodLabel} (CTC)` : `${formatted} ${periodLabel}`;
 }
 
 function IconEye({ className }) {
@@ -101,12 +106,22 @@ export default function EmployeeTable({
               </th>
             )}
             <th className="px-4 py-2 text-left font-medium">Name</th>
+            <th className="min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium">Reference ID</th>
             <th className="px-4 py-2 text-left font-medium">Emp Code</th>
             <th className="px-4 py-2 text-left font-medium">Mobile</th>
             <th className="px-4 py-2 text-left font-medium">Email</th>
             {showJobColumns && <th className="px-4 py-2 text-left font-medium">Designation</th>}
-            {showJobColumns && <th className="px-4 py-2 text-left font-medium">DOJ</th>}
-            {showJobColumns && <th className="px-4 py-2 text-left font-medium">CTC</th>}
+            {showJobColumns && (
+              <th className="min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium">
+                Expected Date of Joining
+              </th>
+            )}
+            {showJobColumns && (
+              <th className="min-w-[150px] whitespace-nowrap px-4 py-2 text-left font-medium">
+                CTC / Net Pay
+              </th>
+            )}
+            {showJobColumns && <th className="px-4 py-2 text-left font-medium">State</th>}
             {showStatusColumn && <th className="px-4 py-2 text-left font-medium">{statusColumnLabel}</th>}
             {showDateColumn && (
               <th className="min-w-[180px] whitespace-nowrap px-4 py-2 text-left font-medium">{dateColumnLabel}</th>
@@ -129,14 +144,17 @@ export default function EmployeeTable({
         <tbody className="divide-y divide-slate-100">
           {rows.map((r) => {
             const checked = selectedIds.has(r.id);
+            const payType = String(r.pay_type ?? '').trim().toUpperCase();
             const missingRoleDetails =
               showNotAssignedForMissingRoleDetails &&
               (!String(r.designation ?? '').trim() ||
                 !String(r.date_of_joining ?? '').trim() ||
-                !String(r.ctc_type ?? '').trim() ||
+                !payType ||
+                (payType === 'CTC' && !String(r.ctc_type ?? '').trim()) ||
                 r.ctc_value === null ||
                 r.ctc_value === undefined ||
-                String(r.ctc_value).trim() === '');
+                String(r.ctc_value).trim() === '' ||
+                !String(r.state ?? '').trim());
 
             let statusLabel = resolveEmployeeStatusLabel(r, {
               forceNotSent: forceNotSentStatusForMissingRoleDetails,
@@ -167,6 +185,9 @@ export default function EmployeeTable({
                   </td>
                 )}
                 <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
+                <td className="min-w-[140px] whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
+                  {r.reference_id || '—'}
+                </td>
                 <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.emp_code || '—'}</td>
                 <td className="px-4 py-3 text-slate-700">{r.mobile}</td>
                 <td className="px-4 py-3 text-slate-700">{r.email}</td>
@@ -179,10 +200,17 @@ export default function EmployeeTable({
                     )}
                   </td>
                 )}
-                {showJobColumns && <td className="px-4 py-3 text-slate-700">{r.date_of_joining || '-'}</td>}
                 {showJobColumns && (
-                  <td className="px-4 py-3 text-slate-700">{formatCtc(r.ctc_type, r.ctc_value)}</td>
+                  <td className="min-w-[140px] whitespace-nowrap px-4 py-3 text-slate-700">
+                    {r.date_of_joining || '-'}
+                  </td>
                 )}
+                {showJobColumns && (
+                  <td className="min-w-[150px] whitespace-nowrap px-4 py-3 text-slate-700">
+                    {formatPayAmount(r.pay_type, r.ctc_type, r.ctc_value)}
+                  </td>
+                )}
+                {showJobColumns && <td className="px-4 py-3 text-slate-700">{r.state || '-'}</td>}
                 {showStatusColumn && (
                   <td className="px-4 py-3">
                     <span

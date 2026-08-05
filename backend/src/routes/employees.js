@@ -4,6 +4,7 @@ import Papa from 'papaparse';
 import readXlsxFile, { parseExcelDate } from 'read-excel-file/node';
 import { supabaseAdmin } from '../supabase.js';
 import { buildJobAppFormExportCsv } from '../jobAppFormExport.js';
+import { normalizeIndianState } from '../utils/indianStates.js';
 
 const router = Router();
 
@@ -15,9 +16,14 @@ const SEND_ONBOARDING_EMAIL_EDGE_FUNCTION =
   process.env.SEND_ONBOARDING_EMAIL_EDGE_FUNCTION || 'send-onboarding-email';
 const SEND_ONBOARDING_WHATSAPP_EDGE_FUNCTION =
   process.env.SEND_ONBOARDING_WHATSAPP_EDGE_FUNCTION || 'send-onboarding-whatsapp';
+const SEND_REVIEW_STATUS_EMAIL_EDGE_FUNCTION =
+  process.env.SEND_REVIEW_STATUS_EMAIL_EDGE_FUNCTION || 'send-attendance-email';
 const WHATSAPP_COUNTRY_CODE = String(process.env.WHATSAPP_COUNTRY_CODE || '91').replace(/\D/g, '') || '91';
 const FRONTEND_URL = String(process.env.FRONTEND_URL || 'http://localhost:8088').trim() || 'http://localhost:8088';
 const ONBOARDING_EMAIL_SUBJECT = 'Complete your onboarding with Awign';
+const REVIEW_CORRECTION_EMAIL_SUBJECT = 'Action required: correct your onboarding form';
+const REVIEW_REJECT_EMAIL_SUBJECT = 'Update on your onboarding application';
+const REVIEW_BOTH_APPROVED_EMAIL_SUBJECT = 'Your onboarding application has been approved';
 
 function buildOnboardingFormLink(employeeId) {
   const trimmedId = String(employeeId ?? '').trim();
@@ -30,6 +36,171 @@ function buildOnboardingFormLink(employeeId) {
     const base = FRONTEND_URL.replace(/\/+$/, '');
     return `${base}/onboardingform?employee_id=${encodeURIComponent(trimmedId)}`;
   }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildReviewStatusEmail({ kind, name, reason, formLink }) {
+  const safeName = escapeHtml(name || 'there');
+  const safeReason = escapeHtml(reason || 'No reason provided.');
+  const safeLink = escapeHtml(formLink || '');
+
+  if (kind === 'CORRECTION_REQUESTED') {
+    return {
+      subject: REVIEW_CORRECTION_EMAIL_SUBJECT,
+      html: `
+        <p>Hi ${safeName},</p>
+        <p>Your onboarding application needs corrections before it can proceed.</p>
+        <p><strong>Reason:</strong> ${safeReason}</p>
+        <p>Please open your form, update the marked fields, and resubmit.</p>
+        <p><a href="${safeLink}">Open onboarding form</a></p>
+        <p>- Team Awign</p>
+      `.trim(),
+      text: [
+        `Hi ${name || 'there'},`,
+        '',
+        'Your onboarding application needs corrections before it can proceed.',
+        `Reason: ${reason || 'No reason provided.'}`,
+        '',
+        'Please open your form, update the marked fields, and resubmit.',
+        formLink || '',
+        '',
+        '- Team Awign'
+      ].join('\n')
+    };
+  }
+
+  if (kind === 'PM_REJECTED') {
+    return {
+      subject: REVIEW_REJECT_EMAIL_SUBJECT,
+      html: `
+        <p>Hi ${safeName},</p>
+        <p>Your onboarding application has been rejected by the Program Manager.</p>
+        <p><strong>Reason:</strong> ${safeReason}</p>
+        <p>If you have questions, please contact your Program Manager.</p>
+        <p>- Team Awign</p>
+      `.trim(),
+      text: [
+        `Hi ${name || 'there'},`,
+        '',
+        'Your onboarding application has been rejected by the Program Manager.',
+        `Reason: ${reason || 'No reason provided.'}`,
+        '',
+        'If you have questions, please contact your Program Manager.',
+        '',
+        '- Team Awign'
+      ].join('\n')
+    };
+  }
+
+  if (kind === 'PL_REJECTED') {
+    return {
+      subject: REVIEW_REJECT_EMAIL_SUBJECT,
+      html: `
+        <p>Hi ${safeName},</p>
+        <p>Your onboarding application has been rejected by the Payroll Lead.</p>
+        <p><strong>Reason:</strong> ${safeReason}</p>
+        <p>Your Program Manager will follow up. Please wait for further instructions before making changes.</p>
+        <p>- Team Awign</p>
+      `.trim(),
+      text: [
+        `Hi ${name || 'there'},`,
+        '',
+        'Your onboarding application has been rejected by the Payroll Lead.',
+        `Reason: ${reason || 'No reason provided.'}`,
+        '',
+        'Your Program Manager will follow up. Please wait for further instructions before making changes.',
+        '',
+        '- Team Awign'
+      ].join('\n')
+    };
+  }
+
+  // BOTH_APPROVED
+  return {
+    subject: REVIEW_BOTH_APPROVED_EMAIL_SUBJECT,
+    html: `
+      <p>Hi ${safeName},</p>
+      <p>Good news — your onboarding application has been approved by both the Program Manager and the Payroll Lead.</p>
+      <p>No further action is required from you at this time.</p>
+      <p>- Team Awign</p>
+    `.trim(),
+    text: [
+      `Hi ${name || 'there'},`,
+      '',
+      'Good news — your onboarding application has been approved by both the Program Manager and the Payroll Lead.',
+      '',
+      'No further action is required from you at this time.',
+      '',
+      '- Team Awign'
+    ].join('\n')
+  };
+}
+
+async function invokeReviewStatusEmail({ toEmail, toName, subject, html, text }) {
+  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    console.warn('[review-status-email] Missing Supabase env; skipping email send');
+    return { skipped: true };
+  }
+  if (!toEmail) return { skipped: true, reason: 'no_recipient' };
+
+  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(SEND_REVIEW_STATUS_EMAIL_EDGE_FUNCTION)}`;
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        subject,
+        recipients: [{ name: toName || '', email: toEmail, html, text }]
+      })
+    });
+    const raw = await resp.text();
+    let body = null;
+    try {
+      body = raw ? JSON.parse(raw) : null;
+    } catch {
+      body = null;
+    }
+    if (!resp.ok) {
+      console.warn('[review-status-email] Edge failed', body?.error || resp.status);
+      return { ok: false, error: body?.error || `Edge failed (${resp.status})` };
+    }
+    return { ok: true, body };
+  } catch (err) {
+    console.warn('[review-status-email] invoke error', err?.message || err);
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+async function notifyEmployeeReviewStatus({ employee, formEmail, kind, reason, employeeId }) {
+  const toEmail = String(employee?.email || formEmail || '').trim();
+  const toName = String(employee?.name || '').trim();
+  if (!toEmail) {
+    console.warn('[review-status-email] No recipient email; skipping', { employeeId, kind });
+    return { skipped: true, reason: 'no_recipient' };
+  }
+  const formLink = kind === 'CORRECTION_REQUESTED' ? buildOnboardingFormLink(employeeId) : null;
+  const content = buildReviewStatusEmail({ kind, name: toName, reason, formLink });
+  return invokeReviewStatusEmail({
+    toEmail,
+    toName,
+    subject: content.subject,
+    html: content.html,
+    text: content.text
+  });
 }
 
 async function invokeSendOnboardingEmailEdge({ recipients }) {
@@ -173,15 +344,27 @@ function validateRoleDetails(raw, designationSet) {
   const errors = [];
   const designation = String(raw.designation ?? '').trim();
   const doj = String(raw.date_of_joining ?? '').trim();
-  const ctcType = String(raw.ctc_type ?? '').trim().toUpperCase();
+  const payType = String(raw.pay_type ?? '').trim().toUpperCase();
+  const ctcTypeRaw = String(raw.ctc_type ?? '').trim().toUpperCase();
   const ctcValueRaw = raw.ctc_value;
+  const state = normalizeIndianState(raw.state);
 
   if (!designation) errors.push('designation required');
-  if (!doj) errors.push('date_of_joining required');
-  if (!['MONTHLY', 'ANNUAL'].includes(ctcType)) errors.push('ctc_type must be MONTHLY or ANNUAL');
+  if (!doj) errors.push('date_of_joining (expected date of joining) required');
+  if (!['CTC', 'NET_PAY'].includes(payType)) errors.push('pay_type must be CTC or NET_PAY');
+
+  let ctcType = null;
+  if (payType === 'CTC') {
+    ctcType = ctcTypeRaw;
+    if (!['MONTHLY', 'ANNUAL'].includes(ctcType)) {
+      errors.push('ctc_type must be MONTHLY or ANNUAL for CTC');
+    }
+  }
+
   const ctcValue = Number(ctcValueRaw);
   if (!Number.isFinite(ctcValue) || ctcValue < 0) errors.push('ctc_value must be a non-negative number');
   if (doj && Number.isNaN(Date.parse(doj))) errors.push('date_of_joining must be a valid date');
+  if (!state) errors.push('state is required and must be a valid Indian state/UT');
   if (designation && !designationSet.has(designation.toLowerCase())) {
     errors.push(`designation "${designation}" is not defined on this client`);
   }
@@ -190,8 +373,10 @@ function validateRoleDetails(raw, designationSet) {
     roleDetails: {
       designation,
       date_of_joining: doj,
+      pay_type: payType,
       ctc_type: ctcType,
-      ctc_value: ctcValue
+      ctc_value: ctcValue,
+      state
     }
   };
 }
@@ -238,7 +423,10 @@ const REVIEWABLE_JOB_FORM_FIELDS = [
   'bp_esic_number',
   'bp_pf_uan_number',
   'bp_pf_uan_face_auth_screenshot_url',
-  'bp_police_verification_url'
+  'bp_police_verification_url',
+  'bp_nominee_name',
+  'bp_nominee_relation',
+  'bp_nominee_mobile',
 ];
 const CORRECTION_EDITABLE_FIELDS = new Set([
   'email',
@@ -267,7 +455,10 @@ const CORRECTION_EDITABLE_FIELDS = new Set([
   'bp_esic_number',
   'bp_pf_uan_number',
   'bp_pf_uan_face_auth_screenshot_url',
-  'bp_police_verification_url'
+  'bp_police_verification_url',
+  'bp_nominee_name',
+  'bp_nominee_relation',
+  'bp_nominee_mobile',
 ]);
 const REVIEW_DECISIONS = new Set(['APPROVED', 'REJECTED', 'CORRECTION_REQUESTED']);
 const PAYROLL_FORM_REVIEW_DECISIONS = new Set(['APPROVED', 'REJECTED']);
@@ -351,6 +542,9 @@ function buildReinitiateFormResetPayload(nowIso) {
     bp_pf_uan_number: null,
     bp_pf_uan_face_auth_screenshot_url: null,
     bp_police_verification_url: null,
+    bp_nominee_name: null,
+    bp_nominee_relation: null,
+    bp_nominee_mobile: null,
     submission_status: null,
     submission_attempt_count: 1,
     review_status: null,
@@ -474,12 +668,79 @@ async function fetchExistingEmpCodes(codes) {
   return new Set((data ?? []).map((r) => r.emp_code).filter(Boolean));
 }
 
+const REFERENCE_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function buildReferenceIdToken() {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  let suffix = '';
+  for (let i = 0; i < 6; i += 1) {
+    suffix += REFERENCE_ID_ALPHABET[Math.floor(Math.random() * REFERENCE_ID_ALPHABET.length)];
+  }
+  return `APP-${y}${m}${d}-${suffix}`;
+}
+
+async function allocateReferenceIds(count) {
+  const needed = Math.max(0, Number(count) || 0);
+  if (needed === 0) return [];
+
+  const allocated = [];
+  const seen = new Set();
+  let guard = 0;
+  while (allocated.length < needed && guard < needed * 20 + 50) {
+    guard += 1;
+    const candidate = buildReferenceIdToken();
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    allocated.push(candidate);
+  }
+  if (allocated.length < needed) {
+    throw new Error('Could not allocate unique reference ids');
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('employees')
+    .select('reference_id')
+    .in('reference_id', allocated);
+  if (error) throw error;
+  const existing = new Set((data ?? []).map((r) => r.reference_id).filter(Boolean));
+  if (existing.size === 0) return allocated;
+
+  const fresh = allocated.filter((id) => !existing.has(id));
+  if (fresh.length === needed) return fresh;
+  const more = await allocateReferenceIds(needed - fresh.length);
+  return [...fresh, ...more];
+}
+
+function requiresEmpCodeForJoiningStatus(status) {
+  const s = String(status ?? '').trim().toUpperCase();
+  return s === 'JOINED' || s === 'JOINED_OTHER_DATE';
+}
+
+function normalizeEmpCode(raw) {
+  return String(raw ?? '').trim();
+}
+
+async function assertEmpCodeAvailable(empCode, { excludeEmployeeId = null } = {}) {
+  const code = normalizeEmpCode(empCode);
+  if (!code) return { ok: false, error: 'emp_code is required for Joined status.' };
+  let query = supabaseAdmin.from('employees').select('id').eq('emp_code', code).limit(1);
+  if (excludeEmployeeId) query = query.neq('id', excludeEmployeeId);
+  const { data, error } = await query;
+  if (error) throw error;
+  if ((data ?? []).length > 0) {
+    return { ok: false, error: `emp_code "${code}" already exists`, status: 409 };
+  }
+  return { ok: true, empCode: code };
+}
+
 function validateEmployeeRow(raw, designationSet) {
   const errors = [];
   const name = String(raw.name ?? '').trim();
   const mobile = String(raw.mobile ?? '').trim();
   const email = String(raw.email ?? '').trim();
-  const empCode = String(raw.emp_code ?? raw.empcode ?? '').trim();
   const designation = String(raw.designation ?? '').trim();
   const doj = String(raw.date_of_joining ?? '').trim();
   const ctcType = String(raw.ctc_type ?? '').trim().toUpperCase();
@@ -488,7 +749,6 @@ function validateEmployeeRow(raw, designationSet) {
   if (!name) errors.push('name required');
   if (!mobile) errors.push('mobile required');
   if (!email) errors.push('email required');
-  if (!empCode) errors.push('emp_code required');
   if (designation && !designationSet.has(designation.toLowerCase())) {
     errors.push(`designation "${designation}" is not defined on this client`);
   }
@@ -517,7 +777,7 @@ function validateEmployeeRow(raw, designationSet) {
       name,
       mobile,
       email,
-      emp_code: empCode,
+      emp_code: null,
       designation: designation || null,
       date_of_joining: doj || null,
       ctc_type: hasCtcType ? ctcType : null,
@@ -656,8 +916,11 @@ router.post('/', async (req, res, next) => {
           ...result.row,
           designation: null,
           date_of_joining: null,
+          pay_type: null,
           ctc_type: null,
-          ctc_value: null
+          ctc_value: null,
+          state: null,
+          emp_code: null
         };
         validated.push({
           source_index: idx,
@@ -674,13 +937,10 @@ router.post('/', async (req, res, next) => {
     // Skip rows whose mobile already exists in the DB or appears earlier in
     // this same batch. Each skipped row is reported in `errors`.
     const existingMobiles = await fetchExistingMobiles(validated.map(v => v.payload.mobile));
-    const existingEmpCodes = await fetchExistingEmpCodes(validated.map(v => v.payload.emp_code));
     const seenInBatch = new Set();
-    const seenCodesInBatch = new Set();
     const toInsert = [];
     for (const v of validated) {
       const mobile = v.payload.mobile;
-      const empCode = v.payload.emp_code;
       if (existingMobiles.has(mobile)) {
         errors.push({ index: v.source_index, errors: [`mobile "${mobile}" already exists`] });
         continue;
@@ -689,16 +949,7 @@ router.post('/', async (req, res, next) => {
         errors.push({ index: v.source_index, errors: [`mobile "${mobile}" is duplicated in this batch`] });
         continue;
       }
-      if (existingEmpCodes.has(empCode)) {
-        errors.push({ index: v.source_index, errors: [`emp_code "${empCode}" already exists`] });
-        continue;
-      }
-      if (seenCodesInBatch.has(empCode)) {
-        errors.push({ index: v.source_index, errors: [`emp_code "${empCode}" is duplicated in this batch`] });
-        continue;
-      }
       seenInBatch.add(mobile);
-      seenCodesInBatch.add(empCode);
       toInsert.push(v.payload);
     }
 
@@ -715,9 +966,15 @@ router.post('/', async (req, res, next) => {
 
     let inserted = [];
     if (toInsert.length) {
+      const referenceIds = await allocateReferenceIds(toInsert.length);
+      const rowsWithRef = toInsert.map((row, i) => ({
+        ...row,
+        reference_id: referenceIds[i],
+        emp_code: null
+      }));
       const { data, error } = await supabaseAdmin
         .from('employees')
-        .insert(toInsert)
+        .insert(rowsWithRef)
         .select();
       if (error) throw error;
       inserted = data;
@@ -783,8 +1040,11 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
           ...result.row,
           designation: null,
           date_of_joining: null,
+          pay_type: null,
           ctc_type: null,
-          ctc_value: null
+          ctc_value: null,
+          state: null,
+          emp_code: null
         };
         validated.push({
           source_row: idx + 2,
@@ -801,13 +1061,10 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
     // Skip rows whose mobile already exists in the DB or appears earlier in
     // this same file. Reported in `errors` with the original spreadsheet row.
     const existingMobiles = await fetchExistingMobiles(validated.map(v => v.payload.mobile));
-    const existingEmpCodes = await fetchExistingEmpCodes(validated.map(v => v.payload.emp_code));
     const seenInFile = new Set();
-    const seenCodesInFile = new Set();
     const toInsert = [];
     for (const v of validated) {
       const mobile = v.payload.mobile;
-      const empCode = v.payload.emp_code;
       if (existingMobiles.has(mobile)) {
         errors.push({ row: v.source_row, errors: [`mobile "${mobile}" already exists`] });
         continue;
@@ -816,24 +1073,21 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
         errors.push({ row: v.source_row, errors: [`mobile "${mobile}" is duplicated in this file`] });
         continue;
       }
-      if (existingEmpCodes.has(empCode)) {
-        errors.push({ row: v.source_row, errors: [`emp_code "${empCode}" already exists`] });
-        continue;
-      }
-      if (seenCodesInFile.has(empCode)) {
-        errors.push({ row: v.source_row, errors: [`emp_code "${empCode}" is duplicated in this file`] });
-        continue;
-      }
       seenInFile.add(mobile);
-      seenCodesInFile.add(empCode);
       toInsert.push(v.payload);
     }
 
     let inserted = 0;
     if (toInsert.length) {
+      const referenceIds = await allocateReferenceIds(toInsert.length);
+      const rowsWithRef = toInsert.map((row, i) => ({
+        ...row,
+        reference_id: referenceIds[i],
+        emp_code: null
+      }));
       const { data, error } = await supabaseAdmin
         .from('employees')
-        .insert(toInsert)
+        .insert(rowsWithRef)
         .select('id, client_id');
       if (error) throw error;
       await ensureActiveAssignmentHistory(data ?? []);
@@ -1160,8 +1414,11 @@ router.post('/:id/transfer-project', async (req, res, next) => {
         client_id: targetClientId,
         designation: null,
         date_of_joining: null,
+        pay_type: null,
         ctc_type: null,
         ctc_value: null,
+        state: null,
+        emp_code: null,
         onboarding_initiated: false,
         onboarding_status: 'AVAILABLE',
         aadhaar_number: null,
@@ -1218,7 +1475,7 @@ router.post('/role-details', async (req, res, next) => {
   try {
     const ids = Array.isArray(req.body?.employee_ids) ? req.body.employee_ids : [];
     if (ids.length === 0) return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
-    const { designation, date_of_joining, ctc_type, ctc_value } = req.body || {};
+    const { designation, date_of_joining, pay_type, ctc_type, ctc_value, state } = req.body || {};
 
     const { data: targetClients, error: ownErr } = await supabaseAdmin
       .from('clients')
@@ -1251,7 +1508,10 @@ router.post('/role-details', async (req, res, next) => {
     }
 
     const designationSet = await fetchClientDesignations(clientId);
-    const validation = validateRoleDetails({ designation, date_of_joining, ctc_type, ctc_value }, designationSet);
+    const validation = validateRoleDetails(
+      { designation, date_of_joining, pay_type, ctc_type, ctc_value, state },
+      designationSet
+    );
     if (validation.errors) {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
@@ -1286,13 +1546,18 @@ router.post('/joining-status/bulk', async (req, res, next) => {
     if (joiningStatus === 'JOINED_OTHER_DATE' && !joiningDate) {
       return res.status(400).json({ error: 'joining_actual_date is required for JOINED_OTHER_DATE (YYYY-MM-DD).' });
     }
+    if (requiresEmpCodeForJoiningStatus(joiningStatus)) {
+      return res.status(400).json({
+        error: 'Bulk update is not allowed for Joined statuses. Set joining status and Emp Code per employee.'
+      });
+    }
 
     const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
     if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
 
     const { data: employees, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, joining_status, joining_status_change_count')
+      .select('id, client_id, joining_status, joining_status_change_count, emp_code')
       .in('id', ids)
       .eq('client_id', clientId);
     if (empErr) throw empErr;
@@ -1378,6 +1643,7 @@ router.post('/:id/joining-status', async (req, res, next) => {
     const clientId = String(req.body?.client_id ?? '').trim();
     const joiningStatus = String(req.body?.joining_status ?? '').trim().toUpperCase();
     const joiningDate = normalizeJoiningDate(req.body?.joining_actual_date);
+    const empCodeInput = normalizeEmpCode(req.body?.emp_code);
 
     if (!clientId) return res.status(400).json({ error: 'client_id is required.' });
     if (!JOINING_STATUSES.has(joiningStatus)) {
@@ -1394,7 +1660,7 @@ router.post('/:id/joining-status', async (req, res, next) => {
 
     const { data: row, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, joining_status, joining_status_change_count')
+      .select('id, client_id, joining_status, joining_status_change_count, emp_code')
       .eq('id', employeeId)
       .eq('client_id', clientId)
       .maybeSingle();
@@ -1419,6 +1685,17 @@ router.post('/:id/joining-status', async (req, res, next) => {
       return res.status(400).json({ error: transition.message });
     }
 
+    let empCodeToSet = null;
+    if (requiresEmpCodeForJoiningStatus(joiningStatus)) {
+      const existingCode = normalizeEmpCode(row.emp_code);
+      const codeToCheck = empCodeInput || existingCode;
+      const availability = await assertEmpCodeAvailable(codeToCheck, { excludeEmployeeId: row.id });
+      if (!availability.ok) {
+        return res.status(availability.status || 400).json({ error: availability.error });
+      }
+      empCodeToSet = availability.empCode;
+    }
+
     const nextCount = currentCount + 1;
     const now = new Date().toISOString();
     const payload = {
@@ -1428,6 +1705,9 @@ router.post('/:id/joining-status', async (req, res, next) => {
       joining_status_updated_at: now,
       joining_status_updated_by: req.user.id
     };
+    if (empCodeToSet) {
+      payload.emp_code = empCodeToSet;
+    }
     if (currentCount === 0) {
       payload.joining_status_set_at = now;
       payload.joining_status_set_by = req.user.id;
@@ -1440,7 +1720,12 @@ router.post('/:id/joining-status', async (req, res, next) => {
       .eq('client_id', clientId)
       .select('*')
       .maybeSingle();
-    if (upErr) throw upErr;
+    if (upErr) {
+      if (String(upErr.message ?? '').toLowerCase().includes('emp_code') || upErr.code === '23505') {
+        return res.status(409).json({ error: `emp_code "${empCodeToSet}" already exists` });
+      }
+      throw upErr;
+    }
 
     return res.json({ employee: updated });
   } catch (err) {
@@ -1470,7 +1755,7 @@ router.post('/job-app-forms/export', async (req, res, next) => {
 
     const { data: employees, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, name, mobile, email, designation, date_of_joining, ctc_type, ctc_value')
+      .select('id, client_id, name, mobile, email, reference_id, emp_code, designation, date_of_joining, pay_type, ctc_type, ctc_value, state')
       .eq('client_id', clientId)
       .in('id', employeeIds);
     if (empErr) throw empErr;
@@ -1551,8 +1836,11 @@ router.get('/identity-numbers/export', async (req, res, next) => {
           name: r.name ?? '',
           mobile: r.mobile ?? '',
           email: r.email ?? '',
+          reference_id: r.reference_id ?? '',
+          emp_code: r.emp_code ?? '',
           designation: r.designation ?? '',
           date_of_joining: r.date_of_joining ?? '',
+          pay_type: r.pay_type ?? '',
           ctc_type: r.ctc_type ?? '',
           ctc_value: r.ctc_value ?? '',
           onboarding_status: r.onboarding_status ?? '',
@@ -1884,7 +2172,7 @@ router.post('/:id/form-review', async (req, res, next) => {
 
     const { data: emp, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id')
+      .select('id, client_id, name, email')
       .eq('id', employeeId)
       .maybeSingle();
     if (empErr) throw empErr;
@@ -1894,7 +2182,7 @@ router.post('/:id/form-review', async (req, res, next) => {
 
     const { data: form, error: formErr } = await supabaseAdmin
       .from('job_app_form')
-      .select('id, employee_id, client_id, submission_status, review_status, submission_attempt_count')
+      .select('id, employee_id, client_id, email, submission_status, review_status, submission_attempt_count')
       .eq('employee_id', employeeId)
       .maybeSingle();
     if (formErr) throw formErr;
@@ -2026,6 +2314,20 @@ router.post('/:id/form-review', async (req, res, next) => {
       if (empUpdateErr) throw empUpdateErr;
     }
 
+    if (decisionStatus === 'REJECTED' || decisionStatus === 'CORRECTION_REQUESTED') {
+      try {
+        await notifyEmployeeReviewStatus({
+          employee: emp,
+          formEmail: form.email,
+          kind: decisionStatus === 'CORRECTION_REQUESTED' ? 'CORRECTION_REQUESTED' : 'PM_REJECTED',
+          reason: nextReason,
+          employeeId
+        });
+      } catch (emailErr) {
+        console.warn('[review-status-email] PM review notify failed', emailErr?.message || emailErr);
+      }
+    }
+
     return res.json({ form: updatedForm });
   } catch (err) {
     next(err);
@@ -2056,7 +2358,7 @@ router.post('/:id/payroll-form-review', async (req, res, next) => {
 
     const { data: emp, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id')
+      .select('id, client_id, name, email')
       .eq('id', employeeId)
       .maybeSingle();
     if (empErr) throw empErr;
@@ -2079,7 +2381,18 @@ router.post('/:id/payroll-form-review', async (req, res, next) => {
     if (formFull.review_status !== 'APPROVED') {
       return res.status(400).json({ error: 'Application must be approved by Program Manager first.' });
     }
-    if (formFull.payroll_review_status !== 'PENDING_PAYROLL_LEAD') {
+
+    const payrollStatusCurrent = String(formFull.payroll_review_status ?? '').trim();
+    const awaitingPl = payrollStatusCurrent === 'PENDING_PAYROLL_LEAD';
+    // After PL approval, keep the record re-openable so PL can reject / mark incorrect later.
+    const postApprovalReject =
+      payrollStatusCurrent === 'PAYROLL_APPROVED' && decisionStatus === 'REJECTED';
+    if (!awaitingPl && !postApprovalReject) {
+      if (payrollStatusCurrent === 'PAYROLL_APPROVED') {
+        return res.status(400).json({
+          error: 'Application is already approved by Payroll Lead. You can reject it for correction.',
+        });
+      }
       return res.status(400).json({
         error: 'Application is not awaiting Payroll Lead review.',
       });
@@ -2148,6 +2461,20 @@ router.post('/:id/payroll-form-review', async (req, res, next) => {
       .select('*')
       .maybeSingle();
     if (upErr) throw upErr;
+
+    if (decisionStatus === 'REJECTED' || decisionStatus === 'APPROVED') {
+      try {
+        await notifyEmployeeReviewStatus({
+          employee: emp,
+          formEmail: formFull.email,
+          kind: decisionStatus === 'APPROVED' ? 'BOTH_APPROVED' : 'PL_REJECTED',
+          reason: payrollReason,
+          employeeId
+        });
+      } catch (emailErr) {
+        console.warn('[review-status-email] PL review notify failed', emailErr?.message || emailErr);
+      }
+    }
 
     return res.json({ form: updatedForm });
   } catch (err) {

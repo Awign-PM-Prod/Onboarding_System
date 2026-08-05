@@ -51,6 +51,9 @@ export const JOB_APP_FORM_EXPORT_FIELDS = [
   'bp_pf_uan_number',
   'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url',
+  'bp_nominee_name',
+  'bp_nominee_relation',
+  'bp_nominee_mobile',
 ];
 
 const DOWNLOAD_FILENAME_BY_FIELD = {
@@ -74,6 +77,9 @@ function columnLabel(key) {
   if (key === 'pd_alternate_number') return 'Emergency Contact Number';
   if (key === 'pd_secondary_mobile') return 'Alternate Mobile Number';
   if (key === 'email_verified') return 'Email Verified';
+  if (key === 'bp_nominee_name') return 'Nominee Name';
+  if (key === 'bp_nominee_relation') return 'Nominee Relation';
+  if (key === 'bp_nominee_mobile') return 'Nominee Mobile Number';
   if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
   if (key === 'pd_current_address') return 'Current Address';
   if (key === 'kyc_bank_ifsc_details') return 'Bank Branch (IFSC)';
@@ -137,14 +143,17 @@ export function formatExportCellValue(key, val) {
 
 export function buildJobAppFormExportRow(employee, form) {
   const row = {
-    'Employee Id': employee?.id ?? '',
+    'Reference ID': employee?.reference_id ?? '',
+    'Emp Code': employee?.emp_code ?? '',
     Name: employee?.name ?? form?.name ?? '',
     'Employee Mobile': employee?.mobile ?? '',
     'Employee Email': employee?.email ?? '',
     Designation: employee?.designation ?? '',
-    'Date Of Joining': employee?.date_of_joining ?? '',
-    'CTC Type': employee?.ctc_type ?? '',
-    'CTC Value': employee?.ctc_value ?? '',
+    'Expected Date Of Joining': employee?.date_of_joining ?? '',
+    'Pay Type': employee?.pay_type === 'NET_PAY' ? 'Net Pay' : (employee?.pay_type === 'CTC' ? 'CTC' : (employee?.pay_type ?? '')),
+    'Amount Period': employee?.pay_type === 'NET_PAY' ? '' : (employee?.ctc_type ?? ''),
+    Amount: employee?.ctc_value ?? '',
+    State: employee?.state ?? '',
     'Submission Status': form?.submission_status ?? '',
     'Review Status': form?.review_status ?? '',
     'Submission Attempt': form?.submission_attempt_count ?? '',

@@ -48,6 +48,9 @@ const ORDERED_FIELDS = [
   'bp_pf_uan_number',
   'bp_pf_uan_face_auth_screenshot_url',
   'bp_police_verification_url',
+  'bp_nominee_name',
+  'bp_nominee_relation',
+  'bp_nominee_mobile',
 ];
 
 function normalizeMobile(raw) {
@@ -63,6 +66,9 @@ function prettifyKey(key) {
   if (key === 'pd_emergency_contact_relation') return 'Emergency Contact Relation';
   if (key === 'pd_alternate_number') return 'Emergency Contact Number';
   if (key === 'pd_secondary_mobile') return 'Alternate Mobile Number';
+  if (key === 'bp_nominee_name') return 'Nominee Name';
+  if (key === 'bp_nominee_relation') return 'Nominee Relation';
+  if (key === 'bp_nominee_mobile') return 'Nominee Mobile Number';
   if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
   if (key === 'pd_current_address') return 'Current Address';
   return String(key).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -158,6 +164,13 @@ function sectionNameForField(key) {
   if (key === 'bp_passport_photo_url') return 'Photo';
   if (key === 'bp_esic_number' || key === 'bp_pf_uan_number') return 'Employment History';
   if (key === 'bp_police_verification_url') return 'Security Check';
+  if (
+    key === 'bp_nominee_name' ||
+    key === 'bp_nominee_relation' ||
+    key === 'bp_nominee_mobile'
+  ) {
+    return 'E-Nomination';
+  }
   if (key === 'name' || key === 'mobile' || key === 'email' || key === 'aadhaar_number' || key.startsWith('aad_')) {
     return 'Basic Information';
   }

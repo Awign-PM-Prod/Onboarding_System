@@ -62,3 +62,8 @@ export const CTC_TYPE_OPTIONS = [
   { value: 'MONTHLY', label: 'Monthly' },
   { value: 'ANNUAL', label: 'Annual' },
 ];
+
+export const PAY_TYPE_OPTIONS = [
+  { value: 'CTC', label: 'CTC' },
+  { value: 'NET_PAY', label: 'Net Pay' },
+];

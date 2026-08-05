@@ -23,11 +23,12 @@ const ONBOARDING_DOCUMENT_FIELD_CONFIG = {
   bp_police_verification_url: { bucket: BANK_PHOTO_DOCUMENTS_BUCKET, mode: 'single' },
   bp_pf_uan_face_auth_screenshot_url: { bucket: BANK_PHOTO_DOCUMENTS_BUCKET, mode: 'single' },
 };
-const MAX_DRIVING_LICENSE_BYTES = 12 * 1024 * 1024;
-const MAX_QUALIFICATION_BYTES = 12 * 1024 * 1024;
-const MAX_KYC_IMAGE_DOCUMENT_BYTES = 5 * 1024 * 1024;
-const MAX_KYC_VALIDATE_BYTES = 5 * 1024 * 1024;
-const MAX_BANK_PHOTO_DOCUMENT_BYTES = 12 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+const MAX_DRIVING_LICENSE_BYTES = MAX_UPLOAD_BYTES;
+const MAX_QUALIFICATION_BYTES = MAX_UPLOAD_BYTES;
+const MAX_KYC_IMAGE_DOCUMENT_BYTES = MAX_UPLOAD_BYTES;
+const MAX_KYC_VALIDATE_BYTES = MAX_UPLOAD_BYTES;
+const MAX_BANK_PHOTO_DOCUMENT_BYTES = MAX_UPLOAD_BYTES;
 
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -68,7 +69,10 @@ const CORRECTION_FIELD_SET = new Set([
   'bp_esic_number',
   'bp_pf_uan_number',
   'bp_pf_uan_face_auth_screenshot_url',
-  'bp_police_verification_url'
+  'bp_police_verification_url',
+  'bp_nominee_name',
+  'bp_nominee_relation',
+  'bp_nominee_mobile',
 ]);
 const CORRECTION_OPTIONAL_FIELDS = new Set([
   'qual_additional_certificates_url',
@@ -253,12 +257,15 @@ const KYC_DOC_VALIDATE_EDGE_FUNCTION =
   process.env.KYC_DOC_VALIDATE_EDGE_FUNCTION || 'kyc-document-validate';
 const SEND_EMAIL_OTP_EDGE_FUNCTION =
   process.env.SEND_EMAIL_OTP_EDGE_FUNCTION || 'send-email-otp';
+const SEND_MOBILE_OTP_EDGE_FUNCTION =
+  process.env.SEND_MOBILE_OTP_EDGE_FUNCTION || 'send-mobile-otp';
+const WHATSAPP_COUNTRY_CODE = String(process.env.WHATSAPP_COUNTRY_CODE || '91').replace(/\D/g, '') || '91';
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Fixed demo OTP for onboarding status login until SMS integration. */
 const DEMO_STATUS_OTP = '123123';
 /** Fixed demo OTP for Aadhaar resume flow until SMS integration. */
 const DEMO_AADHAAR_RESUME_OTP = '123123';
-/** Fixed demo OTP for contact verification (email / alternate mobile) in non-production. */
+/** Fixed demo OTP for email contact verification in non-production only (never used for alternate mobile). */
 const DEMO_CONTACT_OTP = '123123';
 const STATUS_SESSION_TTL_MS = 60 * 60 * 1000;
 
@@ -288,6 +295,58 @@ function generateContactOtp() {
     return DEMO_CONTACT_OTP;
   }
   return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+/** Always a random 6-digit OTP for alternate mobile (including development). */
+function generateSecondaryMobileOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function formatWhatsAppNumber(rawMobile) {
+  const digits = String(rawMobile ?? '').replace(/\D/g, '');
+  if (!digits) return null;
+  const targetLength = WHATSAPP_COUNTRY_CODE.length + 10;
+  if (digits.startsWith(WHATSAPP_COUNTRY_CODE) && digits.length === targetLength) {
+    return digits;
+  }
+  const localTenDigits = digits.length >= 10 ? digits.slice(-10) : digits;
+  if (localTenDigits.length !== 10) return null;
+  return `${WHATSAPP_COUNTRY_CODE}${localTenDigits}`;
+}
+
+async function invokeSendMobileOtpEdge({ mobile, otp, name }) {
+  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to invoke edge functions.');
+  }
+
+  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(SEND_MOBILE_OTP_EDGE_FUNCTION)}`;
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ mobile, otp, name: name || '' }),
+  });
+
+  const raw = await resp.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
+  if (!resp.ok) {
+    const msg = body?.error || body?.message || `Edge function failed (${resp.status})`;
+    const err = new Error(msg);
+    err.details = body?.upstream ?? body ?? null;
+    err.statusCode = resp.status >= 400 && resp.status < 600 ? resp.status : 502;
+    throw err;
+  }
+  return body ?? {};
 }
 
 function normalizeEmail(raw) {
@@ -1503,11 +1562,151 @@ router.post('/email/verify-otp', async (req, res, next) => {
   }
 });
 
+router.post('/secondary-mobile/send-otp', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const secondaryMobile = normalizeMobile(req.body?.pd_secondary_mobile ?? req.body?.secondary_mobile);
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+    if (!TEN_DIGIT_REGEX.test(secondaryMobile)) {
+      return res.status(400).json({ error: 'Alternate mobile number must be 10 digits.' });
+    }
+    if (secondaryMobile === mobile) {
+      return res.status(400).json({ error: 'Alternate mobile must be different from your primary mobile number.' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    await assertOnboardingFormEditable(row, mobile);
+
+    const whatsappTo = formatWhatsAppNumber(secondaryMobile);
+    if (!whatsappTo) {
+      return res.status(400).json({ error: 'Alternate mobile number must be a valid 10-digit Indian mobile.' });
+    }
+
+    // Always random OTP + WhatsApp delivery. Never use a hardcoded/demo OTP for alternate mobile.
+    const otp = generateSecondaryMobileOtp();
+    try {
+      await invokeSendMobileOtpEdge({
+        mobile: secondaryMobile,
+        otp,
+        name: row.name ?? '',
+      });
+    } catch (err) {
+      const status = err?.statusCode && err.statusCode >= 400 ? err.statusCode : 502;
+      return res.status(status).json({
+        error: err?.message || 'Could not send OTP to alternate mobile via WhatsApp. Please try again.',
+        details: err?.details ?? null,
+      });
+    }
+
+    const key = contactOtpKey(row.id, 'secondary_mobile');
+    contactOtpBySession.set(key, { otp, expires: Date.now() + OTP_TTL_MS, target: secondaryMobile });
+    console.log(
+      `[public/onboarding] Alternate mobile OTP sent via WhatsApp for employee ${row.id} (${secondaryMobile})`
+    );
+
+    const now = new Date().toISOString();
+    const { error: updErr } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        pd_secondary_mobile: secondaryMobile,
+        pd_secondary_mobile_verified: false,
+        updated_at: now,
+      })
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile);
+    if (updErr) throw updErr;
+
+    return res.json({
+      ok: true,
+      delivery: 'whatsapp',
+      message: 'OTP sent to the alternate mobile number on WhatsApp.',
+    });
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
+router.post('/secondary-mobile/verify-otp', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const secondaryMobile = normalizeMobile(req.body?.pd_secondary_mobile ?? req.body?.secondary_mobile);
+    const otpIn = String(req.body?.otp ?? '').replace(/\D/g, '');
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+    if (!TEN_DIGIT_REGEX.test(secondaryMobile)) {
+      return res.status(400).json({ error: 'Alternate mobile number must be 10 digits.' });
+    }
+    if (!/^\d{6}$/.test(otpIn)) {
+      return res.status(400).json({ error: 'OTP must be 6 digits' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    await assertOnboardingFormEditable(row, mobile);
+
+    const key = contactOtpKey(row.id, 'secondary_mobile');
+    const entry = contactOtpBySession.get(key);
+    if (!entry || Date.now() > entry.expires) {
+      return res.status(400).json({ error: 'OTP expired or not found. Request a new OTP.' });
+    }
+    if (normalizeMobile(entry.target) !== secondaryMobile) {
+      return res.status(400).json({
+        error: 'Alternate mobile does not match the number OTP was sent to. Request a new OTP.',
+      });
+    }
+    if (entry.otp !== otpIn) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+    contactOtpBySession.delete(key);
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        pd_secondary_mobile: secondaryMobile,
+        pd_secondary_mobile_verified: true,
+        updated_at: now,
+      })
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile)
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
+    }
+
+    return res.json({ verified: true, form: await formWithClientFlags(data) });
+  } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
 router.post('/driving-license-upload', (req, res, next) => {
   licenseUpload.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'File must be 12 MB or smaller' });
+        return res.status(400).json({ error: 'File must be 5 MB or smaller' });
       }
       return res.status(400).json({ error: err.message || 'Invalid upload' });
     }
@@ -1612,7 +1811,7 @@ router.post('/qualification-certificate-upload', (req, res, next) => {
   qualificationUpload.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'File must be 12 MB or smaller' });
+        return res.status(400).json({ error: 'File must be 5 MB or smaller' });
       }
       return res.status(400).json({ error: err.message || 'Invalid upload' });
     }
@@ -1929,7 +2128,7 @@ router.post('/bp-document-upload', (req, res, next) => {
   multerMw.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'File must be 12 MB or smaller' });
+        return res.status(400).json({ error: 'File must be 5 MB or smaller' });
       }
       return res.status(400).json({ error: err.message || 'Invalid upload' });
     }
@@ -2301,12 +2500,48 @@ router.patch('/job-app-form', async (req, res, next) => {
       const policeRaw = String(body.bp_police_verification_url ?? '').trim();
       const policeUrl = policeRaw.length > 0 ? policeRaw : null;
 
+      const nomineeNameIn = String(body.bp_nominee_name ?? '').trim();
+      const nomineeRelationIn = String(body.bp_nominee_relation ?? '').trim();
+      const nomineeMobileIn = normalizeMobile(body.bp_nominee_mobile);
+      const nomineeName =
+        correctionMode && !editableFields.has('bp_nominee_name')
+          ? String(formCurrent.bp_nominee_name ?? '').trim()
+          : nomineeNameIn;
+      const nomineeRelation =
+        correctionMode && !editableFields.has('bp_nominee_relation')
+          ? String(formCurrent.bp_nominee_relation ?? '').trim()
+          : nomineeRelationIn;
+      const nomineeMobile =
+        correctionMode && !editableFields.has('bp_nominee_mobile')
+          ? normalizeMobile(formCurrent.bp_nominee_mobile)
+          : nomineeMobileIn;
+
+      const requireNominee =
+        !correctionMode ||
+        editableFields.has('bp_nominee_name') ||
+        editableFields.has('bp_nominee_relation') ||
+        editableFields.has('bp_nominee_mobile');
+      if (requireNominee) {
+        if (nomineeName.length < 2) {
+          return res.status(400).json({ error: 'Nominee name is required.' });
+        }
+        if (nomineeRelation.length < 2) {
+          return res.status(400).json({ error: 'Nominee relation is required.' });
+        }
+        if (!TEN_DIGIT_REGEX.test(nomineeMobile)) {
+          return res.status(400).json({ error: 'Nominee mobile number must be 10 digits.' });
+        }
+      }
+
       const bankPhotoUpdate = {
         bp_passport_photo_url: passportUrl,
         bp_esic_number: esic,
         bp_pf_uan_number: pfUan,
         bp_pf_uan_face_auth_screenshot_url: pfUanFaceAuthUrl,
         bp_police_verification_url: policeUrl,
+        bp_nominee_name: nomineeName || null,
+        bp_nominee_relation: nomineeRelation || null,
+        bp_nominee_mobile: TEN_DIGIT_REGEX.test(nomineeMobile) ? nomineeMobile : null,
       };
       const correctionScopeErr = ensureCorrectionEditScope(bankPhotoUpdate);
       if (correctionScopeErr) {
@@ -2497,13 +2732,26 @@ router.patch('/job-app-form', async (req, res, next) => {
     if (!EMAIL_REGEX.test(emailFinal)) {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
-    if (secondaryMobileFinal) {
-      if (!TEN_DIGIT_REGEX.test(secondaryMobileFinal)) {
-        return res.status(400).json({ error: 'Alternate mobile number must be 10 digits.' });
+    if (!TEN_DIGIT_REGEX.test(secondaryMobileFinal)) {
+      return res.status(400).json({ error: 'Alternate mobile number is required and must be 10 digits.' });
+    }
+    if (secondaryMobileFinal === mobile) {
+      return res.status(400).json({ error: 'Alternate mobile must be different from your primary mobile number.' });
+    }
+    const requiresSecondaryMobileVerification =
+      !correctionMode || editableFields.has('pd_secondary_mobile');
+    if (requiresSecondaryMobileVerification) {
+      if (
+        formCurrent.pd_secondary_mobile_verified !== true ||
+        normalizeMobile(formCurrent.pd_secondary_mobile) !== secondaryMobileFinal
+      ) {
+        return res.status(400).json({ error: 'Please verify your alternate mobile number before continuing.' });
       }
-      if (secondaryMobileFinal === mobile) {
-        return res.status(400).json({ error: 'Alternate mobile must be different from your primary mobile number.' });
-      }
+    } else if (
+      formCurrent.pd_secondary_mobile_verified !== true ||
+      !TEN_DIGIT_REGEX.test(normalizeMobile(formCurrent.pd_secondary_mobile))
+    ) {
+      return res.status(400).json({ error: 'Alternate mobile verification is required before continuing.' });
     }
     const fatherName = String(body.pd_father_name ?? '').trim();
     const motherName = String(body.pd_mother_name ?? '').trim();
@@ -2621,7 +2869,10 @@ router.patch('/job-app-form', async (req, res, next) => {
       email: emailFinal,
       email_verified: true,
       pd_secondary_mobile: secondaryMobileFinal || null,
-      pd_secondary_mobile_verified: false,
+      pd_secondary_mobile_verified: secondaryMobileFinal
+        ? formCurrent.pd_secondary_mobile_verified === true &&
+          normalizeMobile(formCurrent.pd_secondary_mobile) === secondaryMobileFinal
+        : false,
       pd_father_name: fatherName,
       pd_mother_name: motherName,
       pd_spouse_name: isMarried ? spouseNameRaw : null,

@@ -53,7 +53,7 @@ function JoiningStatusReminderModal({ title, rows, onClose, onNext }) {
             <thead className="bg-slate-50 text-slate-700">
               <tr>
                 <th className="px-4 py-2 text-left font-medium">Client Name</th>
-                <th className="px-4 py-2 text-left font-medium">DOJ</th>
+                <th className="px-4 py-2 text-left font-medium">Expected Date of Joining</th>
                 <th className="px-4 py-2 text-left font-medium">Number of employees</th>
               </tr>
             </thead>

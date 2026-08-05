@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { formatDesignationLabel } from '../lib/formatLabels';
+import { INDIAN_STATES } from '../lib/indianStates';
 import { displayNumericValue } from '../lib/numericInput';
 import ModalOverlay from './ModalOverlay';
 const empty = {
   designation: '',
   date_of_joining: '',
+  pay_type: 'CTC',
   ctc_type: 'MONTHLY',
-  ctc_value: ''
+  ctc_value: '',
+  state: ''
 };
 
 export default function RoleDetailsModal({
@@ -15,25 +18,31 @@ export default function RoleDetailsModal({
   designations = [],
   submitting = false,
   showSendOnboardingOption = false,
+  defaultState = '',
   onClose,
   onSubmit
 }) {
   const [form, setForm] = useState(() => ({
     ...empty,
-    designation: designations[0] ?? ''
+    designation: designations[0] ?? '',
+    state: defaultState && INDIAN_STATES.includes(defaultState) ? defaultState : ''
   }));
   const [fieldErrors, setFieldErrors] = useState({});
   const [sendOnboardingNow, setSendOnboardingNow] = useState(false);
 
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
 
+  const isNetPay = form.pay_type === 'NET_PAY';
+
   const validate = () => {
     const errors = {};
     if (!form.designation) errors.designation = 'Required';
     if (!form.date_of_joining) errors.date_of_joining = 'Required';
-    if (!['MONTHLY', 'ANNUAL'].includes(form.ctc_type)) errors.ctc_type = 'Invalid';
+    if (!['CTC', 'NET_PAY'].includes(form.pay_type)) errors.pay_type = 'Required';
+    if (!isNetPay && !['MONTHLY', 'ANNUAL'].includes(form.ctc_type)) errors.ctc_type = 'Invalid';
     const ctc = Number(form.ctc_value);
     if (!Number.isFinite(ctc) || ctc < 0) errors.ctc_value = 'Must be a non-negative number';
+    if (!form.state) errors.state = 'Required';
     return errors;
   };
 
@@ -46,12 +55,16 @@ export default function RoleDetailsModal({
       {
         designation: form.designation,
         date_of_joining: form.date_of_joining,
-        ctc_type: form.ctc_type,
-        ctc_value: Number(form.ctc_value)
+        pay_type: form.pay_type,
+        ctc_type: isNetPay ? null : form.ctc_type,
+        ctc_value: Number(form.ctc_value),
+        state: form.state
       },
       { sendOnboardingNow }
     );
   };
+
+  const amountLabel = isNetPay ? 'Net Pay Amount' : 'CTC Amount';
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -76,8 +89,8 @@ export default function RoleDetailsModal({
             </select>
           </Field>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Field label="Date of Joining" error={fieldErrors.date_of_joining}>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Expected Date of Joining" error={fieldErrors.date_of_joining}>
               <input
                 className="input"
                 type="date"
@@ -85,13 +98,45 @@ export default function RoleDetailsModal({
                 onChange={(e) => set({ date_of_joining: e.target.value })}
               />
             </Field>
-            <Field label="CTC Type" error={fieldErrors.ctc_type}>
-              <select className="input" value={form.ctc_type} onChange={(e) => set({ ctc_type: e.target.value })}>
-                <option value="MONTHLY">Monthly</option>
-                <option value="ANNUAL">Annual</option>
+            <Field label="State" error={fieldErrors.state}>
+              <select
+                className="input"
+                value={form.state}
+                onChange={(e) => set({ state: e.target.value })}
+              >
+                <option value="">Select state</option>
+                {INDIAN_STATES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
               </select>
             </Field>
-            <Field label="CTC Value" error={fieldErrors.ctc_value}>
+          </div>
+
+          <Field label="Pay Type" error={fieldErrors.pay_type}>
+            <div className="flex overflow-hidden rounded-md border border-slate-300">
+              <button
+                type="button"
+                onClick={() => set({ pay_type: 'CTC' })}
+                className={`flex-1 px-3 py-2 text-sm border-r border-slate-300 ${
+                  form.pay_type === 'CTC' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                CTC
+              </button>
+              <button
+                type="button"
+                onClick={() => set({ pay_type: 'NET_PAY' })}
+                className={`flex-1 px-3 py-2 text-sm ${
+                  form.pay_type === 'NET_PAY' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                Net Pay
+              </button>
+            </div>
+          </Field>
+
+          {isNetPay ? (
+            <Field label={amountLabel} error={fieldErrors.ctc_value}>
               <input
                 className="input"
                 type="text"
@@ -113,7 +158,38 @@ export default function RoleDetailsModal({
                 }}
               />
             </Field>
-          </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Period" error={fieldErrors.ctc_type}>
+                <select className="input" value={form.ctc_type} onChange={(e) => set({ ctc_type: e.target.value })}>
+                  <option value="MONTHLY">Monthly</option>
+                  <option value="ANNUAL">Annual</option>
+                </select>
+              </Field>
+              <Field label={amountLabel} error={fieldErrors.ctc_value}>
+                <input
+                  className="input"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0"
+                  value={displayNumericValue(form.ctc_value)}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      set({ ctc_value: '' });
+                      return;
+                    }
+                    if (/^\d*\.?\d*$/.test(raw)) set({ ctc_value: raw });
+                  }}
+                  onBlur={() => {
+                    if (form.ctc_value === '') return;
+                    const n = Number(form.ctc_value);
+                    if (Number.isFinite(n)) set({ ctc_value: String(n) });
+                  }}
+                />
+              </Field>
+            </div>
+          )}
 
           {showSendOnboardingOption && (
             <label className="flex items-start gap-2 text-sm text-slate-700">

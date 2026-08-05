@@ -7,8 +7,7 @@ import ModalOverlay from './ModalOverlay';
 const TEMPLATE_HEADERS = [
   'name',
   'mobile',
-  'email',
-  'emp_code'
+  'email'
 ];
 
 const PREVIEW_LIMIT = 10;
@@ -25,8 +24,7 @@ function buildTemplateCsv() {
   const demoRow = {
     name: 'Demo Employee',
     mobile: '9000000000',
-    email: 'demo.employee@example.com',
-    emp_code: 'T016394'
+    email: 'demo.employee@example.com'
   };
   const lines = [
     TEMPLATE_HEADERS.join(','),
@@ -256,7 +254,7 @@ export default function BulkUploadModal({ clientId, onClose, onDone, embedded = 
               {TEMPLATE_HEADERS.join(', ')}
             </code>
             <p className="text-xs text-slate-500">
-              Optional columns: <code>designation</code>, <code>date_of_joining</code>, <code>ctc_type</code>, <code>ctc_value</code>.
+              A unique Reference ID is generated for each row. Role details (expected date of joining, CTC or Net Pay, state) are set after upload. Emp Code is added when the employee is marked Joined.
             </p>
             <p className="text-xs">
               <button

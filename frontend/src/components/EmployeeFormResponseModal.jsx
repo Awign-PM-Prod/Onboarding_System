@@ -28,6 +28,9 @@ function prettifyKey(key) {
   if (key === 'pd_emergency_contact_relation') return 'Emergency Contact Relation';
   if (key === 'pd_alternate_number') return 'Emergency Contact Number';
   if (key === 'pd_secondary_mobile') return 'Alternate Mobile Number';
+  if (key === 'bp_nominee_name') return 'Nominee Name';
+  if (key === 'bp_nominee_relation') return 'Nominee Relation';
+  if (key === 'bp_nominee_mobile') return 'Nominee Mobile Number';
   if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
   if (key === 'pd_current_address') return 'Current Address';
   if (key === 'bp_pf_uan_face_auth_screenshot_url') return 'PF UAN Face Authentication Screenshot';
@@ -157,7 +160,10 @@ const ORDERED_FIELDS = [
   'bp_esic_number',
   'bp_pf_uan_number',
   'bp_pf_uan_face_auth_screenshot_url',
-  'bp_police_verification_url'
+  'bp_police_verification_url',
+  'bp_nominee_name',
+  'bp_nominee_relation',
+  'bp_nominee_mobile',
 ];
 
 const DOCUMENT_TAB_DEFINITIONS = [
@@ -205,13 +211,23 @@ const PM_MARKABLE_FIELDS = new Set([
   'bp_esic_number',
   'bp_pf_uan_number',
   'bp_pf_uan_face_auth_screenshot_url',
-  'bp_police_verification_url'
+  'bp_police_verification_url',
+  'bp_nominee_name',
+  'bp_nominee_relation',
+  'bp_nominee_mobile',
 ]);
 
 function sectionNameForField(key) {
   if (key === 'bp_passport_photo_url') return 'Photo';
   if (key === 'bp_esic_number' || key === 'bp_pf_uan_number') return 'Employement History';
   if (key === 'bp_police_verification_url') return 'Security Check';
+  if (
+    key === 'bp_nominee_name' ||
+    key === 'bp_nominee_relation' ||
+    key === 'bp_nominee_mobile'
+  ) {
+    return 'E-Nomination';
+  }
   if (key === 'name' || key === 'mobile' || key === 'email' || key === 'aadhaar_number' || key.startsWith('aad_')) {
     return 'Basic Information';
   }
@@ -315,6 +331,8 @@ export default function EmployeeFormResponseModal({
   pmApproverName = null
 }) {
   const isPayrollMode = reviewMode === 'payroll';
+  const alreadyPayrollApproved =
+    isPayrollMode && String(form?.payroll_review_status ?? '').trim() === 'PAYROLL_APPROVED';
   const [fieldMarks, setFieldMarks] = useState({});
   const [decisionReason, setDecisionReason] = useState('');
   const [decisionError, setDecisionError] = useState('');
@@ -445,6 +463,11 @@ export default function EmployeeFormResponseModal({
               {isPayrollMode ? 'Payroll Lead review' : 'Application response'}
             </h2>
             <p className="mt-0.5 truncate text-sm text-slate-600">{employeeName}</p>
+            {alreadyPayrollApproved && (
+              <p className="mt-0.5 text-xs text-emerald-700">
+                Already approved — review remains available. Mark incorrect fields to reject for correction.
+              </p>
+            )}
             {!isPayrollMode && (
               <p className="mt-0.5 text-xs text-slate-500">
                 Submission Attempt Count:{' '}
@@ -638,14 +661,20 @@ export default function EmployeeFormResponseModal({
             )}
             <div className={`flex flex-wrap items-center gap-2 ${hasIncorrectMarks ? 'shrink-0 sm:justify-end' : 'justify-end'}`}>
               {!hasIncorrectMarks ? (
-                <button
-                  type="button"
-                  onClick={() => submitDecision('APPROVED')}
-                  disabled={deciding}
-                  className="rounded-lg bg-emerald-700 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
-                >
-                  {deciding ? 'Submitting...' : 'Approve'}
-                </button>
+                alreadyPayrollApproved ? (
+                  <p className="text-sm text-slate-500">
+                    Mark any incorrect field to reject this application for correction.
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => submitDecision('APPROVED')}
+                    disabled={deciding}
+                    className="rounded-lg bg-emerald-700 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+                  >
+                    {deciding ? 'Submitting...' : 'Approve'}
+                  </button>
+                )
               ) : (
                 <>
                   {!isPayrollMode && (
@@ -664,7 +693,7 @@ export default function EmployeeFormResponseModal({
                     disabled={deciding}
                     className="rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
                   >
-                    {deciding ? 'Submitting...' : 'Reject'}
+                    {deciding ? 'Submitting...' : alreadyPayrollApproved ? 'Reject for correction' : 'Reject'}
                   </button>
                 </>
               )}

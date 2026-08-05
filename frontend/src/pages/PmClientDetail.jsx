@@ -61,13 +61,17 @@ function formatReviewDateTime(value) {
 }
 
 function isMissingRoleDetails(row) {
+  const payType = String(row.pay_type ?? '').trim().toUpperCase();
+  const missingPeriod = payType === 'CTC' && !String(row.ctc_type ?? '').trim();
   return (
     !String(row.designation ?? '').trim() ||
     !String(row.date_of_joining ?? '').trim() ||
-    !String(row.ctc_type ?? '').trim() ||
+    !payType ||
+    missingPeriod ||
     row.ctc_value === null ||
     row.ctc_value === undefined ||
-    String(row.ctc_value).trim() === ''
+    String(row.ctc_value).trim() === '' ||
+    !String(row.state ?? '').trim()
   );
 }
 
@@ -118,7 +122,7 @@ export default function PmClientDetail() {
     mobile: '',
     email: '',
     designation: '',
-    ctc_type: ''
+    pay_type: ''
   });
   const [pageByTab, setPageByTab] = useState({
     pending: 1,
@@ -161,6 +165,7 @@ export default function PmClientDetail() {
   const [joiningInlineEmployeeId, setJoiningInlineEmployeeId] = useState(null);
   const [joiningInlineStatus, setJoiningInlineStatus] = useState('');
   const [joiningInlineDate, setJoiningInlineDate] = useState('');
+  const [joiningInlineEmpCode, setJoiningInlineEmpCode] = useState('');
   const [joiningInlineLoading, setJoiningInlineLoading] = useState(false);
   const [transferModalEmployee, setTransferModalEmployee] = useState(null);
   const [testingBulkTransferModalOpen, setTestingBulkTransferModalOpen] = useState(false);
@@ -415,28 +420,28 @@ export default function PmClientDetail() {
     const mobileQ = roleFilters.mobile.trim().toLowerCase();
     const emailQ = roleFilters.email.trim().toLowerCase();
     const designationQ = roleFilters.designation.trim().toLowerCase();
-    const ctcTypeQ = roleFilters.ctc_type.trim().toUpperCase();
+    const payTypeQ = roleFilters.pay_type.trim().toUpperCase();
     return roleAssigned.filter((row) => {
       const name = String(row.name ?? '').toLowerCase();
       const mobile = String(row.mobile ?? '').toLowerCase();
       const email = String(row.email ?? '').toLowerCase();
       const designation = String(row.designation ?? '').toLowerCase();
-      const ctcType = String(row.ctc_type ?? '').toUpperCase();
+      const payType = String(row.pay_type ?? '').toUpperCase();
       if (nameQ && !name.includes(nameQ)) return false;
       if (mobileQ && !mobile.includes(mobileQ)) return false;
       if (emailQ && !email.includes(emailQ)) return false;
       if (designationQ && designation !== designationQ) return false;
-      if (ctcTypeQ && ctcType !== ctcTypeQ) return false;
+      if (payTypeQ && payType !== payTypeQ) return false;
       return true;
     });
-  }, [roleAssigned, roleFilters.name, roleFilters.mobile, roleFilters.email, roleFilters.designation, roleFilters.ctc_type]);
+  }, [roleAssigned, roleFilters.name, roleFilters.mobile, roleFilters.email, roleFilters.designation, roleFilters.pay_type]);
   const hasActiveAvailableFilters = Boolean(availableFilters.name || availableFilters.mobile || availableFilters.email);
   const hasActiveRoleFilters = Boolean(
     roleFilters.name ||
     roleFilters.mobile ||
     roleFilters.email ||
     roleFilters.designation ||
-    roleFilters.ctc_type
+    roleFilters.pay_type
   );
   const paginationDisabled = activeTab === 'pending' && hasActiveAvailableFilters;
   const paginationTabKey =
@@ -853,6 +858,10 @@ export default function PmClientDetail() {
 
   const applyBulkJoiningStatus = async (employeeIds, { onSuccess, buildSuccessToast } = {}) => {
     if (employeeIds.length === 0 || !joiningBulkStatus) return;
+    if (joiningBulkStatus === 'JOINED' || joiningBulkStatus === 'JOINED_OTHER_DATE') {
+      setError('Joined statuses require Emp Code per employee. Use the row joining control instead of bulk.');
+      return;
+    }
     if (joiningBulkStatus === 'JOINED_OTHER_DATE' && !joiningBulkDate) {
       setError('Please select a date for "Joined on other date".');
       return;
@@ -935,6 +944,7 @@ export default function PmClientDetail() {
     setJoiningInlineEmployeeId(row.id);
     setJoiningInlineStatus(String(row.joining_status ?? '').trim().toUpperCase());
     setJoiningInlineDate(String(row.joining_actual_date ?? '').trim());
+    setJoiningInlineEmpCode(String(row.emp_code ?? '').trim());
     setError(null);
   };
 
@@ -943,12 +953,20 @@ export default function PmClientDetail() {
     setJoiningInlineEmployeeId(null);
     setJoiningInlineStatus('');
     setJoiningInlineDate('');
+    setJoiningInlineEmpCode('');
   };
 
   const saveInlineJoiningEdit = async (row) => {
     if (!joiningInlineStatus) return;
+    const needsEmpCode =
+      joiningInlineStatus === 'JOINED' || joiningInlineStatus === 'JOINED_OTHER_DATE';
     if (joiningInlineStatus === 'JOINED_OTHER_DATE' && !joiningInlineDate) {
       setError('Please select a date for "Joined on other date".');
+      return;
+    }
+    const empCode = String(joiningInlineEmpCode ?? '').trim() || String(row.emp_code ?? '').trim();
+    if (needsEmpCode && !empCode) {
+      setError('Emp Code (StaffingGo) is required when marking Joined.');
       return;
     }
     setJoiningInlineLoading(true);
@@ -958,7 +976,8 @@ export default function PmClientDetail() {
         clientId: id,
         employeeId: row.id,
         joiningStatus: joiningInlineStatus,
-        joiningActualDate: joiningInlineStatus === 'JOINED_OTHER_DATE' ? joiningInlineDate : null
+        joiningActualDate: joiningInlineStatus === 'JOINED_OTHER_DATE' ? joiningInlineDate : null,
+        empCode: needsEmpCode ? empCode : null
       });
       if (!res?.employee) throw new Error('Could not update joining status.');
       setToast(`Joining status updated for ${row.name}.`);
@@ -977,31 +996,32 @@ export default function PmClientDetail() {
     setJoiningInlineEmployeeId(row.id);
     setJoiningInlineStatus(value);
     setJoiningInlineDate(value === 'JOINED_OTHER_DATE' ? String(row.joining_actual_date ?? '').trim() : '');
+    setJoiningInlineEmpCode(String(row.emp_code ?? '').trim());
     if (!value) return;
     if (value === currentStatus) return;
-    if (value !== 'JOINED_OTHER_DATE') {
-      setJoiningInlineDate('');
-      setJoiningInlineLoading(true);
-      setError(null);
-      try {
-        const res = await api.setJoiningStatus({
-          clientId: id,
-          employeeId: row.id,
-          joiningStatus: value,
-          joiningActualDate: null
-        });
-        if (!res?.employee) throw new Error('Could not update joining status.');
-        setToast(`Joining status updated for ${row.name}.`);
-        setTimeout(() => setToast(null), 3000);
-        await loadAll();
-        setJoiningInlineEmployeeId(null);
-        setJoiningInlineStatus('');
-        setJoiningInlineDate('');
-      } catch (err) {
-        setError(err.message || 'Could not update joining status.');
-      } finally {
-        setJoiningInlineLoading(false);
-      }
+    // Joined statuses need Emp Code (+ date for other-date) before save.
+    if (value === 'JOINED' || value === 'JOINED_OTHER_DATE') {
+      return;
+    }
+    setJoiningInlineDate('');
+    setJoiningInlineLoading(true);
+    setError(null);
+    try {
+      const res = await api.setJoiningStatus({
+        clientId: id,
+        employeeId: row.id,
+        joiningStatus: value,
+        joiningActualDate: null
+      });
+      if (!res?.employee) throw new Error('Could not update joining status.');
+      setToast(`Joining status updated for ${row.name}.`);
+      setTimeout(() => setToast(null), 3000);
+      await loadAll();
+      cancelInlineJoiningEdit();
+    } catch (err) {
+      setError(err.message || 'Could not update joining status.');
+    } finally {
+      setJoiningInlineLoading(false);
     }
   };
 
@@ -1037,7 +1057,7 @@ export default function PmClientDetail() {
   };
 
   const clearRoleFilters = () => {
-    setRoleFilters({ name: '', mobile: '', email: '', designation: '', ctc_type: '' });
+    setRoleFilters({ name: '', mobile: '', email: '', designation: '', pay_type: '' });
     setPageByTab((prev) => ({ ...prev, role_assigned: 1 }));
   };
 
@@ -1065,13 +1085,21 @@ export default function PmClientDetail() {
     const currentDate = joiningInlineEmployeeId === row.id
       ? joiningInlineDate
       : String(row.joining_actual_date ?? '').trim();
+    const currentEmpCode = joiningInlineEmployeeId === row.id
+      ? joiningInlineEmpCode
+      : String(row.emp_code ?? '').trim();
     const persistedDate = String(row.joining_actual_date ?? '').trim();
-    const shouldShowJoinedOtherDateSave =
-      currentValue === 'JOINED_OTHER_DATE' &&
-      Boolean(currentDate) &&
+    const persistedEmpCode = String(row.emp_code ?? '').trim();
+    const needsEmpCodeForCurrent =
+      currentValue === 'JOINED' || currentValue === 'JOINED_OTHER_DATE';
+    const shouldShowJoinedSave =
+      needsEmpCodeForCurrent &&
+      Boolean(String(currentEmpCode ?? '').trim()) &&
+      (currentValue !== 'JOINED_OTHER_DATE' || Boolean(currentDate)) &&
       (
-        status !== 'JOINED_OTHER_DATE' ||
-        currentDate !== persistedDate
+        status !== currentValue ||
+        (currentValue === 'JOINED_OTHER_DATE' && currentDate !== persistedDate) ||
+        String(currentEmpCode ?? '').trim() !== persistedEmpCode
       );
     const allowedOptions = [];
     if (!status) {
@@ -1103,6 +1131,7 @@ export default function PmClientDetail() {
             setJoiningInlineEmployeeId(row.id);
             setJoiningInlineStatus(status);
             setJoiningInlineDate(String(row.joining_actual_date ?? '').trim());
+            setJoiningInlineEmpCode(String(row.emp_code ?? '').trim());
           }}
           onChange={(e) => handleInlineStatusChange(row, e.target.value)}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
@@ -1116,28 +1145,39 @@ export default function PmClientDetail() {
           ))}
         </select>
         {currentValue === 'JOINED_OTHER_DATE' && (
-          <>
-            <input
-              type="date"
-              value={currentDate}
-              onChange={(e) => {
-                setJoiningInlineEmployeeId(row.id);
-                setJoiningInlineStatus('JOINED_OTHER_DATE');
-                setJoiningInlineDate(e.target.value);
-              }}
-              className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
-            />
-            {shouldShowJoinedOtherDateSave && (
-              <button
-                type="button"
-                onClick={() => saveInlineJoiningEdit(row)}
-                disabled={joiningInlineLoading}
-                className="self-start rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {joiningInlineLoading ? 'Saving...' : 'Save'}
-              </button>
-            )}
-          </>
+          <input
+            type="date"
+            value={currentDate}
+            onChange={(e) => {
+              setJoiningInlineEmployeeId(row.id);
+              setJoiningInlineStatus('JOINED_OTHER_DATE');
+              setJoiningInlineDate(e.target.value);
+            }}
+            className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          />
+        )}
+        {needsEmpCodeForCurrent && (
+          <input
+            type="text"
+            value={currentEmpCode}
+            onChange={(e) => {
+              setJoiningInlineEmployeeId(row.id);
+              setJoiningInlineStatus(currentValue || 'JOINED');
+              setJoiningInlineEmpCode(e.target.value);
+            }}
+            placeholder="Emp Code (StaffingGo)"
+            className="w-full rounded border border-slate-300 px-2 py-1 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          />
+        )}
+        {shouldShowJoinedSave && (
+          <button
+            type="button"
+            onClick={() => saveInlineJoiningEdit(row)}
+            disabled={joiningInlineLoading}
+            className="self-start rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {joiningInlineLoading ? 'Saving...' : 'Save'}
+          </button>
         )}
       </div>
     );
@@ -1677,28 +1717,28 @@ export default function PmClientDetail() {
                 </select>
               </div>
               <div className="min-w-[220px]">
-                <label className="block text-xs font-medium text-slate-600 mb-1">CTC Type</label>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Pay Type</label>
                 <div className="flex border border-slate-300 rounded-md overflow-hidden">
                   <button
                     type="button"
-                    onClick={() => setRoleFilter('ctc_type', '')}
-                    className={`px-3 py-2 text-sm border-r border-slate-300 ${roleFilters.ctc_type === '' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
+                    onClick={() => setRoleFilter('pay_type', '')}
+                    className={`px-3 py-2 text-sm border-r border-slate-300 ${roleFilters.pay_type === '' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
                   >
                     All
                   </button>
                   <button
                     type="button"
-                    onClick={() => setRoleFilter('ctc_type', 'MONTHLY')}
-                    className={`px-3 py-2 text-sm border-r border-slate-300 ${roleFilters.ctc_type === 'MONTHLY' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
+                    onClick={() => setRoleFilter('pay_type', 'CTC')}
+                    className={`px-3 py-2 text-sm border-r border-slate-300 ${roleFilters.pay_type === 'CTC' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
                   >
-                    Monthly
+                    CTC
                   </button>
                   <button
                     type="button"
-                    onClick={() => setRoleFilter('ctc_type', 'ANNUAL')}
-                    className={`px-3 py-2 text-sm ${roleFilters.ctc_type === 'ANNUAL' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
+                    onClick={() => setRoleFilter('pay_type', 'NET_PAY')}
+                    className={`px-3 py-2 text-sm ${roleFilters.pay_type === 'NET_PAY' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
                   >
-                    Annual
+                    Net Pay
                   </button>
                 </div>
               </div>
@@ -1724,31 +1764,20 @@ export default function PmClientDetail() {
                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
               >
                 <option value="">Select status</option>
-                <option value="JOINED">Joined</option>
                 <option value="NOT_JOINED">Not Joined</option>
-                <option value="JOINED_OTHER_DATE">Joined on other date</option>
                 <option value="JOINED_ABSCONDED">Joined and absconded</option>
               </select>
+              <p className="mt-1 text-[11px] text-slate-500">
+                For Joined / Joined on other date, set Emp Code on each employee row.
+              </p>
             </div>
-            {joiningBulkStatus === 'JOINED_OTHER_DATE' && (
-              <div className="min-w-[180px]">
-                <label className="mb-1 block text-xs font-medium text-slate-600">Joined date</label>
-                <input
-                  type="date"
-                  value={joiningBulkDate}
-                  onChange={(e) => setJoiningBulkDate(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                />
-              </div>
-            )}
             <button
               type="button"
               onClick={handleBulkJoiningStatus}
               disabled={
                 selectedIds.size === 0 ||
                 !joiningBulkStatus ||
-                joiningBulkLoading ||
-                (joiningBulkStatus === 'JOINED_OTHER_DATE' && !joiningBulkDate)
+                joiningBulkLoading
               }
               className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -1997,23 +2026,13 @@ export default function PmClientDetail() {
                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   >
                     <option value="">Select status</option>
-                    <option value="JOINED">Joined</option>
                     <option value="NOT_JOINED">Not Joined</option>
-                    <option value="JOINED_OTHER_DATE">Joined on other date</option>
                     <option value="JOINED_ABSCONDED">Joined and absconded</option>
                   </select>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    For Joined / Joined on other date, set Emp Code on each employee row.
+                  </p>
                 </div>
-                {joiningBulkStatus === 'JOINED_OTHER_DATE' && (
-                  <div className="min-w-[180px] flex-1">
-                    <label className="mb-1 block text-xs font-medium text-slate-600">Joined date</label>
-                    <input
-                      type="date"
-                      value={joiningBulkDate}
-                      onChange={(e) => setJoiningBulkDate(e.target.value)}
-                      className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                    />
-                  </div>
-                )}
               </div>
               <div className="mt-5 flex items-center justify-end gap-2">
                 <button
@@ -2030,8 +2049,7 @@ export default function PmClientDetail() {
                   disabled={
                     testingBulkJoiningEligibleCount === 0 ||
                     !joiningBulkStatus ||
-                    joiningBulkLoading ||
-                    (joiningBulkStatus === 'JOINED_OTHER_DATE' && !joiningBulkDate)
+                    joiningBulkLoading
                   }
                   className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -2046,10 +2064,11 @@ export default function PmClientDetail() {
             title={bulkRoleForceSendOnboarding ? 'Assign Role & Share Form' : 'Set Role Details (Bulk)'}
             description={
               bulkRoleForceSendOnboarding
-                ? `Assign role details and share onboarding form for ${selectedIds.size} selected employee${selectedIds.size === 1 ? '' : 's'}.`
-                : `Apply the same role details to ${selectedIds.size} selected available employee${selectedIds.size === 1 ? '' : 's'}.`
+                ? `Assign expected date of joining, CTC or Net Pay, and state, then share onboarding form for ${selectedIds.size} selected employee${selectedIds.size === 1 ? '' : 's'}.`
+                : `Apply the same role details (expected date of joining, CTC or Net Pay, state) to ${selectedIds.size} selected available employee${selectedIds.size === 1 ? '' : 's'}.`
             }
             designations={client?.designations ?? []}
+            defaultState={client?.state ?? ''}
             submitting={roleDetailsLoading}
             showSendOnboardingOption={!bulkRoleForceSendOnboarding}
             onClose={handleBulkRoleModalClose}
@@ -2059,8 +2078,9 @@ export default function PmClientDetail() {
         {rowRoleModalEmployee && (
           <RoleDetailsModal
             title={`Set Role Details - ${rowRoleModalEmployee.name}`}
-            description="Set designation, DOJ, and CTC for this employee."
+            description="Set designation, expected date of joining, CTC or Net Pay, and state for this employee."
             designations={client?.designations ?? []}
+            defaultState={client?.state ?? ''}
             submitting={roleDetailsLoading}
             onClose={() => setRowRoleModalEmployee(null)}
             onSubmit={handleSingleRoleDetails}

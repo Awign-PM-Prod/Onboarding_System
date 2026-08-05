@@ -1,10 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import EmployeeFormResponseModal from '../components/EmployeeFormResponseModal';
 import {
   employeeStatusBadgeClass,
   resolveEmployeeStatusLabel,
 } from '../lib/employeeStatusBadge';
+
+function IconEye({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"
+      />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  );
+}
 
 function joiningStatusLabel(row) {
   const status = String(row?.joining_status ?? '').trim().toUpperCase();
@@ -26,6 +40,15 @@ export default function PayrollClientFinalApprovedEmployeesPage() {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [responseModalOpen, setResponseModalOpen] = useState(false);
+  const [responseModalEmployee, setResponseModalEmployee] = useState(null);
+  const [responseModalForm, setResponseModalForm] = useState(null);
+  const [responseModalPreviousRejectedFields, setResponseModalPreviousRejectedFields] = useState([]);
+  const [responseModalPmApproverName, setResponseModalPmApproverName] = useState(null);
+  const [responseModalLoading, setResponseModalLoading] = useState(false);
+  const [responseModalError, setResponseModalError] = useState('');
+  const [responseDecisionLoading, setResponseDecisionLoading] = useState(false);
+  const [toast, setToast] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -58,13 +81,86 @@ export default function PayrollClientFinalApprovedEmployeesPage() {
     [employees]
   );
 
+  const closeResponseModal = (opts = {}) => {
+    if (responseDecisionLoading && !opts.force) return;
+    setResponseModalOpen(false);
+    setResponseModalEmployee(null);
+    setResponseModalForm(null);
+    setResponseModalPreviousRejectedFields([]);
+    setResponseModalError('');
+    setResponseModalLoading(false);
+    setResponseDecisionLoading(false);
+  };
+
+  const openResponseModal = async (row) => {
+    setResponseModalOpen(true);
+    setResponseModalEmployee(row);
+    setResponseModalForm(null);
+    setResponseModalPreviousRejectedFields([]);
+    setResponseModalPmApproverName(null);
+    setResponseModalError('');
+    setResponseModalLoading(true);
+    try {
+      const data = await api.getEmployeeJobAppForm({
+        clientId: id,
+        employeeId: row.id,
+        payrollReview: true
+      });
+      setResponseModalForm(data.form);
+      setResponseModalPreviousRejectedFields(
+        Array.isArray(data.previous_correction_rejected_fields) ? data.previous_correction_rejected_fields : []
+      );
+      const pmName = data.pm_approver?.name != null ? String(data.pm_approver.name).trim() : '';
+      setResponseModalPmApproverName(pmName || null);
+    } catch (err) {
+      setResponseModalError(err.message || 'Could not load application.');
+    } finally {
+      setResponseModalLoading(false);
+    }
+  };
+
+  const handlePayrollDecision = async (decisionPayload) => {
+    if (!responseModalEmployee) return;
+    setResponseModalError('');
+    setResponseDecisionLoading(true);
+    try {
+      const data = await api.reviewEmployeePayrollJobAppForm({
+        clientId: id,
+        employeeId: responseModalEmployee.id,
+        payload: decisionPayload
+      });
+      setResponseModalForm(data.form ?? null);
+      const d = String(decisionPayload?.decision_status ?? '').toUpperCase();
+      const msg =
+        d === 'APPROVED'
+          ? 'Application approved by Payroll Lead.'
+          : 'Application rejected for correction — returned to Program Manager.';
+      setToast(msg);
+      setTimeout(() => setToast(null), 3500);
+      const [employeeRows, clientRows] = await Promise.all([api.listEmployees(id), api.listClients()]);
+      setEmployees(employeeRows || []);
+      setClients(clientRows || []);
+      closeResponseModal({ force: true });
+    } catch (err) {
+      setResponseModalError(err.message || 'Could not submit Payroll Lead decision.');
+    } finally {
+      setResponseDecisionLoading(false);
+    }
+  };
+
   return (
     <main className="mx-auto max-w-6xl px-4 pb-8 pt-4 sm:px-6">
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 z-[110] max-w-md -translate-x-1/2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-lg">
+          {toast}
+        </div>
+      )}
       <div className="mb-6">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Approved Employees</h1>
           <p className="mt-1 text-sm text-slate-500">
-            {client?.client_name || 'Client'}: employees finally approved by Payroll Lead.
+            {client?.client_name || 'Client'}: employees finally approved by Payroll Lead. Open any record anytime
+            to re-verify, mark fields incorrect, or reject for correction.
           </p>
         </div>
       </div>
@@ -95,6 +191,7 @@ export default function PayrollClientFinalApprovedEmployeesPage() {
                 <th className="px-4 py-2 text-left font-medium">Designation</th>
                 <th className="px-4 py-2 text-left font-medium">PL Status</th>
                 <th className="px-4 py-2 text-left font-medium">Joining Status</th>
+                <th className="w-14 px-3 py-2 text-center font-medium">View</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -112,6 +209,17 @@ export default function PayrollClientFinalApprovedEmployeesPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-slate-700">{joiningStatusLabel(row)}</td>
+                  <td className="px-2 py-3 text-center">
+                    <button
+                      type="button"
+                      onClick={() => openResponseModal(row)}
+                      className="inline-flex rounded-lg p-2 text-slate-600 hover:bg-indigo-50 hover:text-indigo-700"
+                      title="Review application"
+                      aria-label={`Review application for ${row.name}`}
+                    >
+                      <IconEye className="h-5 w-5" />
+                    </button>
+                  </td>
                 </tr>
                 );
               })}
@@ -119,6 +227,20 @@ export default function PayrollClientFinalApprovedEmployeesPage() {
           </table>
         </div>
       )}
+
+      <EmployeeFormResponseModal
+        open={responseModalOpen}
+        onClose={closeResponseModal}
+        employeeName={responseModalEmployee?.name ?? ''}
+        loading={responseModalLoading}
+        error={responseModalError}
+        form={responseModalForm}
+        previousCorrectionRejectedFields={responseModalPreviousRejectedFields}
+        onDecision={handlePayrollDecision}
+        deciding={responseDecisionLoading}
+        reviewMode="payroll"
+        pmApproverName={responseModalPmApproverName}
+      />
     </main>
   );
 }

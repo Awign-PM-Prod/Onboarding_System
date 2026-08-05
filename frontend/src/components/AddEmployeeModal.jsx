@@ -5,8 +5,7 @@ import ModalOverlay from './ModalOverlay';
 const empty = {
   name: '',
   mobile: '',
-  email: '',
-  emp_code: ''
+  email: ''
 };
 
 const TEN_DIGIT_REGEX = /^\d{10}$/;
@@ -29,7 +28,6 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
     if (!form.mobile.trim()) errs.mobile = 'Required';
     else if (!TEN_DIGIT_REGEX.test(form.mobile)) errs.mobile = 'Must be 10 digits';
     if (!form.email.trim()) errs.email = 'Required';
-    if (!form.emp_code.trim()) errs.emp_code = 'Required';
     return errs;
   };
 
@@ -50,8 +48,7 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
       await onCreated?.({
         name: createdName,
         mobile: form.mobile,
-        email: form.email,
-        emp_code: form.emp_code
+        email: form.email
       });
       if (embedded) setForm({ ...empty });
       else onClose?.();
@@ -70,17 +67,12 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
             </div>
           )}
 
+          <p className="text-xs text-slate-500">
+            A unique Reference ID is generated automatically for onboarding. StaffingGo Emp Code is added when the employee is marked Joined.
+          </p>
+
           <Field label="Name" error={fieldErrors.name}>
             <input className="input" value={form.name} onChange={e => set({ name: e.target.value })} />
-          </Field>
-
-          <Field label="Emp Code (StaffingGo)" error={fieldErrors.emp_code}>
-            <input
-              className="input"
-              value={form.emp_code}
-              onChange={e => set({ emp_code: e.target.value })}
-              placeholder="e.g. T016394"
-            />
           </Field>
 
           <div className="grid grid-cols-2 gap-3">

@@ -203,13 +203,14 @@ export const api = {
         joining_actual_date: joiningActualDate || null
       })
     }),
-  setJoiningStatus: ({ clientId, employeeId, joiningStatus, joiningActualDate }) =>
+  setJoiningStatus: ({ clientId, employeeId, joiningStatus, joiningActualDate, empCode }) =>
     request(`/api/employees/${encodeURIComponent(employeeId)}/joining-status`, {
       method: 'POST',
       body: JSON.stringify({
         client_id: clientId,
         joining_status: joiningStatus,
-        joining_actual_date: joiningActualDate || null
+        joining_actual_date: joiningActualDate || null,
+        emp_code: empCode || null
       })
     }),
   setPayrollIdentityNumbers: ({ clientId, employeeId, payrollPfUanNumber, payrollEsicNumber }) =>
@@ -302,6 +303,25 @@ export const api = {
     request('/api/public/onboarding/email/verify-otp', {
       method: 'POST',
       body: JSON.stringify({ mobile, employee_id: employeeId || null, email, otp })
+    }),
+  sendSecondaryMobileOtp: ({ mobile, employeeId, secondaryMobile }) =>
+    request('/api/public/onboarding/secondary-mobile/send-otp', {
+      method: 'POST',
+      body: JSON.stringify({
+        mobile,
+        employee_id: employeeId || null,
+        pd_secondary_mobile: secondaryMobile,
+      }),
+    }),
+  verifySecondaryMobileOtp: ({ mobile, employeeId, secondaryMobile, otp }) =>
+    request('/api/public/onboarding/secondary-mobile/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({
+        mobile,
+        employee_id: employeeId || null,
+        pd_secondary_mobile: secondaryMobile,
+        otp,
+      }),
     }),
   verifyPan: ({ mobile, employeeId, panNumber }) =>
     request('/api/public/onboarding/pan/verify', {
