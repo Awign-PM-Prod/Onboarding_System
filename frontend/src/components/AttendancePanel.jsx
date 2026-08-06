@@ -150,6 +150,10 @@ function buildRowChanges(draftRows, serverRows) {
       patch.addon_incentive = draft.addon_incentive ?? null;
       hasChange = true;
     }
+    if (draft.arrear_days !== server.arrear_days) {
+      patch.arrear_days = draft.arrear_days ?? null;
+      hasChange = true;
+    }
     if ((draft.remarks ?? '') !== (server.remarks ?? '')) {
       patch.remarks = draft.remarks ?? '';
       hasChange = true;
@@ -223,6 +227,44 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+function csvEscape(value) {
+  const s = String(value ?? '');
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function buildMissingWarningCsv({ errors = [], missing = [] } = {}) {
+  const lines = ['Category,Emp Code,Employee Name,Reason'];
+  for (const err of errors) {
+    lines.push(
+      [
+        'Warning',
+        err?.emp_code || (err?.row != null ? `Row ${err.row}` : ''),
+        err?.employee_name || '',
+        err?.error || (Array.isArray(err?.errors) ? err.errors.join('; ') : 'Skipped')
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+  }
+  for (const emp of missing) {
+    lines.push(
+      [
+        'Missing',
+        emp?.emp_code || '',
+        emp?.employee_name || '',
+        'No attendance data in uploaded CSV'
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+  }
+  if (lines.length === 1) {
+    lines.push(',,,No missing or warning rows');
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 function isPolicyNewerThanSheet(clientPolicy, sheet) {
   const policyAt = clientPolicy?.policy_updated_at;
   const sheetAt = sheet?.updated_at;
@@ -255,12 +297,17 @@ export default function AttendancePanel({ clientId, role, projectName }) {
   const [shareSelectedIds, setShareSelectedIds] = useState(() => new Set());
   const unlockMenuRef = useRef(null);
   const exportMenuRef = useRef(null);
+  const importMenuRef = useRef(null);
+  const attendanceFileInputRef = useRef(null);
+  const incentivesFileInputRef = useRef(null);
   const policyRecalcKeyRef = useRef(null);
   const toastTimerRef = useRef(null);
   const [editingCell, setEditingCell] = useState(null); // { rowId, date }
   const [uploadSkipWarning, setUploadSkipWarning] = useState(null); // { imported, skipped, errors, missing?, failed?, message? }
   const [uploadSkipModalOpen, setUploadSkipModalOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
+  const [pendingUploadKind, setPendingUploadKind] = useState('attendance'); // 'attendance' | 'incentives'
   const [draftRows, setDraftRows] = useState([]);
   const [pendingSaveCount, setPendingSaveCount] = useState(0);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
@@ -461,6 +508,17 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [exportMenuOpen]);
 
+  useEffect(() => {
+    if (!importMenuOpen) return undefined;
+    const onDocClick = (e) => {
+      if (importMenuRef.current && !importMenuRef.current.contains(e.target)) {
+        setImportMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [importMenuOpen]);
+
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const result = rows.filter((r) => {
@@ -489,19 +547,53 @@ export default function AttendancePanel({ clientId, role, projectName }) {
   }, [rows, search, leaveType, sort]);
 
   const footerTotals = useMemo(() => {
+    const legend = Object.fromEntries(LEGEND_TOTAL_COLUMNS.map((col) => [col.code, 0]));
+    const leaveTaken = Object.fromEntries(LEAVE_SUMMARY_COLUMNS.map((key) => [key, 0]));
     let paidDays = 0;
     let lop = 0;
+    let notConsidered = 0;
+    let incentive = 0;
+    let addonIncentive = 0;
+    let arrearDays = 0;
     let nhFh = 0;
+
     for (const row of filteredRows) {
       paidDays += Number(row.paid_days ?? 0);
       lop += Number(row.lop ?? 0);
+      notConsidered += Number(row.not_considered ?? 0);
+      incentive += Number(row.incentive ?? 0);
+      addonIncentive += Number(row.addon_incentive ?? 0);
+      arrearDays += Number(row.arrear_days ?? 0);
       nhFh += Number(row.legend_totals?.NH ?? 0) + Number(row.legend_totals?.FH ?? 0);
+
+      for (const col of LEGEND_TOTAL_COLUMNS) {
+        legend[col.code] += Number(row.legend_totals?.[col.code] ?? 0);
+      }
+      for (const key of LEAVE_SUMMARY_COLUMNS) {
+        leaveTaken[key] += Number(row.leave_summary?.[`${key}_taken`] ?? 0);
+      }
     }
+
+    const roundTotal = (n) => {
+      const rounded = Math.round(Number(n || 0) * 100) / 100;
+      return Object.is(rounded, -0) ? 0 : rounded;
+    };
+
     return {
       employees: filteredRows.length,
-      paidDays,
-      lop,
-      nhFh
+      paidDays: roundTotal(paidDays),
+      lop: roundTotal(lop),
+      notConsidered: roundTotal(notConsidered),
+      incentive: roundTotal(incentive),
+      addonIncentive: roundTotal(addonIncentive),
+      arrearDays: roundTotal(arrearDays),
+      nhFh: roundTotal(nhFh),
+      legend: Object.fromEntries(
+        Object.entries(legend).map(([code, value]) => [code, roundTotal(value)])
+      ),
+      leaveTaken: Object.fromEntries(
+        Object.entries(leaveTaken).map(([key, value]) => [key, roundTotal(value)])
+      )
     };
   }, [filteredRows]);
 
@@ -517,7 +609,9 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     setUploadSkipModalOpen(false);
     setOverwriteModalOpen(false);
     setPendingUploadFiles(null);
+    setPendingUploadKind('attendance');
     setSubmitConfirmOpen(false);
+    setImportMenuOpen(false);
   }, [clientId]);
 
   useEffect(() => {
@@ -558,7 +652,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     };
   }, [clientId, month, location.pathname]);
 
-  const runUpload = async (files) => {
+  const runUpload = async (files, kind = 'attendance') => {
     if (!files?.length) return;
     setBusy(true);
     setError(null);
@@ -568,19 +662,37 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     let currentFile = null;
     try {
       let result = null;
-      // Upload sequentially: each file merges into the same month's sheet.
-      for (const file of files) {
-        currentFile = file;
-        result = await api.uploadAttendance({ clientId, month, file });
-        totalImported += Number(result.imported ?? 0);
-        totalSkipped += Number(result.skipped ?? 0);
-        if (Array.isArray(result.errors)) errorList.push(...result.errors);
-      }
-      const sheetMonth = result?.sheet?.attendance_month
-        ? String(result.sheet.attendance_month).slice(0, 7)
-        : null;
-      if (sheetMonth && sheetMonth !== month) {
-        setMonth(sheetMonth);
+      if (kind === 'incentives') {
+        if (!sheet?.id) {
+          setError('Upload attendance data first, then import incentives.');
+          return;
+        }
+        for (const file of files) {
+          currentFile = file;
+          result = await api.uploadAttendanceIncentives({
+            clientId,
+            sheetId: sheet.id,
+            file
+          });
+          totalImported += Number(result.imported ?? 0);
+          totalSkipped += Number(result.skipped ?? 0);
+          if (Array.isArray(result.errors)) errorList.push(...result.errors);
+        }
+      } else {
+        // Upload sequentially: each file merges into the same month's sheet.
+        for (const file of files) {
+          currentFile = file;
+          result = await api.uploadAttendance({ clientId, month, file });
+          totalImported += Number(result.imported ?? 0);
+          totalSkipped += Number(result.skipped ?? 0);
+          if (Array.isArray(result.errors)) errorList.push(...result.errors);
+        }
+        const sheetMonth = result?.sheet?.attendance_month
+          ? String(result.sheet.attendance_month).slice(0, 7)
+          : null;
+        if (sheetMonth && sheetMonth !== month) {
+          setMonth(sheetMonth);
+        }
       }
       setPayload(result);
       if (result?.sheet?.id) {
@@ -598,7 +710,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
       } else {
         setUploadSkipWarning(null);
       }
-      showToast('Data populated successfully');
+      showToast(kind === 'incentives' ? 'Incentives updated successfully' : 'Data populated successfully');
     } catch (err) {
       const prefix = files.length > 1 && currentFile ? `${currentFile.name}: ` : '';
       setError(`${prefix}${err.message}`);
@@ -614,11 +726,12 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     } finally {
       setBusy(false);
       setPendingUploadFiles(null);
+      setPendingUploadKind('attendance');
       setOverwriteModalOpen(false);
     }
   };
 
-  const onUpload = async (e) => {
+  const onUpload = async (e, kind = 'attendance') => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = '';
     if (!files.length) return;
@@ -626,13 +739,22 @@ export default function AttendancePanel({ clientId, role, projectName }) {
       setError('Sheet is locked. Unlock before uploading.');
       return;
     }
+    if (kind === 'incentives') {
+      if (!sheet?.id) {
+        setError('Upload attendance data first, then import incentives.');
+        return;
+      }
+      await runUpload(files, 'incentives');
+      return;
+    }
     const hasExistingData = (serverRows?.length ?? 0) > 0 || (draftRows?.length ?? 0) > 0;
     if (hasExistingData) {
+      setPendingUploadKind('attendance');
       setPendingUploadFiles(files);
       setOverwriteModalOpen(true);
       return;
     }
-    await runUpload(files);
+    await runUpload(files, 'attendance');
   };
 
   const refreshAfterAction = async () => {
@@ -884,6 +1006,14 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     queueRowAutoSave(rowId);
   };
 
+  const onChangeArrearDays = (rowId, value) => {
+    if (!canEdit) return;
+    setDraftRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, arrear_days: value === '' ? null : value } : r))
+    );
+    queueRowAutoSave(rowId);
+  };
+
   const onChangeRemarks = (rowId, value) => {
     if (!canEdit) return;
     setDraftRows((prev) =>
@@ -892,12 +1022,26 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     queueRowAutoSave(rowId);
   };
 
+  const onExportMissingWarningLocal = () => {
+    if (!uploadSkipWarning) return;
+    const ym = String(sheet?.attendance_month ?? month).slice(0, 7);
+    const csv = buildMissingWarningCsv({
+      errors: uploadSkipWarning.errors ?? [],
+      missing: uploadSkipWarning.missing ?? []
+    });
+    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `attendance-missing-warning-${ym}.csv`);
+  };
+
   const onExport = async (type) => {
     setExportMenuOpen(false);
     setBusy(true);
     setError(null);
     try {
       const ym = String(sheet?.attendance_month ?? month).slice(0, 7);
+      if ((type === 'missing' || type === 'warnings') && uploadSkipWarning) {
+        onExportMissingWarningLocal();
+        return;
+      }
       const blob = sheet?.id
         ? await api.exportAttendanceCsv({ clientId, sheetId: sheet.id, type })
         : await api.exportAttendanceTemplate({ clientId, month: ym });
@@ -905,7 +1049,9 @@ export default function AttendancePanel({ clientId, role, projectName }) {
         data: `attendance-data-${ym}.csv`,
         template: `attendance-template-${ym}.csv`,
         incentive: `attendance-incentive-${ym}.csv`,
-        leave: `attendance-leave-${ym}.csv`
+        leave: `attendance-leave-${ym}.csv`,
+        missing: `attendance-missing-warning-${ym}.csv`,
+        warnings: `attendance-missing-warning-${ym}.csv`
       };
       downloadBlob(blob, names[type] || `attendance-${ym}.csv`);
     } catch (err) {
@@ -1025,6 +1171,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                 onClick={() => {
                   setOverwriteModalOpen(false);
                   setPendingUploadFiles(null);
+                  setPendingUploadKind('attendance');
                 }}
                 className="min-w-[7.5rem] rounded-lg border border-slate-200 bg-slate-100 px-5 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-200 disabled:opacity-60"
               >
@@ -1033,7 +1180,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
               <button
                 type="button"
                 disabled={busy || !pendingUploadFiles?.length}
-                onClick={() => runUpload(pendingUploadFiles)}
+                onClick={() => runUpload(pendingUploadFiles, pendingUploadKind)}
                 className="min-w-[7.5rem] rounded-lg bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
               >
                 Yes, Overwrite
@@ -1128,7 +1275,14 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                 </div>
               </>
             )}
-            <div className="mt-5 flex justify-end">
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onExportMissingWarningLocal}
+                className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Export CSV
+              </button>
               <button
                 type="button"
                 onClick={() => setUploadSkipModalOpen(false)}
@@ -1214,16 +1368,6 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                 }}
               />
             </label>
-            {sheet && canEdit && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={onRecompute}
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                Recompute
-              </button>
-            )}
             {sheet && (
               <button
                 type="button"
@@ -1419,6 +1563,15 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                       >
                         Export Leave Details
                       </button>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onExport('missing')}
+                        className="block w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
+                      >
+                        Export Missing / Warning
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1433,24 +1586,62 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                   Export Template
                 </button>
               )}
-              <label
-                className={`inline-flex items-center gap-1.5 rounded-md bg-[#3B82F6] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#2563EB] ${
-                  busy || (sheet && !canEdit)
-                    ? 'cursor-not-allowed opacity-60'
-                    : 'cursor-pointer'
-                }`}
-              >
-                <UploadIcon className="h-4 w-4" />
-                Import CSV
+              <div className="relative" ref={importMenuRef}>
+                <button
+                  type="button"
+                  disabled={busy || (sheet && !canEdit)}
+                  onClick={() => setImportMenuOpen((v) => !v)}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#3B82F6] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <UploadIcon className="h-4 w-4" />
+                  Import CSV
+                  <ChevronDownIcon className={`h-3.5 w-3.5 opacity-80 ${importMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
                 <input
+                  ref={attendanceFileInputRef}
                   type="file"
                   accept=".csv,text/csv"
                   multiple
                   className="hidden"
                   disabled={busy || (sheet && !canEdit)}
-                  onChange={onUpload}
+                  onChange={(e) => onUpload(e, 'attendance')}
                 />
-              </label>
+                <input
+                  ref={incentivesFileInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  disabled={busy || !sheet || !canEdit}
+                  onChange={(e) => onUpload(e, 'incentives')}
+                />
+                {importMenuOpen && (
+                  <div className="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                    <button
+                      type="button"
+                      disabled={busy || (sheet && !canEdit)}
+                      onClick={() => {
+                        setImportMenuOpen(false);
+                        attendanceFileInputRef.current?.click();
+                      }}
+                      className="block w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Attendance CSV
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !sheet || !canEdit}
+                      title={!sheet ? 'Upload attendance first' : undefined}
+                      onClick={() => {
+                        setImportMenuOpen(false);
+                        incentivesFileInputRef.current?.click();
+                      }}
+                      className="block w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Incentives CSV
+                    </button>
+                  </div>
+                )}
+              </div>
               {sheet && !isPl && canRequestEdit && (
                 <button
                   type="button"
@@ -1577,6 +1768,12 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                     Incentives
                   </th>
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium">Add-on Incentives</th>
+                  <th
+                    className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-center font-medium"
+                    title="Entered later by PM or PL"
+                  >
+                    Arrear Days
+                  </th>
                   <th className="whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium min-w-[8rem]">Remarks</th>
                 </tr>
               </thead>
@@ -1590,11 +1787,14 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                         LEGEND_TOTAL_COLUMNS.length +
                         3 +
                         LEAVE_SUMMARY_COLUMNS.length +
-                        3
+                        4
                       }
                       className="border-b border-slate-100 px-4 py-16"
                     >
-                      <EmptyAttendanceState busy={busy} onUpload={onUpload} />
+                      <EmptyAttendanceState
+                        busy={busy}
+                        onUpload={(e) => onUpload(e, 'attendance')}
+                      />
                     </td>
                   </tr>
                 ) : (
@@ -1727,6 +1927,28 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                           <span className="tabular-nums text-slate-700">{row.addon_incentive ?? '—'}</span>
                         )}
                       </td>
+                      <td className="border-b border-slate-100 px-2 py-1.5 text-center">
+                        {canEdit ? (
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={row.arrear_days ?? ''}
+                            onChange={(e) => {
+                              const v = e.target.value.trim();
+                              if (v === '') {
+                                onChangeArrearDays(row.id, null);
+                                return;
+                              }
+                              const n = Number(v.replace(/,/g, ''));
+                              if (Number.isFinite(n) && n >= 0) onChangeArrearDays(row.id, n);
+                            }}
+                            placeholder="Enter value"
+                            className="w-20 rounded border border-slate-200 px-2 py-1 text-center text-xs tabular-nums placeholder:text-slate-400"
+                          />
+                        ) : (
+                          <span className="tabular-nums text-slate-700">{row.arrear_days ?? '—'}</span>
+                        )}
+                      </td>
                       <td className="border-b border-slate-100 px-2 py-1.5 min-w-[8rem]">
                         {canEdit ? (
                           <input
@@ -1744,6 +1966,72 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                   ))
                 )}
               </tbody>
+              {sheet && filteredRows.length > 0 && (
+                <tfoot>
+                  <tr className="text-slate-800">
+                    <td className="sticky bottom-0 left-0 z-50 w-10 min-w-[2.5rem] border-t border-slate-300 bg-slate-100 px-2 py-2 text-left font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      {footerTotals.employees}
+                    </td>
+                    <td className="sticky bottom-0 left-10 z-50 w-[5.5rem] min-w-[5.5rem] border-t border-slate-300 bg-slate-100 px-2 py-2 font-semibold shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      —
+                    </td>
+                    <td className="sticky bottom-0 left-[7.5rem] z-50 min-w-[9rem] max-w-[11rem] border-t border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold shadow-[2px_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      Total
+                    </td>
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    {calendarView === 'expanded' &&
+                      gridDayDates.map((d) => (
+                        <td
+                          key={`total-day-${d}`}
+                          className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-1 py-2 text-center shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]"
+                        />
+                      ))}
+                    {LEGEND_TOTAL_COLUMNS.map((col) => (
+                      <td
+                        key={`total-legend-${col.code}`}
+                        className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]"
+                      >
+                        {footerTotals.legend[col.code]}
+                      </td>
+                    ))}
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      {footerTotals.paidDays}
+                    </td>
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums text-red-700 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      {footerTotals.lop}
+                    </td>
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      {footerTotals.notConsidered}
+                    </td>
+                    {LEAVE_SUMMARY_COLUMNS.map((colKey) => (
+                      <td
+                        key={`total-leave-${colKey}`}
+                        className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]"
+                        title={`Total ${colKey} taken`}
+                      >
+                        {footerTotals.leaveTaken[colKey]}
+                      </td>
+                    ))}
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      {footerTotals.incentive}
+                    </td>
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      {footerTotals.addonIncentive}
+                    </td>
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                      {footerTotals.arrearDays}
+                    </td>
+                    <td className="sticky bottom-0 z-40 min-w-[8rem] border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
 

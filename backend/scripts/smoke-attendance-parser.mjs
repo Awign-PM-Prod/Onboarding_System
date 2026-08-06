@@ -41,16 +41,17 @@ assert.equal(parseDayHeaderToDate('Jul-5-26'), '2026-07-05');
 
 const { sheetMeta, rows, errors } = parseAmsAttendanceCsv(text);
 assert.ok(sheetMeta?.attendance_month, 'attendance_month detected');
-assert.equal(rows.length, 2, 'two data rows');
+assert.equal(rows.length, 6, 'six data rows in demo sample');
 assert.ok(rows[0].day_marks.length >= 7, 'day marks present');
-assert.equal(rows[0].emp_code, 'T016394');
+assert.equal(rows[0].emp_code, 'ATT001');
 assert.equal(rows[0].status_label, 'Active');
 assert.equal(rows[0].legend_totals.P, 3);
 assert.equal(rows[0].legend_totals.NH, 1);
 assert.equal(rows[0].legend_totals.A, 1);
 assert.equal(rows[0].legend_totals.W, 2);
-assert.equal(rows[1].legend_totals.FH, 1);
+assert.equal(rows[1].legend_totals.NH, 1);
 assert.equal(rows[1].legend_totals.HD, 1);
+assert.equal(rows[4].emp_code, 'T016394');
 
 const totals = computeLegendTotals(['P', 'P', 'A', 'NH']);
 assert.deepEqual(
@@ -93,6 +94,19 @@ const empStatusCsv = [
 const empStatusParsed = parseAmsAttendanceCsv(empStatusCsv);
 assert.equal(empStatusParsed.rows[0].status_label, 'New Joiner');
 assert.equal(empStatusParsed.rows[1].status_label, 'Abscond');
+
+// Template-style rows often omit Amt. Type — still import every emp_code row.
+const noAmtTypeCsv = [
+  'Emp Code,Employee Name,Amt. Type,1-Apr-26,2-Apr-26',
+  'T10,One,,P,W',
+  'T11,Two,,A,P',
+  ',,,'
+].join('\n');
+const noAmtParsed = parseAmsAttendanceCsv(noAmtTypeCsv);
+assert.equal(noAmtParsed.rows.length, 2, 'rows without Amt. Type still import');
+assert.equal(noAmtParsed.rows[0].emp_code, 'T10');
+assert.equal(noAmtParsed.rows[1].emp_code, 'T11');
+assert.equal(noAmtParsed.rows[0].amt_type, null);
 
 console.log('attendance parser smoke OK', {
   month: sheetMeta.attendance_month,

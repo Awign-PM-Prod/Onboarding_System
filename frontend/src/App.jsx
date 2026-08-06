@@ -8,6 +8,8 @@ import PmDashboardHome from './pages/PmDashboardHome';
 import PmClientDetail from './pages/PmClientDetail';
 import PayrollLeadDashboardHome from './pages/PayrollLeadDashboardHome';
 import PayrollLeadClientsPage from './pages/PayrollLeadClientsPage';
+import PayrollLeadProgramManagersPage from './pages/PayrollLeadProgramManagersPage';
+import ProgramManagerForm from './pages/ProgramManagerForm';
 import PayrollClientDashboardHome from './pages/PayrollClientDashboardHome';
 import PayrollClientApprovedEmployeesPage from './pages/PayrollClientApprovedEmployeesPage';
 import PayrollClientFinalApprovedEmployeesPage from './pages/PayrollClientFinalApprovedEmployeesPage';
@@ -18,6 +20,12 @@ import PayrollClientPolicyPage from './pages/PayrollClientPolicyPage';
 import PayrollClientAssignPmPage from './pages/PayrollClientAssignPmPage';
 import PayrollHeadDashboardHome from './pages/PayrollHeadDashboardHome';
 import PayrollHeadClientsPage from './pages/PayrollHeadClientsPage';
+import SuperAdminLayout from './components/SuperAdminLayout';
+import SuperAdminDashboardHome from './pages/SuperAdminDashboardHome';
+import SuperAdminClientsPage from './pages/SuperAdminClientsPage';
+import SuperAdminClientDetailPage from './pages/SuperAdminClientDetailPage';
+import SuperAdminActivityPage from './pages/SuperAdminActivityPage';
+import SuperAdminSalaryConfigPage from './pages/SuperAdminSalaryConfigPage';
 import PmClientsPage from './pages/PmClientsPage';
 import OnboardingForm from './pages/OnboardingForm';
 import OnboardingStatusPage from './pages/OnboardingStatusPage';
@@ -48,6 +56,8 @@ export default function App() {
         <Route path="/dashboard" element={<Navigate to="/dashboard/dashboard" replace />} />
         <Route path="/dashboard/dashboard" element={<PayrollLeadDashboardHome />} />
         <Route path="/dashboard/clients" element={<PayrollLeadClientsPage />} />
+        <Route path="/dashboard/program-managers" element={<PayrollLeadProgramManagersPage />} />
+        <Route path="/dashboard/program-managers/new" element={<ProgramManagerForm />} />
         <Route path="/clients/new" element={<ClientForm />} />
         <Route path="/clients/:id/edit" element={<ClientForm />} />
         <Route path="/dashboard/client/:id">
@@ -88,6 +98,22 @@ export default function App() {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<PayrollHeadDashboardHome />} />
         <Route path="clients" element={<PayrollHeadClientsPage />} />
+      </Route>
+
+      <Route
+        path="/super-admin"
+        element={
+          <ProtectedRoute role="SUPER_ADMIN">
+            <SuperAdminLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<Navigate to="dashboard" replace />} />
+        <Route path="dashboard" element={<SuperAdminDashboardHome />} />
+        <Route path="clients" element={<SuperAdminClientsPage />} />
+        <Route path="clients/:id" element={<SuperAdminClientDetailPage />} />
+        <Route path="activity" element={<SuperAdminActivityPage />} />
+        <Route path="salary-config" element={<SuperAdminSalaryConfigPage />} />
       </Route>
 
       <Route path="/onboardingform" element={<OnboardingForm />} />

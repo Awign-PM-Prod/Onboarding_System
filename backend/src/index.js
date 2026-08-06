@@ -10,6 +10,8 @@ import pmClientsRouter from './routes/pmClients.js';
 import employeesRouter from './routes/employees.js';
 import publicOnboardingRouter from './routes/publicOnboarding.js';
 import payrollHeadRouter from './routes/payrollHead.js';
+import superAdminRouter from './routes/superAdmin.js';
+import salaryMinimumsRouter from './routes/salaryMinimums.js';
 import attendanceRouter from './routes/attendance.js';
 
 const app = express();
@@ -44,6 +46,8 @@ app.use('/api/pm/clients', requireAuth, pmClientsRouter);
 app.use('/api/employees', requireAuth, employeesRouter);
 app.use('/api/public/onboarding', publicOnboardingRouter);
 app.use('/api/admin', requireAuth, payrollHeadRouter);
+app.use('/api/super-admin', requireAuth, superAdminRouter);
+app.use('/api/salary-minimums', requireAuth, salaryMinimumsRouter);
 
 app.use((err, _req, res, _next) => {
   console.error('[api error]', err);

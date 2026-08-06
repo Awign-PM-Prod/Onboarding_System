@@ -13,6 +13,66 @@ function json(status: number, payload: Record<string, unknown>) {
   });
 }
 
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value) return null;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return asObject(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function looksLikeKycProfile(obj: Record<string, unknown> | null): boolean {
+  if (!obj) return false;
+  return Boolean(
+    obj.name ||
+      obj.fullName ||
+      obj.full_name ||
+      obj.careof ||
+      obj.careOf ||
+      obj.care_of ||
+      obj.dob ||
+      obj.dateOfBirth ||
+      obj.date_of_birth ||
+      obj.photo ||
+      obj.address ||
+      obj.gender,
+  );
+}
+
+/** Prefer nested KYC containers when Neokred wraps demographics under data.*. */
+function extractKycData(upstreamBody: Record<string, unknown> | null): Record<string, unknown> {
+  const rootData = asObject(upstreamBody?.data) ?? {};
+  const candidates = [
+    rootData,
+    asObject(rootData.aadhaarData),
+    asObject(rootData.aadhaar_data),
+    asObject(rootData.kycData),
+    asObject(rootData.kyc_data),
+    asObject(rootData.kycDetails),
+    asObject(rootData.kyc_details),
+    asObject(rootData.result),
+    asObject(rootData.profile),
+    asObject(rootData.details),
+    asObject(upstreamBody),
+  ];
+
+  for (const candidate of candidates) {
+    if (looksLikeKycProfile(candidate)) {
+      return candidate ?? {};
+    }
+  }
+
+  return rootData;
+}
+
 serve(async (req) => {
   if (req.method !== "POST") {
     return json(405, { error: "Method not allowed" });
@@ -79,7 +139,15 @@ serve(async (req) => {
     return json(502, { error: message, upstream: upstreamBody ?? rawText });
   }
 
-  const data = (upstreamBody?.data as Record<string, unknown> | undefined) ?? {};
+  const successFlag = upstreamBody?.success;
+  if (successFlag === false) {
+    return json(502, {
+      error: String(upstreamBody?.message ?? "Aadhaar verify provider reported failure"),
+      upstream: upstreamBody,
+    });
+  }
+
+  const data = extractKycData(upstreamBody);
   return json(200, {
     ok: true,
     transactionId: String(upstreamBody?.transactionId ?? "").trim() || null,

@@ -335,7 +335,7 @@ export default function OnboardingStatusPage() {
                   className="w-full max-w-xs rounded-lg border border-slate-300 px-4 py-3 text-slate-900"
                   placeholder="6-digit OTP"
                 />
-                <p className="mt-2 text-xs text-slate-500">Demo OTP is configured by backend.</p>
+                <p className="mt-2 text-xs text-slate-500">OTP sent via SMS to this mobile number.</p>
                 <button
                   type="button"
                   onClick={verifyOtp}

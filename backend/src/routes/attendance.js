@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { supabaseAdmin } from '../supabase.js';
 import { parseAmsAttendanceCsv } from '../utils/amsAttendanceParser.js';
+import { parseIncentiveBulkCsv } from '../utils/incentiveBulkParser.js';
 import {
   isValidAttendanceCode,
   normalizeAttendanceCode
@@ -17,7 +18,11 @@ import {
 } from '../utils/attendanceRecalc.js';
 import { mergeYtdTaken } from '../utils/attendanceCalculator.js';
 import { getPayrollPeriod, payrollCycleLabel } from '../utils/clientPolicy.js';
-import { buildAttendanceExportCsv, exportFilename } from '../utils/attendanceExport.js';
+import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
+import {
+  buildAttendanceExportCsv,
+  exportFilename
+} from '../utils/attendanceExport.js';
 
 const router = Router({ mergeParams: true });
 
@@ -107,6 +112,9 @@ function buildRowFieldChangeMessage(empCode, beforeFields, rowUpdate) {
   if (beforeFields.addon_incentive !== rowUpdate.addon_incentive) {
     parts.push(`addon incentive ${formatMarkLabel(beforeFields.addon_incentive)}→${formatMarkLabel(rowUpdate.addon_incentive)}`);
   }
+  if (beforeFields.arrear_days !== rowUpdate.arrear_days) {
+    parts.push(`arrear days ${formatMarkLabel(beforeFields.arrear_days)}→${formatMarkLabel(rowUpdate.arrear_days)}`);
+  }
   if (beforeFields.remarks !== rowUpdate.remarks) {
     if (beforeFields.remarks === rowUpdate.remarks) {
       // no-op
@@ -119,6 +127,29 @@ function buildRowFieldChangeMessage(empCode, beforeFields, rowUpdate) {
     }
   }
   return parts.length ? `${empCode}: ${parts.join('; ')}` : `${empCode}: row fields updated`;
+}
+
+async function listMissingEmployeesForSheet(clientId, sheetId) {
+  const { data: allClientEmployees, error: allEmpErr } = await supabaseAdmin
+    .from('employees')
+    .select('emp_code, name')
+    .eq('client_id', clientId)
+    .not('emp_code', 'is', null);
+  if (allEmpErr) throw allEmpErr;
+  const { data: sheetRowCodes, error: rowCodeErr } = await supabaseAdmin
+    .from('attendance_rows')
+    .select('emp_code')
+    .eq('sheet_id', sheetId);
+  if (rowCodeErr) throw rowCodeErr;
+  const sheetCodeSet = new Set(
+    (sheetRowCodes ?? []).map((r) => String(r.emp_code ?? '').trim()).filter(Boolean)
+  );
+  return (allClientEmployees ?? [])
+    .filter((e) => {
+      const code = String(e.emp_code ?? '').trim();
+      return code && !sheetCodeSet.has(code);
+    })
+    .map((e) => ({ emp_code: e.emp_code, employee_name: e.name ?? null }));
 }
 
 async function writeLog({
@@ -428,12 +459,14 @@ router.get('/export', async (req, res, next) => {
       });
     }
 
+    // One sample employee only — template is a format reference, not a full roster.
     const { data: employees, error: empErr } = await supabaseAdmin
       .from('employees')
       .select('id, emp_code, name, mobile, designation, date_of_joining, ctc_type')
       .eq('client_id', clientId)
       .not('emp_code', 'is', null)
-      .order('name', { ascending: true });
+      .order('name', { ascending: true })
+      .limit(1);
     if (empErr) throw empErr;
 
     const client_policy = await loadClientPolicyForResponse(clientId);
@@ -448,31 +481,32 @@ router.get('/export', async (req, res, next) => {
       payroll_end_date: period?.end ?? null
     };
 
-    const rows = (employees ?? []).map((emp) => ({
-      emp_code: String(emp.emp_code ?? '').trim(),
-      employee_name_snapshot: emp.name ?? '',
-      mobile: emp.mobile ?? '',
-      designation: emp.designation ?? '',
-      doj: emp.date_of_joining ?? null,
-      amt_type: emp.ctc_type ?? '',
-      day_marks: [],
-      legend_totals: {},
-      leave_summary: {}
-    }));
-
-    if (!rows.length) {
-      rows.push({
-        emp_code: '',
-        employee_name_snapshot: '',
-        mobile: '',
-        designation: '',
-        doj: null,
-        amt_type: '',
-        day_marks: [],
-        legend_totals: {},
-        leave_summary: {}
-      });
-    }
+    const sampleEmp = employees?.[0];
+    const rows = [
+      sampleEmp
+        ? {
+            emp_code: String(sampleEmp.emp_code ?? '').trim(),
+            employee_name_snapshot: sampleEmp.name ?? '',
+            mobile: sampleEmp.mobile ?? '',
+            designation: sampleEmp.designation ?? '',
+            doj: sampleEmp.date_of_joining ?? null,
+            amt_type: String(sampleEmp.ctc_type ?? '').trim() || 'MONTHLY',
+            day_marks: [],
+            legend_totals: {},
+            leave_summary: {}
+          }
+        : {
+            emp_code: '',
+            employee_name_snapshot: '',
+            mobile: '',
+            designation: '',
+            doj: null,
+            amt_type: '',
+            day_marks: [],
+            legend_totals: {},
+            leave_summary: {}
+          }
+    ];
 
     const csv = buildAttendanceExportCsv({ sheet, rows, type: 'template' });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -734,7 +768,8 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       legend_totals: row.legend_totals,
       leave_summary: row.leave_summary,
       remarks: row.remarks,
-      addon_incentive: row.addon_incentive
+      addon_incentive: row.addon_incentive,
+      arrear_days: row.arrear_days
     }));
 
     let insertedRows = [];
@@ -786,26 +821,7 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
 
     // Employees on this client (with an emp_code) that still have no row on the
     // sheet after this upload — i.e. missing from the uploaded CSV data.
-    const { data: allClientEmployees, error: allEmpErr } = await supabaseAdmin
-      .from('employees')
-      .select('emp_code, name')
-      .eq('client_id', clientId)
-      .not('emp_code', 'is', null);
-    if (allEmpErr) throw allEmpErr;
-    const { data: sheetRowCodes, error: rowCodeErr } = await supabaseAdmin
-      .from('attendance_rows')
-      .select('emp_code')
-      .eq('sheet_id', sheetId);
-    if (rowCodeErr) throw rowCodeErr;
-    const sheetCodeSet = new Set(
-      (sheetRowCodes ?? []).map((r) => String(r.emp_code ?? '').trim()).filter(Boolean)
-    );
-    const missingFromCsv = (allClientEmployees ?? [])
-      .filter((e) => {
-        const code = String(e.emp_code ?? '').trim();
-        return code && !sheetCodeSet.has(code);
-      })
-      .map((e) => ({ emp_code: e.emp_code, employee_name: e.name ?? null }));
+    const missingFromCsv = await listMissingEmployeesForSheet(clientId, sheetId);
 
     const uploadMessage = defaultMarksApplied > 0
       ? `Uploaded ${matched.length} rows (${defaultMarksApplied} default week-off/holiday mark(s) applied)`
@@ -825,6 +841,15 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
         filename: req.file.originalname
       },
       message: uploadMessage
+    });
+
+    await logOrgActivityFromReq(req, {
+      action: 'ATTENDANCE_UPLOAD',
+      entityType: 'attendance_sheet',
+      entityId: sheetId,
+      clientId,
+      summary: `Attendance upload for ${access.client?.client_name || clientId}: ${uploadMessage}`,
+      metadata: { imported: matched.length, sheet_id: sheetId }
     });
 
     const bundle = await fetchSheetBundle(sheetId);
@@ -848,6 +873,150 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
   }
 });
 
+// POST upload incentives (add-on) CSV into an existing sheet
+router.post('/:sheetId/upload-incentives', upload.single('file'), async (req, res, next) => {
+  try {
+    const clientId = req.params.clientId;
+    const access = await resolveClientAccess(req, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    if (!req.file?.buffer) {
+      return res.status(400).json({ error: 'CSV file is required' });
+    }
+
+    const { data: sheet, error } = await supabaseAdmin
+      .from('attendance_sheets')
+      .select('*')
+      .eq('id', req.params.sheetId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
+
+    const { data: grantsForUpload } = await supabaseAdmin
+      .from('attendance_edit_grants')
+      .select('user_id')
+      .eq('sheet_id', sheet.id);
+    assertCanEdit(
+      sheet,
+      access,
+      (grantsForUpload ?? []).map((g) => g.user_id)
+    );
+
+    const text = req.file.buffer.toString('utf8');
+    const { rows: parsedRows, errors: parseErrors } = parseIncentiveBulkCsv(text);
+    if (!parsedRows.length) {
+      return res.status(400).json({
+        error: parseErrors.length
+          ? 'Could not parse incentives CSV'
+          : 'No incentive rows found. Include Emp Code and Add-on Incentive columns.',
+        details: parseErrors
+      });
+    }
+
+    const { data: sheetRows, error: rowsErr } = await supabaseAdmin
+      .from('attendance_rows')
+      .select('id, emp_code, employee_name_snapshot, addon_incentive, remarks')
+      .eq('sheet_id', sheet.id);
+    if (rowsErr) throw rowsErr;
+
+    const rowByCode = new Map(
+      (sheetRows ?? []).map((r) => [String(r.emp_code ?? '').trim().toLowerCase(), r])
+    );
+
+    let updated = 0;
+    const skipped = [];
+    const allErrors = [...(parseErrors ?? [])];
+
+    for (const item of parsedRows) {
+      const codeKey = String(item.emp_code ?? '').trim().toLowerCase();
+      const existing = rowByCode.get(codeKey);
+      if (!existing) {
+        skipped.push({
+          emp_code: item.emp_code,
+          employee_name: item.employee_name,
+          error: 'Emp Code not found on this attendance sheet'
+        });
+        continue;
+      }
+
+      const rowUpdate = {
+        addon_incentive: item.addon_incentive,
+        updated_at: new Date().toISOString()
+      };
+      if (item.remarks !== undefined) {
+        rowUpdate.remarks = item.remarks;
+      }
+
+      const beforeFields = {
+        addon_incentive: existing.addon_incentive,
+        remarks: existing.remarks
+      };
+
+      const { error: upErr } = await supabaseAdmin
+        .from('attendance_rows')
+        .update(rowUpdate)
+        .eq('id', existing.id);
+      if (upErr) throw upErr;
+
+      updated += 1;
+      await writeLog({
+        sheetId: sheet.id,
+        rowId: existing.id,
+        action: 'ROW_FIELD_CHANGE',
+        actorUserId: req.user.id,
+        actorRole: access.user.role,
+        beforeJson: beforeFields,
+        afterJson: {
+          addon_incentive: rowUpdate.addon_incentive,
+          remarks: rowUpdate.remarks !== undefined ? rowUpdate.remarks : existing.remarks
+        },
+        message: buildRowFieldChangeMessage(existing.emp_code, beforeFields, {
+          addon_incentive: rowUpdate.addon_incentive,
+          remarks: rowUpdate.remarks !== undefined ? rowUpdate.remarks : existing.remarks
+        })
+      });
+    }
+
+    await writeLog({
+      sheetId: sheet.id,
+      action: 'UPLOAD',
+      actorUserId: req.user.id,
+      actorRole: access.user.role,
+      afterJson: {
+        type: 'incentives',
+        updated,
+        skipped: skipped.length,
+        filename: req.file.originalname
+      },
+      message: `Uploaded incentives for ${updated} row(s)`
+    });
+
+    const bundle = await fetchSheetBundle(sheet.id);
+    const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
+    const eligiblePms = await loadEligiblePms(access.client);
+    const client_policy = await loadClientPolicyForResponse(
+      clientId,
+      monthYm(sheet.attendance_month)
+    );
+
+    res.status(skipped.length || allErrors.length ? 207 : 200).json({
+      imported: updated,
+      skipped: skipped.length,
+      errors: [...allErrors, ...skipped],
+      missing_from_csv: [],
+      ...bundle,
+      client: access.client,
+      client_policy,
+      role: access.user.role,
+      eligible_pms: eligiblePms,
+      ...caps
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET export CSV
 router.get('/:sheetId/export', async (req, res, next) => {
   try {
@@ -856,9 +1025,11 @@ router.get('/:sheetId/export', async (req, res, next) => {
     if (!access.ok) return res.status(access.status).json({ error: access.error });
 
     const type = String(req.query.type ?? 'data').toLowerCase();
-    const allowed = new Set(['data', 'template', 'incentive', 'leave']);
+    const allowed = new Set(['data', 'template', 'incentive', 'leave', 'missing', 'warnings']);
     if (!allowed.has(type)) {
-      return res.status(400).json({ error: 'type must be data, template, incentive, or leave' });
+      return res.status(400).json({
+        error: 'type must be data, template, incentive, leave, missing, or warnings'
+      });
     }
 
     const { data: sheet, error } = await supabaseAdmin
@@ -871,10 +1042,16 @@ router.get('/:sheetId/export', async (req, res, next) => {
     if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
 
     const bundle = await fetchSheetBundle(sheet.id);
+    let missing = [];
+    if (type === 'missing' || type === 'warnings') {
+      missing = await listMissingEmployeesForSheet(clientId, sheet.id);
+    }
     const csv = buildAttendanceExportCsv({
       sheet: bundle.sheet,
       rows: bundle.rows,
-      type
+      type,
+      missing,
+      warnings: []
     });
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -937,6 +1114,7 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
       const beforeFields = {
         incentive: row.incentive,
         addon_incentive: row.addon_incentive,
+        arrear_days: row.arrear_days,
         remarks: row.remarks
       };
       const dayMarkChanges = [];
@@ -981,6 +1159,12 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
           ? null
           : Number(change.addon_incentive);
         rowUpdate.addon_incentive = Number.isFinite(n) ? n : null;
+      }
+      if (change.arrear_days !== undefined) {
+        const n = change.arrear_days === null || change.arrear_days === ''
+          ? null
+          : Number(change.arrear_days);
+        rowUpdate.arrear_days = Number.isFinite(n) ? n : null;
       }
       if (change.remarks !== undefined) {
         const s = String(change.remarks ?? '').trim();
@@ -1029,6 +1213,7 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
 
       const fieldChanged =
         (change.addon_incentive !== undefined && beforeFields.addon_incentive !== rowUpdate.addon_incentive)
+        || (change.arrear_days !== undefined && beforeFields.arrear_days !== rowUpdate.arrear_days)
         || (change.remarks !== undefined && beforeFields.remarks !== rowUpdate.remarks);
 
       if (dayMarkChanges.length) {
@@ -1052,10 +1237,23 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
           actorRole: access.user.role,
           beforeJson: beforeFields,
           afterJson: {
-            addon_incentive: rowUpdate.addon_incentive,
-            remarks: rowUpdate.remarks
+            addon_incentive: rowUpdate.addon_incentive !== undefined
+              ? rowUpdate.addon_incentive
+              : beforeFields.addon_incentive,
+            arrear_days: rowUpdate.arrear_days !== undefined
+              ? rowUpdate.arrear_days
+              : beforeFields.arrear_days,
+            remarks: rowUpdate.remarks !== undefined ? rowUpdate.remarks : beforeFields.remarks
           },
-          message: buildRowFieldChangeMessage(row.emp_code, beforeFields, rowUpdate)
+          message: buildRowFieldChangeMessage(row.emp_code, beforeFields, {
+            addon_incentive: rowUpdate.addon_incentive !== undefined
+              ? rowUpdate.addon_incentive
+              : beforeFields.addon_incentive,
+            arrear_days: rowUpdate.arrear_days !== undefined
+              ? rowUpdate.arrear_days
+              : beforeFields.arrear_days,
+            remarks: rowUpdate.remarks !== undefined ? rowUpdate.remarks : beforeFields.remarks
+          })
         });
       }
 
@@ -1367,6 +1565,15 @@ router.post('/:sheetId/submit', async (req, res, next) => {
       message: isResubmit ? 'Attendance resubmitted' : 'Attendance submitted'
     });
 
+    await logOrgActivityFromReq(req, {
+      action: 'ATTENDANCE_SUBMIT',
+      entityType: 'attendance_sheet',
+      entityId: sheet.id,
+      clientId,
+      summary: `${isResubmit ? 'Resubmitted' : 'Submitted'} attendance for ${access.client?.client_name || clientId}`,
+      metadata: { sheet_id: sheet.id, resubmit: Boolean(isResubmit) }
+    });
+
     // Email PL when submit/resubmit after prior lock (PM actor)
     if (sheet.ever_locked && access.isPm) {
       const { data: pl } = await supabaseAdmin
@@ -1452,6 +1659,15 @@ router.post('/:sheetId/unsubmit', async (req, res, next) => {
       // Undo must still succeed; apply migration 20260730150000_attendance_unsubmit_action.sql.
       console.warn('attendance unsubmit log skipped:', logErr?.message || logErr);
     }
+
+    await logOrgActivityFromReq(req, {
+      action: 'ATTENDANCE_UNSUBMIT',
+      entityType: 'attendance_sheet',
+      entityId: sheet.id,
+      clientId,
+      summary: `Unsubmitted attendance for ${access.client?.client_name || clientId}`,
+      metadata: { sheet_id: sheet.id }
+    });
 
     res.json({ sheet: updated });
   } catch (err) {

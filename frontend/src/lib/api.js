@@ -130,6 +130,8 @@ async function fileRequest(path, options = {}) {
 export const api = {
   me: () => request('/api/me'),
   listProgramManagers: () => request('/api/program-managers'),
+  createProgramManager: (payload) =>
+    request('/api/program-managers', { method: 'POST', body: JSON.stringify(payload) }),
   listClients: () => request('/api/clients'),
   getClient: (id) => request(`/api/clients/${encodeURIComponent(id)}`),
   saveClientPolicy: (id, payload) =>
@@ -404,6 +406,33 @@ export const api = {
   listAdminClients: () => request('/api/admin/clients'),
   getAdminComplianceStats: () => request('/api/admin/compliance-stats'),
 
+  getSuperAdminDashboardStats: () => request('/api/super-admin/dashboard-stats'),
+  listSuperAdminClients: () => request('/api/super-admin/clients'),
+  getSuperAdminClientEmployees: (clientId) =>
+    request(`/api/super-admin/clients/${encodeURIComponent(clientId)}/employees`),
+  downloadSuperAdminMasterReport: (clientId) => {
+    const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
+    return fileRequest(`/api/super-admin/master-report${q}`);
+  },
+  listSuperAdminActivity: ({ limit = 50, cursor, client_id, action, actor_role } = {}) => {
+    const q = new URLSearchParams();
+    if (limit) q.set('limit', String(limit));
+    if (cursor) q.set('cursor', cursor);
+    if (client_id) q.set('client_id', client_id);
+    if (action) q.set('action', action);
+    if (actor_role) q.set('actor_role', actor_role);
+    const qs = q.toString();
+    return request(`/api/super-admin/activity${qs ? `?${qs}` : ''}`);
+  },
+  listSuperAdminSalaryMinimums: () => request('/api/super-admin/salary-minimums'),
+  saveSuperAdminSalaryMinimums: (items) =>
+    request('/api/super-admin/salary-minimums', {
+      method: 'PUT',
+      body: JSON.stringify({ items })
+    }),
+  getSalaryMinimumForState: (state) =>
+    request(`/api/salary-minimums/${encodeURIComponent(state)}`),
+
   getAttendance: ({ clientId, month }) =>
     request(
       `/api/clients/${encodeURIComponent(clientId)}/attendance?month=${encodeURIComponent(month)}`,
@@ -416,6 +445,15 @@ export const api = {
     if (month) fd.append('month', month);
     return uploadRequest(
       `/api/clients/${encodeURIComponent(clientId)}/attendance/upload`,
+      fd,
+      ATTENDANCE_UPLOAD_TIMEOUT_MS
+    );
+  },
+  uploadAttendanceIncentives: ({ clientId, sheetId, file }) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return uploadRequest(
+      `/api/clients/${encodeURIComponent(clientId)}/attendance/${encodeURIComponent(sheetId)}/upload-incentives`,
       fd,
       ATTENDANCE_UPLOAD_TIMEOUT_MS
     );

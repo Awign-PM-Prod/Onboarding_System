@@ -75,7 +75,8 @@ function formatLeaveCell(colKey, row) {
   return `(${taken ?? 0}/${total})`;
 }
 
-function baseEmployeeFields(row, sheet) {
+function baseEmployeeFields(row, sheet, { template = false } = {}) {
+  const amtType = String(row.amt_type ?? '').trim();
   return {
     'Emp Code': row.emp_code ?? '',
     'Employee Name': row.employee_name_snapshot ?? '',
@@ -84,7 +85,8 @@ function baseEmployeeFields(row, sheet) {
     Designation: row.designation ?? '',
     DOJ: row.doj ?? '',
     Status: row.status_label ?? '',
-    'Amt. Type': row.amt_type ?? '',
+    // Template exports need a non-blank Amt. Type so re-import keeps every employee row.
+    'Amt. Type': amtType || (template && String(row.emp_code ?? '').trim() ? 'MONTHLY' : ''),
     'Contract Code': sheet?.contract_code ?? '',
     Entity: sheet?.entity ?? '',
     'Cycle Type': sheet?.cycle_type ?? '',
@@ -94,7 +96,7 @@ function baseEmployeeFields(row, sheet) {
 }
 
 function buildDataRow(row, sheet, dayDates, { template = false } = {}) {
-  const out = baseEmployeeFields(row, sheet);
+  const out = baseEmployeeFields(row, sheet, { template });
   for (const d of dayDates) {
     out[formatDayHeader(d)] = markCodeForRow(row, d, template);
   }
@@ -109,11 +111,94 @@ function buildDataRow(row, sheet, dayDates, { template = false } = {}) {
   }
   out.Incentive = template ? '' : (row.incentive ?? '');
   out['Add-on Incentive'] = template ? '' : (row.addon_incentive ?? '');
+  out['Arrear Days'] = template ? '' : (row.arrear_days ?? '');
   out.Remarks = template ? '' : (row.remarks ?? '');
   return out;
 }
 
-export function buildAttendanceExportCsv({ sheet, rows, type }) {
+function roundTotal(n) {
+  const rounded = Math.round(Number(n || 0) * 100) / 100;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+function buildTotalsRow(rows, sheet, dayDates) {
+  const out = baseEmployeeFields({}, sheet);
+  out['Emp Code'] = '';
+  out['Employee Name'] = 'Total';
+  for (const d of dayDates) {
+    out[formatDayHeader(d)] = '';
+  }
+
+  const legend = Object.fromEntries(LEGEND_TOTAL_CODES.map((code) => [code, 0]));
+  let paidDays = 0;
+  let lop = 0;
+  let notConsidered = 0;
+  let incentive = 0;
+  let addonIncentive = 0;
+  let arrearDays = 0;
+  const leaveTaken = Object.fromEntries(LEAVE_SUMMARY_KEYS.map((key) => [key, 0]));
+
+  for (const row of rows ?? []) {
+    paidDays += Number(row.paid_days ?? 0);
+    lop += Number(row.lop ?? 0);
+    notConsidered += Number(row.not_considered ?? 0);
+    incentive += Number(row.incentive ?? 0);
+    addonIncentive += Number(row.addon_incentive ?? 0);
+    arrearDays += Number(row.arrear_days ?? 0);
+    for (const code of LEGEND_TOTAL_CODES) {
+      legend[code] += Number(row.legend_totals?.[code] ?? 0);
+    }
+    for (const key of LEAVE_SUMMARY_KEYS) {
+      leaveTaken[key] += Number(row.leave_summary?.[`${key}_taken`] ?? 0);
+    }
+  }
+
+  for (const code of LEGEND_TOTAL_CODES) {
+    out[code] = roundTotal(legend[code]);
+  }
+  out['Paid Days'] = roundTotal(paidDays);
+  out.LOP = roundTotal(lop);
+  out['Not Considered'] = roundTotal(notConsidered);
+  for (const key of LEAVE_SUMMARY_KEYS) {
+    out[key] = roundTotal(leaveTaken[key]);
+  }
+  out.Incentive = roundTotal(incentive);
+  out['Add-on Incentive'] = roundTotal(addonIncentive);
+  out['Arrear Days'] = roundTotal(arrearDays);
+  out.Remarks = '';
+  return out;
+}
+
+export function buildMissingWarningExportCsv({ missing = [], warnings = [] } = {}) {
+  const data = [];
+  for (const err of warnings ?? []) {
+    data.push({
+      Category: 'Warning',
+      'Emp Code': err?.emp_code || (err?.row != null ? `Row ${err.row}` : ''),
+      'Employee Name': err?.employee_name ?? '',
+      Reason: err?.error || (Array.isArray(err?.errors) ? err.errors.join('; ') : 'Skipped')
+    });
+  }
+  for (const emp of missing ?? []) {
+    data.push({
+      Category: 'Missing',
+      'Emp Code': emp?.emp_code ?? '',
+      'Employee Name': emp?.employee_name ?? emp?.name ?? '',
+      Reason: 'No attendance row on sheet / missing from uploaded CSV'
+    });
+  }
+  if (data.length === 0) {
+    data.push({
+      Category: '',
+      'Emp Code': '',
+      'Employee Name': '',
+      Reason: 'No missing or warning rows'
+    });
+  }
+  return Papa.unparse(data);
+}
+
+export function buildAttendanceExportCsv({ sheet, rows, type, missing = [], warnings = [] }) {
   const dayDates = collectDayDates(rows, sheet);
   const sortedRows = [...(rows ?? [])].sort((a, b) =>
     String(a.employee_name_snapshot ?? '').localeCompare(String(b.employee_name_snapshot ?? ''), undefined, {
@@ -121,6 +206,10 @@ export function buildAttendanceExportCsv({ sheet, rows, type }) {
       sensitivity: 'base'
     })
   );
+
+  if (type === 'missing' || type === 'warnings') {
+    return buildMissingWarningExportCsv({ missing, warnings });
+  }
 
   if (type === 'incentive') {
     const data = sortedRows.map((row) => ({
@@ -131,8 +220,34 @@ export function buildAttendanceExportCsv({ sheet, rows, type }) {
       LOP: row.lop ?? '',
       Incentive: row.incentive ?? '',
       'Add-on Incentive': row.addon_incentive ?? '',
+      'Arrear Days': row.arrear_days ?? '',
       Remarks: row.remarks ?? ''
     }));
+    if (sortedRows.length > 0) {
+      let paidDays = 0;
+      let lop = 0;
+      let incentive = 0;
+      let addonIncentive = 0;
+      let arrearDays = 0;
+      for (const row of sortedRows) {
+        paidDays += Number(row.paid_days ?? 0);
+        lop += Number(row.lop ?? 0);
+        incentive += Number(row.incentive ?? 0);
+        addonIncentive += Number(row.addon_incentive ?? 0);
+        arrearDays += Number(row.arrear_days ?? 0);
+      }
+      data.push({
+        'Emp Code': '',
+        'Employee Name': 'Total',
+        Designation: '',
+        'Paid Days': roundTotal(paidDays),
+        LOP: roundTotal(lop),
+        Incentive: roundTotal(incentive),
+        'Add-on Incentive': roundTotal(addonIncentive),
+        'Arrear Days': roundTotal(arrearDays),
+        Remarks: ''
+      });
+    }
     return Papa.unparse(data);
   }
 
@@ -151,11 +266,42 @@ export function buildAttendanceExportCsv({ sheet, rows, type }) {
       out.Remarks = row.remarks ?? '';
       return out;
     });
+    if (sortedRows.length > 0) {
+      let paidDays = 0;
+      let lop = 0;
+      const leaveTaken = Object.fromEntries(LEAVE_SUMMARY_KEYS.map((key) => [key, 0]));
+      for (const row of sortedRows) {
+        paidDays += Number(row.paid_days ?? 0);
+        lop += Number(row.lop ?? 0);
+        for (const key of LEAVE_SUMMARY_KEYS) {
+          leaveTaken[key] += Number(row.leave_summary?.[`${key}_taken`] ?? 0);
+        }
+      }
+      const totalRow = {
+        'Emp Code': '',
+        'Employee Name': 'Total',
+        Designation: '',
+        'Paid Days': roundTotal(paidDays),
+        LOP: roundTotal(lop)
+      };
+      for (const key of LEAVE_SUMMARY_KEYS) {
+        totalRow[key] = roundTotal(leaveTaken[key]);
+      }
+      totalRow.Remarks = '';
+      data.push(totalRow);
+    }
     return Papa.unparse(data);
   }
 
   const template = type === 'template';
-  const data = sortedRows.map((row) => buildDataRow(row, sheet, dayDates, { template }));
+  // Template is a format reference only — one sample employee row, blank day cells.
+  const rowsForExport = template
+    ? (sortedRows.length ? [sortedRows[0]] : [])
+    : sortedRows;
+  const data = rowsForExport.map((row) => buildDataRow(row, sheet, dayDates, { template }));
+  if (!template && sortedRows.length > 0) {
+    data.push(buildTotalsRow(sortedRows, sheet, dayDates));
+  }
   return Papa.unparse(data);
 }
 
@@ -165,7 +311,9 @@ export function exportFilename(sheet, type) {
     data: 'attendance-data',
     template: 'attendance-template',
     incentive: 'attendance-incentive',
-    leave: 'attendance-leave'
+    leave: 'attendance-leave',
+    missing: 'attendance-missing-warning',
+    warnings: 'attendance-missing-warning'
   }[type] || 'attendance-export';
   return `${prefix}-${ym}.csv`;
 }

@@ -259,14 +259,15 @@ const SEND_EMAIL_OTP_EDGE_FUNCTION =
   process.env.SEND_EMAIL_OTP_EDGE_FUNCTION || 'send-email-otp';
 const SEND_MOBILE_OTP_EDGE_FUNCTION =
   process.env.SEND_MOBILE_OTP_EDGE_FUNCTION || 'send-mobile-otp';
-const WHATSAPP_COUNTRY_CODE = String(process.env.WHATSAPP_COUNTRY_CODE || '91').replace(/\D/g, '') || '91';
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-/** Fixed demo OTP for onboarding status login until SMS integration. */
-const DEMO_STATUS_OTP = '123123';
-/** Fixed demo OTP for Aadhaar resume flow until SMS integration. */
-const DEMO_AADHAAR_RESUME_OTP = '123123';
-/** Fixed demo OTP for email contact verification in non-production only (never used for alternate mobile). */
+/** Fixed demo OTP for email contact verification in non-production only. */
 const DEMO_CONTACT_OTP = '123123';
+/**
+ * Fixed demo OTP for mobile flows (status, Aadhaar resume, alternate mobile)
+ * while Awign/TELSPIEL delivery is unreliable. Enabled when MOBILE_OTP_DEMO=true
+ * or when NODE_ENV is not production (default for local `npm run dev`).
+ */
+const DEMO_MOBILE_OTP = '123123';
 const STATUS_SESSION_TTL_MS = 60 * 60 * 1000;
 
 /** @type {Map<string, { otp: string, expires: number }>} */
@@ -297,28 +298,128 @@ function generateContactOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-/** Always a random 6-digit OTP for alternate mobile (including development). */
-function generateSecondaryMobileOtp() {
+function useDemoMobileOtp() {
+  const flag = String(process.env.MOBILE_OTP_DEMO ?? '').trim().toLowerCase();
+  if (flag === 'true' || flag === '1' || flag === 'yes') return true;
+  if (flag === 'false' || flag === '0' || flag === 'no') return false;
+  return process.env.NODE_ENV !== 'production';
+}
+
+function generateMobileOtp() {
+  if (useDemoMobileOtp()) return DEMO_MOBILE_OTP;
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-function formatWhatsAppNumber(rawMobile) {
-  const digits = String(rawMobile ?? '').replace(/\D/g, '');
-  if (!digits) return null;
-  const targetLength = WHATSAPP_COUNTRY_CODE.length + 10;
-  if (digits.startsWith(WHATSAPP_COUNTRY_CODE) && digits.length === targetLength) {
-    return digits;
+/**
+ * Send real SMS unless demo mode is on (skip provider; use fixed DEMO_MOBILE_OTP).
+ * @returns {Promise<{ delivery: 'demo' | 'sms', otp: string }>}
+ */
+async function sendMobileOtpDelivery({ mobile, name }) {
+  const otp = generateMobileOtp();
+  if (useDemoMobileOtp()) {
+    return { delivery: 'demo', otp };
   }
-  const localTenDigits = digits.length >= 10 ? digits.slice(-10) : digits;
-  if (localTenDigits.length !== 10) return null;
-  return `${WHATSAPP_COUNTRY_CODE}${localTenDigits}`;
+  await invokeSendMobileOtpEdge({ mobile, otp, name: name || '' });
+  return { delivery: 'sms', otp };
 }
 
+const AWIGN_SMS_URL = 'https://core-api.awign.com/api/v1/sms/to_number';
+const AWIGN_SMS_TEMPLATE_ID = '1107160412653314461';
+const AWIGN_SMS_SENDER_ID = 'IAWIGN';
+const AWIGN_SMS_CHANNEL = 'telspiel_product';
+const AWIGN_SMS_CALLER_ID = 'inviadda';
+const AWIGN_SMS_CLIENT = '6Ok5D1iEP4zcV8S25HJmNA';
+const AWIGN_SMS_UID = '110986717252553637625';
+const AWIGN_SMS_MESSAGE_TEMPLATE =
+  '{#var#} is the OTP for your verification.\n\nCheers!\nTeam AWIGN';
+
+function normalizeMobile10ForSms(raw) {
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  if (!digits) return null;
+  const local = digits.length >= 10 ? digits.slice(-10) : digits;
+  return local.length === 10 ? local : null;
+}
+
+/**
+ * Prefer direct Awign SMS with sync:true (edge without sync left messages stuck as
+ * status=created / message_reference_id=null and they never reached the phone).
+ * Falls back to the Supabase edge function when Mobile_OTP_KEY is not set locally.
+ */
 async function invokeSendMobileOtpEdge({ mobile, otp, name }) {
+  const accessToken = String(process.env.Mobile_OTP_KEY ?? process.env.mobile_otp ?? '').trim();
+  const to = normalizeMobile10ForSms(mobile);
+  if (!to) {
+    const err = new Error('A valid 10-digit mobile number is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!/^\d{6}$/.test(String(otp ?? '').replace(/\D/g, ''))) {
+    const err = new Error('otp must be 6 digits');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (accessToken) {
+    const message = AWIGN_SMS_MESSAGE_TEMPLATE.replace('{#var#}', String(otp).replace(/\D/g, ''));
+    const resp = await fetch(AWIGN_SMS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'access-token': accessToken,
+        client: AWIGN_SMS_CLIENT,
+        uid: AWIGN_SMS_UID,
+        'x-caller-id': AWIGN_SMS_CALLER_ID,
+      },
+      body: JSON.stringify({
+        sms: {
+          mobile_number: to,
+          template_id: AWIGN_SMS_TEMPLATE_ID,
+          message,
+          sender_id: AWIGN_SMS_SENDER_ID,
+          channel: AWIGN_SMS_CHANNEL,
+          sync: true,
+        },
+      }),
+    });
+    const raw = await resp.text();
+    let body = null;
+    try {
+      body = raw ? JSON.parse(raw) : null;
+    } catch {
+      body = null;
+    }
+    const data = body?.data && typeof body.data === 'object' ? body.data : null;
+    const statusText = String(body?.status ?? '').trim().toLowerCase();
+    const refId = data?.message_reference_id ?? data?.id ?? null;
+    const accepted =
+      statusText === 'success' &&
+      (Boolean(refId) ||
+        ['processing', 'created', 'queued', 'sent', 'success'].includes(
+          String(data?.status ?? '').trim().toLowerCase()
+        ));
+    if (!resp.ok || !accepted) {
+      const msg = body?.message || body?.error || `Awign SMS request failed (${resp.status})`;
+      const err = new Error(msg);
+      err.details = body ?? raw;
+      err.statusCode = resp.status >= 400 && resp.status < 600 ? resp.status : 502;
+      throw err;
+    }
+    return {
+      ok: true,
+      to,
+      channel: 'sms',
+      provider_id: refId,
+      awign_status: data?.status ?? body?.status ?? null,
+      upstream: body,
+    };
+  }
+
   const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
   const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
   if (!supabaseUrl || !serviceRoleKey) {
-    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to invoke edge functions.');
+    throw new Error(
+      'Mobile_OTP_KEY (or SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY) is required to send mobile OTP.'
+    );
   }
 
   const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(SEND_MOBILE_OTP_EDGE_FUNCTION)}`;
@@ -329,7 +430,7 @@ async function invokeSendMobileOtpEdge({ mobile, otp, name }) {
       apikey: serviceRoleKey,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ mobile, otp, name: name || '' }),
+    body: JSON.stringify({ mobile: to, otp, name: name || '' }),
   });
 
   const raw = await resp.text();
@@ -605,20 +706,33 @@ async function invokeKycDocValidateEdge({
   return body;
 }
 
+function firstNonEmptyString(...candidates) {
+  for (const raw of candidates) {
+    if (raw == null) continue;
+    if (typeof raw === 'object') continue;
+    const v = String(raw).trim();
+    if (v) return v;
+  }
+  return '';
+}
+
 function isoFromDdMmYyyy(raw) {
   const t = String(raw ?? '').trim();
-  const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(t);
-  if (!m) return null;
-  const dd = m[1];
-  const mm = m[2];
-  const yyyy = m[3];
-  return `${yyyy}-${mm}-${dd}`;
+  if (!t) return null;
+  let m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(t);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return null;
 }
 
 function genderCodeFromProvider(raw) {
   const c = String(raw ?? '').trim().toUpperCase();
-  if (c === 'M' || c === 'F') return c;
-  if (c === 'T' || c === 'X' || c === 'O') return 'X';
+  if (c === 'M' || c === 'MALE') return 'M';
+  if (c === 'F' || c === 'FEMALE') return 'F';
+  if (c === 'T' || c === 'X' || c === 'O' || c === 'OTHER' || c === 'TRANSGENDER') return 'X';
   return c || null;
 }
 
@@ -632,8 +746,173 @@ function buildAadhaarAddress(parts) {
 function photoDataUrlFromBase64(photo) {
   const v = String(photo ?? '').trim();
   if (!v) return null;
-  if (v.startsWith('data:image/')) return v;
+  if (v.startsWith('data:image/') || v.startsWith('http://') || v.startsWith('https://')) return v;
   return `data:image/jpeg;base64,${v}`;
+}
+
+/**
+ * Neokred/ProfileX payloads vary (flat vs nested address, camelCase vs snake_case).
+ * Normalize into the flat shape we persist on job_app_form.
+ */
+function extractNeokredAadhaarPayload(edgeResult) {
+  let data = edgeResult?.data;
+  if (typeof data === 'string') {
+    try {
+      data = JSON.parse(data);
+    } catch {
+      data = null;
+    }
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    data = {};
+  }
+
+  const nestedKeys = [
+    'aadhaarData',
+    'aadhaar_data',
+    'kycData',
+    'kyc_data',
+    'kycDetails',
+    'kyc_details',
+    'result',
+    'profile',
+    'details',
+    'poi',
+    'Poi',
+  ];
+  let profile = data;
+  for (const key of nestedKeys) {
+    const nested = data[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const nestedName = firstNonEmptyString(nested.name, nested.fullName, nested.full_name);
+      if (nestedName || nested.address || nested.photo || nested.dob || nested.dateOfBirth) {
+        profile = nested;
+        break;
+      }
+    }
+  }
+
+  const address =
+    profile.address && typeof profile.address === 'object' && !Array.isArray(profile.address)
+      ? profile.address
+      : profile.poa && typeof profile.poa === 'object' && !Array.isArray(profile.poa)
+        ? profile.poa
+        : profile.Poa && typeof profile.Poa === 'object' && !Array.isArray(profile.Poa)
+          ? profile.Poa
+          : {};
+
+  const name = firstNonEmptyString(profile.name, profile.fullName, profile.full_name, profile.Name);
+  const careOf = firstNonEmptyString(
+    profile.careof,
+    profile.careOf,
+    profile.care_of,
+    profile.co,
+    profile.Careof,
+    address.careof,
+    address.careOf,
+    address.care_of,
+    address.co
+  );
+  const dobRaw = firstNonEmptyString(
+    profile.dob,
+    profile.dateOfBirth,
+    profile.date_of_birth,
+    profile.DoB,
+    profile.dobDate
+  );
+  const gender = genderCodeFromProvider(
+    firstNonEmptyString(profile.gender, profile.Gender, address.gender)
+  );
+  const house = firstNonEmptyString(profile.house, address.house);
+  const street = firstNonEmptyString(profile.street, address.street);
+  const locality = firstNonEmptyString(
+    profile.locality,
+    profile.loc,
+    profile.location,
+    address.locality,
+    address.loc,
+    address.location,
+    profile.vtc,
+    address.vtc
+  );
+  const subDistrict = firstNonEmptyString(
+    profile.subDistrict,
+    profile.subdistrict,
+    profile.sub_district,
+    profile.subdist,
+    address.subDistrict,
+    address.subdistrict,
+    address.sub_district,
+    address.subdist
+  );
+  const district = firstNonEmptyString(
+    profile.district,
+    profile.dist,
+    address.district,
+    address.dist
+  );
+  const state = firstNonEmptyString(profile.state, address.state);
+  const pincode = firstNonEmptyString(
+    profile.pincode,
+    profile.pinCode,
+    profile.pin,
+    profile.pc,
+    profile.postCode,
+    profile.postal_code,
+    address.pincode,
+    address.pinCode,
+    address.pin,
+    address.pc,
+    address.postCode,
+    address.postal_code
+  );
+  const fullAddress = firstNonEmptyString(
+    profile.full_address,
+    profile.fullAddress,
+    profile.address_line,
+    typeof profile.address === 'string' ? profile.address : '',
+    typeof address.full_address === 'string' ? address.full_address : '',
+    typeof address.fullAddress === 'string' ? address.fullAddress : ''
+  );
+  const builtAddress = buildAadhaarAddress([
+    house,
+    street,
+    locality,
+    subDistrict,
+    district,
+    state,
+    pincode,
+  ]);
+  const photo = firstNonEmptyString(
+    profile.photo,
+    profile.Photo,
+    profile.image,
+    profile.Image,
+    profile.profilePhoto,
+    profile.profile_photo,
+    profile.Pht
+  );
+  const uid = String(
+    profile.aadhaar_number ??
+      profile.aadhaarNumber ??
+      profile.uid ??
+      profile.maskedNumber ??
+      profile.masked_aadhaar ??
+      ''
+  ).replace(/\D/g, '');
+
+  return {
+    name,
+    careOf,
+    dob: isoFromDdMmYyyy(dobRaw),
+    gender,
+    state,
+    district,
+    pincode,
+    address: builtAddress || fullAddress,
+    photo: photoDataUrlFromBase64(photo),
+    uid,
+  };
 }
 
 const EMPLOYEE_JOB_FORM_FIELDS =
@@ -942,26 +1221,32 @@ router.post('/aadhaar/verify-otp', async (req, res, next) => {
         error: 'Could not verify Aadhaar OTP right now. Please retry.',
       });
     }
-    const providerData = edgeResult?.data ?? {};
-    const aadName = String(providerData?.name ?? '').trim();
-    const aadCareOf = String(providerData?.careof ?? '').trim();
-    const aadDob = isoFromDdMmYyyy(providerData?.dob);
-    const aadGender = genderCodeFromProvider(providerData?.gender);
-    const aadState = String(providerData?.state ?? '').trim();
-    const aadDistrict = String(providerData?.district ?? '').trim();
-    const aadPincode = String(providerData?.pincode ?? '').trim();
-    const aadAddress = buildAadhaarAddress([
-      providerData?.house,
-      providerData?.street,
-      providerData?.locality,
-      providerData?.subDistrict,
-      providerData?.district,
-      providerData?.state,
-      providerData?.pincode,
-    ]);
-    const aadProfilePhoto = photoDataUrlFromBase64(providerData?.photo);
+    const mapped = extractNeokredAadhaarPayload(edgeResult);
+    const aadName = mapped.name;
+    const aadCareOf = mapped.careOf;
+    const aadDob = mapped.dob;
+    const aadGender = mapped.gender;
+    const aadState = mapped.state;
+    const aadDistrict = mapped.district;
+    const aadPincode = mapped.pincode;
+    const aadAddress = mapped.address;
+    const aadProfilePhoto = mapped.photo;
 
-    const providerUid = String(providerData?.aadhaar_number ?? providerData?.uid ?? '').replace(/\D/g, '');
+    if (!aadName) {
+      console.warn('[public/onboarding] Neokred verify returned no Aadhaar name', {
+        employeeId: row.id,
+        dataKeys:
+          edgeResult?.data && typeof edgeResult.data === 'object'
+            ? Object.keys(edgeResult.data)
+            : typeof edgeResult?.data,
+      });
+      return res.status(502).json({
+        error:
+          'Aadhaar OTP was accepted but KYC details were missing in the provider response. Please request a new OTP and try again.',
+      });
+    }
+
+    const providerUid = String(mapped.uid ?? '').replace(/\D/g, '');
     const persistedAadhaarNumber = TWELVE_DIGIT_REGEX.test(providerUid)
       ? providerUid
       : String(formCurrent?.aadhaar_number ?? '').trim() || null;
@@ -1042,7 +1327,7 @@ router.post('/aadhaar/resume/send-otp', async (req, res, next) => {
 
     const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
       .from('job_app_form')
-      .select('aadhaar_number, aadhaar_verified')
+      .select('aadhaar_number, aadhaar_verified, aad_name')
       .eq('employee_id', row.id)
       .eq('mobile', mobile)
       .maybeSingle();
@@ -1052,19 +1337,44 @@ router.post('/aadhaar/resume/send-otp', async (req, res, next) => {
       return res.status(400).json({ error: 'Aadhaar is not verified yet. Please complete Aadhaar verification first.' });
     }
 
+    if (!String(formCurrent?.aad_name ?? '').trim()) {
+      return res.status(400).json({
+        error: 'Saved Aadhaar KYC details are missing. Please verify Aadhaar again with OTP.',
+      });
+    }
+
     const savedAadhaar = String(formCurrent?.aadhaar_number ?? '').trim();
     if (!TWELVE_DIGIT_REGEX.test(savedAadhaar)) {
       return res.status(400).json({ error: 'Saved Aadhaar number is invalid. Please verify Aadhaar again.' });
     }
 
+    const { delivery, otp } = await sendMobileOtpDelivery({
+      mobile,
+      name: row.name ?? '',
+    });
+
     const key = sessionKey(row.id, mobile);
-    aadhaarResumeOtpBySession.set(key, { otp: DEMO_AADHAAR_RESUME_OTP, expires: Date.now() + OTP_TTL_MS });
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`[public/onboarding] Aadhaar resume demo OTP for employee ${row.id}: ${DEMO_AADHAAR_RESUME_OTP}`);
+    aadhaarResumeOtpBySession.set(key, { otp, expires: Date.now() + OTP_TTL_MS });
+    if (delivery === 'demo') {
+      console.log(
+        `[public/onboarding] Aadhaar resume demo OTP for employee ${row.id}: ${DEMO_MOBILE_OTP}`
+      );
+    } else {
+      console.log(`[public/onboarding] Aadhaar resume OTP sent via SMS for employee ${row.id} (${mobile})`);
     }
 
-    return res.json({ ok: true });
+    return res.json({
+      ok: true,
+      delivery,
+      ...(delivery === 'demo' ? { message: 'Demo OTP: use 123123' } : {}),
+    });
   } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({
+        error: err.message || 'Could not send OTP via SMS. Please try again.',
+        details: err.details ?? null,
+      });
+    }
     next(err);
   }
 });
@@ -1107,6 +1417,12 @@ router.post('/aadhaar/resume/verify-otp', async (req, res, next) => {
 
     if (!formCurrent || formCurrent.aadhaar_verified !== true) {
       return res.status(400).json({ error: 'Aadhaar is not verified yet. Please complete Aadhaar verification first.' });
+    }
+
+    if (!String(formCurrent?.aad_name ?? '').trim()) {
+      return res.status(400).json({
+        error: 'Saved Aadhaar KYC details are missing. Please verify Aadhaar again with OTP.',
+      });
     }
 
     return res.json({
@@ -1395,13 +1711,32 @@ router.post('/status/send-otp', async (req, res, next) => {
     if (!row) {
       return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
     }
+
+    const { delivery, otp } = await sendMobileOtpDelivery({
+      mobile,
+      name: row.name ?? '',
+    });
+
     const key = sessionKey(row.id, mobile);
-    statusOtpBySession.set(key, { otp: DEMO_STATUS_OTP, expires: Date.now() + OTP_TTL_MS });
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`[public/onboarding] Status demo OTP for employee ${row.id}: ${DEMO_STATUS_OTP}`);
+    statusOtpBySession.set(key, { otp, expires: Date.now() + OTP_TTL_MS });
+    if (delivery === 'demo') {
+      console.log(`[public/onboarding] Status demo OTP for employee ${row.id}: ${DEMO_MOBILE_OTP}`);
+    } else {
+      console.log(`[public/onboarding] Status OTP sent via SMS for employee ${row.id} (${mobile})`);
     }
-    return res.json({ ok: true });
+
+    return res.json({
+      ok: true,
+      delivery,
+      ...(delivery === 'demo' ? { message: 'Demo OTP: use 123123' } : {}),
+    });
   } catch (err) {
+    if (err?.statusCode) {
+      return res.status(err.statusCode).json({
+        error: err.message || 'Could not send OTP via SMS. Please try again.',
+        details: err.details ?? null,
+      });
+    }
     next(err);
   }
 });
@@ -1585,32 +1920,32 @@ router.post('/secondary-mobile/send-otp', async (req, res, next) => {
 
     await assertOnboardingFormEditable(row, mobile);
 
-    const whatsappTo = formatWhatsAppNumber(secondaryMobile);
-    if (!whatsappTo) {
-      return res.status(400).json({ error: 'Alternate mobile number must be a valid 10-digit Indian mobile.' });
-    }
-
-    // Always random OTP + WhatsApp delivery. Never use a hardcoded/demo OTP for alternate mobile.
-    const otp = generateSecondaryMobileOtp();
+    let delivery;
+    let otp;
     try {
-      await invokeSendMobileOtpEdge({
+      ({ delivery, otp } = await sendMobileOtpDelivery({
         mobile: secondaryMobile,
-        otp,
         name: row.name ?? '',
-      });
+      }));
     } catch (err) {
       const status = err?.statusCode && err.statusCode >= 400 ? err.statusCode : 502;
       return res.status(status).json({
-        error: err?.message || 'Could not send OTP to alternate mobile via WhatsApp. Please try again.',
+        error: err?.message || 'Could not send OTP to alternate mobile via SMS. Please try again.',
         details: err?.details ?? null,
       });
     }
 
     const key = contactOtpKey(row.id, 'secondary_mobile');
     contactOtpBySession.set(key, { otp, expires: Date.now() + OTP_TTL_MS, target: secondaryMobile });
-    console.log(
-      `[public/onboarding] Alternate mobile OTP sent via WhatsApp for employee ${row.id} (${secondaryMobile})`
-    );
+    if (delivery === 'demo') {
+      console.log(
+        `[public/onboarding] Alternate mobile demo OTP for employee ${row.id} (${secondaryMobile}): ${DEMO_MOBILE_OTP}`
+      );
+    } else {
+      console.log(
+        `[public/onboarding] Alternate mobile OTP sent via SMS for employee ${row.id} (${secondaryMobile})`
+      );
+    }
 
     const now = new Date().toISOString();
     const { error: updErr } = await supabaseAdmin
@@ -1626,8 +1961,11 @@ router.post('/secondary-mobile/send-otp', async (req, res, next) => {
 
     return res.json({
       ok: true,
-      delivery: 'whatsapp',
-      message: 'OTP sent to the alternate mobile number on WhatsApp.',
+      delivery,
+      message:
+        delivery === 'demo'
+          ? 'Demo OTP: use 123123'
+          : 'OTP sent to the alternate mobile number via SMS.',
     });
   } catch (err) {
     if (err?.statusCode) {

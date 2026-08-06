@@ -5,6 +5,7 @@ import readXlsxFile, { parseExcelDate } from 'read-excel-file/node';
 import { supabaseAdmin } from '../supabase.js';
 import { buildJobAppFormExportCsv } from '../jobAppFormExport.js';
 import { normalizeIndianState } from '../utils/indianStates.js';
+import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 
 const router = Router();
 
@@ -379,6 +380,33 @@ function validateRoleDetails(raw, designationSet) {
       state
     }
   };
+}
+
+/** Monthly CTC floor from Super Admin state_salary_minimums. Net Pay is not checked. */
+async function assertCtcMeetsStateMinimum(roleDetails) {
+  if (!roleDetails || roleDetails.pay_type !== 'CTC') return null;
+  const state = roleDetails.state;
+  if (!state) return null;
+
+  const { data, error } = await supabaseAdmin
+    .from('state_salary_minimums')
+    .select('min_monthly_ctc')
+    .eq('state', state)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || data.min_monthly_ctc == null) return null;
+
+  const min = Number(data.min_monthly_ctc);
+  if (!Number.isFinite(min)) return null;
+
+  let monthly = Number(roleDetails.ctc_value);
+  if (!Number.isFinite(monthly)) return `ctc_value must meet minimum monthly CTC of ${min} for ${state}`;
+  if (String(roleDetails.ctc_type).toUpperCase() === 'ANNUAL') monthly = monthly / 12;
+
+  if (monthly < min) {
+    return `Monthly CTC must be at least ${min} for ${state} (got effective monthly ${monthly})`;
+  }
+  return null;
 }
 
 const REVIEWABLE_JOB_FORM_FIELDS = [
@@ -981,6 +1009,18 @@ router.post('/', async (req, res, next) => {
       await ensureActiveAssignmentHistory(inserted);
     }
 
+    if (inserted.length) {
+      const clientIdForLog = inserted[0]?.client_id ?? null;
+      await logOrgActivityFromReq(req, {
+        action: 'EMPLOYEE_CREATED',
+        entityType: 'employee',
+        entityId: inserted.length === 1 ? inserted[0].id : null,
+        clientId: clientIdForLog,
+        summary: `Created ${inserted.length} employee(s)`,
+        metadata: { count: inserted.length, employee_ids: inserted.map((r) => r.id) }
+      });
+    }
+
     res.status(errors.length ? 207 : 201).json({
       inserted: inserted.length,
       skipped: errors.length,
@@ -1117,7 +1157,7 @@ router.post('/initiate-onboarding', async (req, res, next) => {
 
     const { data: candidates, error: fetchErr } = await supabaseAdmin
       .from('employees')
-      .select('id, onboarding_status')
+      .select('id, onboarding_status, client_id')
       .in('id', ids)
       .in('client_id', ownedClientIds);
     if (fetchErr) throw fetchErr;
@@ -1127,6 +1167,7 @@ router.post('/initiate-onboarding', async (req, res, next) => {
     if (validIds.length === 0) {
       return res.status(400).json({ error: 'No ROLE_ASSIGNED employees selected' });
     }
+    const initiateClientId = candidates.find((row) => row.onboarding_status === 'ROLE_ASSIGNED')?.client_id ?? null;
     const { data: updated, error } = await supabaseAdmin
       .from('employees')
       .update({ onboarding_initiated: true, onboarding_status: 'FORM_SENT' })
@@ -1240,6 +1281,17 @@ router.post('/initiate-onboarding', async (req, res, next) => {
           error: reason
         }));
       }
+    }
+
+    if (updatedRows.length) {
+      await logOrgActivityFromReq(req, {
+        action: 'ONBOARDING_INITIATED',
+        entityType: 'employee',
+        entityId: updatedRows.length === 1 ? updatedRows[0].id : null,
+        clientId: initiateClientId,
+        summary: `Initiated onboarding for ${updatedRows.length} employee(s)`,
+        metadata: { employee_ids: updatedRows.map((r) => r.id) }
+      });
     }
 
     res.json({
@@ -1516,12 +1568,31 @@ router.post('/role-details', async (req, res, next) => {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
 
+    const minErr = await assertCtcMeetsStateMinimum(validation.roleDetails);
+    if (minErr) {
+      return res.status(400).json({ error: minErr, details: [minErr] });
+    }
+
     const { data: updated, error } = await supabaseAdmin
       .from('employees')
       .update({ ...validation.roleDetails, onboarding_status: 'ROLE_ASSIGNED' })
       .in('id', availableRows.map((row) => row.id))
       .select('id');
     if (error) throw error;
+
+    await logOrgActivityFromReq(req, {
+      action: 'ROLE_DETAILS_SET',
+      entityType: 'employee',
+      entityId: updated.length === 1 ? updated[0].id : null,
+      clientId,
+      summary: `Set role details for ${updated.length} employee(s)`,
+      metadata: {
+        employee_ids: updated.map((r) => r.id),
+        designation: validation.roleDetails.designation,
+        state: validation.roleDetails.state,
+        pay_type: validation.roleDetails.pay_type
+      }
+    });
 
     res.json({ updated: updated.length, employee_ids: updated.map((r) => r.id) });
   } catch (err) {
@@ -1726,6 +1797,15 @@ router.post('/:id/joining-status', async (req, res, next) => {
       }
       throw upErr;
     }
+
+    await logOrgActivityFromReq(req, {
+      action: 'JOINING_STATUS_UPDATED',
+      entityType: 'employee',
+      entityId: row.id,
+      clientId,
+      summary: `Joining status set to ${joiningStatus} for employee ${updated?.name || row.id}`,
+      metadata: { joining_status: joiningStatus }
+    });
 
     return res.json({ employee: updated });
   } catch (err) {
@@ -2182,7 +2262,7 @@ router.post('/:id/form-review', async (req, res, next) => {
 
     const { data: form, error: formErr } = await supabaseAdmin
       .from('job_app_form')
-      .select('id, employee_id, client_id, email, submission_status, review_status, submission_attempt_count')
+      .select('*')
       .eq('employee_id', employeeId)
       .maybeSingle();
     if (formErr) throw formErr;
@@ -2192,8 +2272,21 @@ router.post('/:id/form-review', async (req, res, next) => {
     if (form.submission_status !== 'Submitted') {
       return res.status(400).json({ error: 'Only submitted applications can be reviewed.' });
     }
-    if (form.review_status === 'APPROVED' || form.review_status === 'REJECTED') {
-      return res.status(400).json({ error: `Application is already ${String(form.review_status).toLowerCase()}.` });
+    const reviewStatusCurrent = String(form.review_status ?? '').trim().toUpperCase();
+    const alreadyPmApproved = reviewStatusCurrent === 'APPROVED';
+    // After PM (and possibly PL) approval, allow reject / send-for-correction so data can be fixed later.
+    if (reviewStatusCurrent === 'REJECTED') {
+      return res.status(400).json({ error: 'Application is already rejected.' });
+    }
+    if (alreadyPmApproved && decisionStatus === 'APPROVED') {
+      return res.status(400).json({ error: 'Application is already approved.' });
+    }
+    if (
+      alreadyPmApproved &&
+      decisionStatus !== 'CORRECTION_REQUESTED' &&
+      decisionStatus !== 'REJECTED'
+    ) {
+      return res.status(400).json({ error: 'Application is already approved.' });
     }
 
     const markErrors = [];
@@ -2237,7 +2330,8 @@ router.post('/:id/form-review', async (req, res, next) => {
     }
     if (decisionStatus === 'CORRECTION_REQUESTED') {
       const attemptNo = Number(form.submission_attempt_count ?? 1);
-      if (attemptNo >= 3) {
+      // Post-approval corrections are allowed even after max attempts (data fixes later in the lifecycle).
+      if (!alreadyPmApproved && attemptNo >= 3) {
         return res.status(400).json({
           error: 'Maximum submission attempts reached. You can only approve or reject this application now.'
         });
@@ -2296,6 +2390,13 @@ router.post('/:id/form-review', async (req, res, next) => {
       formUpdatePayload.payroll_reviewed_by = null;
       formUpdatePayload.payroll_reviewed_at = null;
     }
+    // Re-open for employee edits: clear any PM/PL approval trail so PL queue stays correct.
+    if (decisionStatus === 'CORRECTION_REQUESTED' || (alreadyPmApproved && decisionStatus === 'REJECTED')) {
+      formUpdatePayload.payroll_review_status = null;
+      formUpdatePayload.payroll_review_reason = null;
+      formUpdatePayload.payroll_reviewed_by = null;
+      formUpdatePayload.payroll_reviewed_at = null;
+    }
 
     const { data: updatedForm, error: upErr } = await supabaseAdmin
       .from('job_app_form')
@@ -2327,6 +2428,15 @@ router.post('/:id/form-review', async (req, res, next) => {
         console.warn('[review-status-email] PM review notify failed', emailErr?.message || emailErr);
       }
     }
+
+    await logOrgActivityFromReq(req, {
+      action: 'PM_REVIEW',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId: form.client_id,
+      summary: `PM ${decisionStatus} for employee ${emp?.name || employeeId}`,
+      metadata: { decision_status: decisionStatus }
+    });
 
     return res.json({ form: updatedForm });
   } catch (err) {
@@ -2476,6 +2586,15 @@ router.post('/:id/payroll-form-review', async (req, res, next) => {
       }
     }
 
+    await logOrgActivityFromReq(req, {
+      action: 'PL_REVIEW',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId: formFull.client_id,
+      summary: `PL ${decisionStatus} for employee ${emp?.name || employeeId}`,
+      metadata: { decision_status: decisionStatus, payroll_status: payrollStatus }
+    });
+
     return res.json({ form: updatedForm });
   } catch (err) {
     next(err);
@@ -2563,6 +2682,11 @@ router.put('/:id/role-details', async (req, res, next) => {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
 
+    const minErr = await assertCtcMeetsStateMinimum(validation.roleDetails);
+    if (minErr) {
+      return res.status(400).json({ error: minErr, details: [minErr] });
+    }
+
     const { data: updated, error } = await supabaseAdmin
       .from('employees')
       .update({ ...validation.roleDetails, onboarding_status: 'ROLE_ASSIGNED' })
@@ -2570,6 +2694,19 @@ router.put('/:id/role-details', async (req, res, next) => {
       .select('*')
       .maybeSingle();
     if (error) throw error;
+
+    await logOrgActivityFromReq(req, {
+      action: 'ROLE_DETAILS_SET',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId: row.client_id,
+      summary: `Set role details for employee ${updated?.name || employeeId}`,
+      metadata: {
+        designation: validation.roleDetails.designation,
+        state: validation.roleDetails.state,
+        pay_type: validation.roleDetails.pay_type
+      }
+    });
 
     res.json(updated);
   } catch (err) {

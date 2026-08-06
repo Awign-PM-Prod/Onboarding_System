@@ -23,8 +23,10 @@ const PM_PRIYA  = '22222222-2222-2222-2222-222222222222';
 const PM_AMIT   = '33333333-3333-3333-3333-333333333333';
 const PAYROLL_LEAD_ID = '44444444-4444-4444-4444-444444444444';
 const PAYROLL_HEAD_ID = '55555555-5555-5555-5555-555555555555';
+const SUPER_ADMIN_ID = '66666666-6666-6666-6666-666666666666';
 const PAYROLL_LEAD_EMAIL = 'payrolllead@test.com';
 const PAYROLL_HEAD_EMAIL = 'payrollhead@test.com';
+const SUPER_ADMIN_EMAIL = 'superadmin@test.com';
 const DEMO_PASSWORD = '123456';
 
 const programManagers = [
@@ -42,6 +44,7 @@ const demoClients = [
     program_manager_id: PM_RAHUL,
     insurance_applicable: true,
     insurance_name: 'ICICI Lombard',
+    insurance_amount: 500,
     designations: ['Field Executive', 'Team Lead', 'Supervisor']
   },
   {
@@ -52,6 +55,7 @@ const demoClients = [
     program_manager_id: PM_PRIYA,
     insurance_applicable: false,
     insurance_name: null,
+    insurance_amount: null,
     designations: ['Data Entry Operator', 'Quality Analyst']
   },
   {
@@ -62,6 +66,7 @@ const demoClients = [
     program_manager_id: PM_RAHUL,
     insurance_applicable: false,
     insurance_name: null,
+    insurance_amount: null,
     designations: ['Engineer', 'Operator', 'Inspector', 'Supervisor']
   }
 ];
@@ -191,6 +196,7 @@ async function ensureClient(c) {
       program_manager_id: c.program_manager_id,
       insurance_applicable: c.insurance_applicable,
       insurance_name: c.insurance_name,
+      insurance_amount: c.insurance_amount ?? null,
       created_by: PAYROLL_LEAD_ID
     })
     .select('id')
@@ -274,6 +280,20 @@ async function run() {
     role: 'PAYROLL_HEAD'
   });
 
+  console.log('Seeding Super Admin auth user + row...');
+  await ensureAuthUser({
+    id: SUPER_ADMIN_ID,
+    email: SUPER_ADMIN_EMAIL,
+    password: DEMO_PASSWORD,
+    name: 'Demo Super Admin'
+  });
+  await upsertUser({
+    id: SUPER_ADMIN_ID,
+    name: 'Demo Super Admin',
+    email: SUPER_ADMIN_EMAIL,
+    role: 'SUPER_ADMIN'
+  });
+
   console.log('Seeding demo clients...');
   const clientIds = {};
   for (const c of demoClients) {
@@ -295,6 +315,7 @@ async function run() {
   });
 
   console.log('\nSeed complete. Demo logins (password: 123456):');
+  console.log(`  Super Admin:      ${SUPER_ADMIN_EMAIL}`);
   console.log(`  Payroll Head:     ${PAYROLL_HEAD_EMAIL}`);
   console.log(`  Payroll Lead:     ${PAYROLL_LEAD_EMAIL}`);
   for (const pm of programManagers) {

@@ -82,6 +82,15 @@ export default function EmployeeTable({
 
   const allSelected = selectable && rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
 
+  // Sticky left offsets: optional checkbox (2.5rem) + Name (10rem) + Reference ID (9rem) + Emp Code (last sticky).
+  const nameLeft = selectable ? 'left-10' : 'left-0';
+  const refLeft = selectable ? 'left-[12.5rem]' : 'left-40';
+  const empLeft = selectable ? 'left-[21.5rem]' : 'left-[19rem]';
+  const thSticky = 'sticky top-0 z-30 border-b border-slate-200 bg-slate-50';
+  const thStickyCol = 'sticky top-0 z-50 border-b border-slate-200 bg-slate-50';
+  const stickyEdge =
+    'border-r border-slate-200 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.12)]';
+
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
@@ -91,12 +100,12 @@ export default function EmployeeTable({
   }
 
   return (
-    <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-slate-200 bg-white">
-      <table className="min-w-[1200px] w-full text-sm">
+    <div className="max-h-[70vh] overflow-auto rounded-lg border border-slate-200 bg-white">
+      <table className="min-w-[1200px] w-full border-separate border-spacing-0 text-sm">
         <thead className="bg-slate-50 text-slate-600">
           <tr>
             {selectable && (
-              <th className="w-8 px-3 py-2 text-left">
+              <th className={`${thStickyCol} left-0 w-10 min-w-[2.5rem] px-3 py-2 text-left`}>
                 <input
                   type="checkbox"
                   checked={allSelected}
@@ -105,45 +114,78 @@ export default function EmployeeTable({
                 />
               </th>
             )}
-            <th className="px-4 py-2 text-left font-medium">Name</th>
-            <th className="min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium">Reference ID</th>
-            <th className="px-4 py-2 text-left font-medium">Emp Code</th>
-            <th className="px-4 py-2 text-left font-medium">Mobile</th>
-            <th className="px-4 py-2 text-left font-medium">Email</th>
-            {showJobColumns && <th className="px-4 py-2 text-left font-medium">Designation</th>}
+            <th
+              className={`${thStickyCol} ${nameLeft} w-[10rem] min-w-[10rem] max-w-[10rem] px-4 py-2 text-left font-medium`}
+            >
+              Name
+            </th>
+            <th
+              className={`${thStickyCol} ${refLeft} w-[9rem] min-w-[9rem] whitespace-nowrap px-4 py-2 text-left font-medium`}
+            >
+              Reference ID
+            </th>
+            <th
+              className={`${thStickyCol} ${empLeft} w-[6rem] min-w-[6rem] px-4 py-2 text-left font-medium ${stickyEdge}`}
+            >
+              Emp Code
+            </th>
+            <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Mobile</th>
+            <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Email</th>
             {showJobColumns && (
-              <th className="min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium">
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Designation</th>
+            )}
+            {showJobColumns && (
+              <th className={`${thSticky} min-w-[140px] whitespace-nowrap px-4 py-2 text-left font-medium`}>
                 Expected Date of Joining
               </th>
             )}
             {showJobColumns && (
-              <th className="min-w-[150px] whitespace-nowrap px-4 py-2 text-left font-medium">
+              <th className={`${thSticky} min-w-[150px] whitespace-nowrap px-4 py-2 text-left font-medium`}>
                 CTC / Net Pay
               </th>
             )}
-            {showJobColumns && <th className="px-4 py-2 text-left font-medium">State</th>}
-            {showStatusColumn && <th className="px-4 py-2 text-left font-medium">{statusColumnLabel}</th>}
-            {showDateColumn && (
-              <th className="min-w-[180px] whitespace-nowrap px-4 py-2 text-left font-medium">{dateColumnLabel}</th>
+            {showJobColumns && (
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>State</th>
             )}
-            {showRemarksColumn && <th className="px-4 py-2 text-left font-medium">{remarksColumnLabel}</th>}
-            {showFormLink && <th className="px-4 py-2 text-left font-medium">Form Link</th>}
+            {showStatusColumn && (
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>{statusColumnLabel}</th>
+            )}
+            {showDateColumn && (
+              <th className={`${thSticky} min-w-[180px] whitespace-nowrap px-4 py-2 text-left font-medium`}>
+                {dateColumnLabel}
+              </th>
+            )}
+            {showRemarksColumn && (
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>{remarksColumnLabel}</th>
+            )}
+            {showFormLink && (
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Form Link</th>
+            )}
             {showViewResponse && (
-              <th className={`px-3 py-2 font-medium ${showReviewTextCta ? 'text-left' : 'w-14 text-center'}`}>
+              <th
+                className={`${thSticky} px-3 py-2 font-medium ${showReviewTextCta ? 'text-left' : 'w-14 text-center'}`}
+              >
                 {reviewColumnLabel}
               </th>
             )}
             {showPayrollReturnedActions && (
-              <th className="px-4 py-2 text-left font-medium">Payroll Lead note</th>
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Payroll Lead note</th>
             )}
-            {showPayrollReturnedActions && <th className="px-4 py-2 text-left font-medium">Action</th>}
-            {actionLabel && <th className="px-4 py-2 text-left font-medium">Action</th>}
-            {showJoiningStatus && <th className="px-4 py-2 text-left font-medium">Joining Status</th>}
+            {showPayrollReturnedActions && (
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Action</th>
+            )}
+            {actionLabel && (
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Action</th>
+            )}
+            {showJoiningStatus && (
+              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Joining Status</th>
+            )}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-100">
+        <tbody>
           {rows.map((r) => {
             const checked = selectedIds.has(r.id);
+            const rowBg = checked ? 'bg-indigo-50' : 'bg-white';
             const payType = String(r.pay_type ?? '').trim().toUpperCase();
             const missingRoleDetails =
               showNotAssignedForMissingRoleDetails &&
@@ -175,7 +217,7 @@ export default function EmployeeTable({
             return (
               <tr key={r.id} className={checked ? 'bg-indigo-50/40' : ''}>
                 {selectable && (
-                  <td className="px-3 py-3">
+                  <td className={`sticky left-0 z-20 w-10 min-w-[2.5rem] border-b border-slate-100 px-3 py-3 ${rowBg}`}>
                     <input
                       type="checkbox"
                       checked={checked}
@@ -184,15 +226,26 @@ export default function EmployeeTable({
                     />
                   </td>
                 )}
-                <td className="px-4 py-3 font-medium text-slate-900">{r.name}</td>
-                <td className="min-w-[140px] whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
+                <td
+                  className={`sticky ${nameLeft} z-20 w-[10rem] min-w-[10rem] max-w-[10rem] truncate border-b border-slate-100 px-4 py-3 font-medium text-slate-900 ${rowBg}`}
+                  title={r.name || ''}
+                >
+                  {r.name}
+                </td>
+                <td
+                  className={`sticky ${refLeft} z-20 w-[9rem] min-w-[9rem] whitespace-nowrap border-b border-slate-100 px-4 py-3 font-mono text-xs text-slate-700 ${rowBg}`}
+                >
                   {r.reference_id || '—'}
                 </td>
-                <td className="px-4 py-3 font-mono text-xs text-slate-700">{r.emp_code || '—'}</td>
-                <td className="px-4 py-3 text-slate-700">{r.mobile}</td>
-                <td className="px-4 py-3 text-slate-700">{r.email}</td>
+                <td
+                  className={`sticky ${empLeft} z-20 w-[6rem] min-w-[6rem] border-b border-slate-100 px-4 py-3 font-mono text-xs text-slate-700 ${stickyEdge} ${rowBg}`}
+                >
+                  {r.emp_code || '—'}
+                </td>
+                <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{r.mobile}</td>
+                <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{r.email}</td>
                 {showJobColumns && (
-                  <td className="px-4 py-3 text-slate-700">
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">
                     {missingRoleDetails ? (
                       <span className="font-medium text-rose-600">Not Assigned</span>
                     ) : (
@@ -201,18 +254,20 @@ export default function EmployeeTable({
                   </td>
                 )}
                 {showJobColumns && (
-                  <td className="min-w-[140px] whitespace-nowrap px-4 py-3 text-slate-700">
+                  <td className="min-w-[140px] whitespace-nowrap border-b border-slate-100 px-4 py-3 text-slate-700">
                     {r.date_of_joining || '-'}
                   </td>
                 )}
                 {showJobColumns && (
-                  <td className="min-w-[150px] whitespace-nowrap px-4 py-3 text-slate-700">
+                  <td className="min-w-[150px] whitespace-nowrap border-b border-slate-100 px-4 py-3 text-slate-700">
                     {formatPayAmount(r.pay_type, r.ctc_type, r.ctc_value)}
                   </td>
                 )}
-                {showJobColumns && <td className="px-4 py-3 text-slate-700">{r.state || '-'}</td>}
+                {showJobColumns && (
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{r.state || '-'}</td>
+                )}
                 {showStatusColumn && (
-                  <td className="px-4 py-3">
+                  <td className="border-b border-slate-100 px-4 py-3">
                     <span
                       className={employeeStatusBadgeClass(statusLabel, {
                         onboardingInitiated: r.onboarding_initiated,
@@ -223,17 +278,17 @@ export default function EmployeeTable({
                   </td>
                 )}
                 {showDateColumn && (
-                  <td className="min-w-[180px] whitespace-nowrap px-4 py-3 text-slate-700">
+                  <td className="min-w-[180px] whitespace-nowrap border-b border-slate-100 px-4 py-3 text-slate-700">
                     {typeof dateForRow === 'function' ? dateForRow(r) : '-'}
                   </td>
                 )}
                 {showRemarksColumn && (
-                  <td className="px-4 py-3 text-slate-700">
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">
                     {typeof remarksForRow === 'function' ? remarksForRow(r) : '-'}
                   </td>
                 )}
                 {showFormLink && (
-                  <td className="px-4 py-3">
+                  <td className="border-b border-slate-100 px-4 py-3">
                     {formLinkForRow ? (
                       <a
                         href={formLinkForRow(r)}
@@ -249,7 +304,13 @@ export default function EmployeeTable({
                   </td>
                 )}
                 {showViewResponse && (
-                  <td className={showReviewTextCta ? 'px-4 py-3 text-left' : 'px-2 py-3 text-center'}>
+                  <td
+                    className={
+                      showReviewTextCta
+                        ? 'border-b border-slate-100 px-4 py-3 text-left'
+                        : 'border-b border-slate-100 px-2 py-3 text-center'
+                    }
+                  >
                     {!reviewCtaForSubmittedOnly ||
                     String(r.form_submission_status ?? '').trim() === 'Submitted' ? (
                       <button
@@ -272,14 +333,14 @@ export default function EmployeeTable({
                   </td>
                 )}
                 {showPayrollReturnedActions && (
-                  <td className="max-w-xs px-4 py-3 text-slate-700">
+                  <td className="max-w-xs border-b border-slate-100 px-4 py-3 text-slate-700">
                     <span className="line-clamp-3 text-xs" title={r.form_payroll_review_reason || ''}>
                       {r.form_payroll_review_reason || '—'}
                     </span>
                   </td>
                 )}
                 {showPayrollReturnedActions && (
-                  <td className="px-4 py-3">
+                  <td className="border-b border-slate-100 px-4 py-3">
                     <button
                       type="button"
                       onClick={() => onSendBackToPayrollLead?.(r)}
@@ -290,7 +351,7 @@ export default function EmployeeTable({
                   </td>
                 )}
                 {actionLabel && (
-                  <td className="px-4 py-3">
+                  <td className="border-b border-slate-100 px-4 py-3">
                     <button
                       type="button"
                       onClick={() => onRowAction?.(r)}
@@ -301,7 +362,7 @@ export default function EmployeeTable({
                   </td>
                 )}
                 {showJoiningStatus && (
-                  <td className="px-4 py-3 text-slate-700">
+                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">
                     {joiningStatusCellRenderer
                       ? joiningStatusCellRenderer(r, joiningStatusLabel)
                       : joiningStatusLabel(r)}

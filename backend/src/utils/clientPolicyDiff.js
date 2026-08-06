@@ -50,6 +50,91 @@ function allowancesByDesignation(allowances) {
   return map;
 }
 
+function fmtDate(value) {
+  if (value == null || value === '') return 'none';
+  return String(value).slice(0, 10);
+}
+
+function fmtMoney(value) {
+  if (value == null || value === '') return 'none';
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : String(value);
+}
+
+function designationKey(name) {
+  return String(name ?? '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+/**
+ * Compare core client fields (identity, contract, insurance, flags, designations).
+ * Used for the PL activity log on client create/edit.
+ */
+export function diffClientCoreFields(before, after) {
+  const changes = [];
+  const push = (label, from, to) => {
+    if (from === to) return;
+    changes.push(`${label}: ${from} → ${to}`);
+  };
+
+  push('Client name', String(before?.client_name ?? ''), String(after?.client_name ?? ''));
+  push('Contract code', String(before?.contract_code ?? ''), String(after?.contract_code ?? ''));
+  push('Entity', String(before?.entity ?? ''), String(after?.entity ?? ''));
+  push('State', String(before?.state ?? ''), String(after?.state ?? ''));
+  push('Contract start', fmtDate(before?.contract_start_date), fmtDate(after?.contract_start_date));
+
+  const bOpen = Boolean(before?.open_ended_contract);
+  const aOpen = Boolean(after?.open_ended_contract);
+  if (bOpen !== aOpen) {
+    changes.push(`Open-ended contract: ${formatBool(bOpen)} → ${formatBool(aOpen)}`);
+  }
+  if (!aOpen || !bOpen) {
+    push('Contract end', fmtDate(before?.contract_end_date), fmtDate(after?.contract_end_date));
+  }
+
+  const bPm = before?.program_manager_id ?? null;
+  const aPm = after?.program_manager_id ?? null;
+  if (bPm !== aPm) {
+    const bLabel = before?.program_manager_name || before?.program_manager?.name || bPm || 'none';
+    const aLabel = after?.program_manager_name || after?.program_manager?.name || aPm || 'none';
+    changes.push(`Program manager: ${bLabel} → ${aLabel}`);
+  }
+
+  const bIns = Boolean(before?.insurance_applicable);
+  const aIns = Boolean(after?.insurance_applicable);
+  if (bIns !== aIns) {
+    changes.push(`Insurance: ${formatBool(bIns)} → ${formatBool(aIns)}`);
+  }
+  if (aIns || bIns) {
+    push('Insurance name', String(before?.insurance_name ?? '') || 'none', String(after?.insurance_name ?? '') || 'none');
+    push('Insurance amount', fmtMoney(before?.insurance_amount), fmtMoney(after?.insurance_amount));
+  }
+
+  const bLic = before?.require_license_upload !== false;
+  const aLic = after?.require_license_upload !== false;
+  if (bLic !== aLic) {
+    changes.push(`License upload required: ${formatBool(bLic)} → ${formatBool(aLic)}`);
+  }
+
+  const bQual = before?.require_qualification_certificate_upload !== false;
+  const aQual = after?.require_qualification_certificate_upload !== false;
+  if (bQual !== aQual) {
+    changes.push(`Qualification upload required: ${formatBool(bQual)} → ${formatBool(aQual)}`);
+  }
+
+  const bDesigs = (before?.designations ?? []).map((d) => String(d).trim()).filter(Boolean);
+  const aDesigs = (after?.designations ?? []).map((d) => String(d).trim()).filter(Boolean);
+  const bKeys = new Map(bDesigs.map((d) => [designationKey(d), d]));
+  const aKeys = new Map(aDesigs.map((d) => [designationKey(d), d]));
+  for (const [key, name] of aKeys) {
+    if (!bKeys.has(key)) changes.push(`Designation added: ${name}`);
+  }
+  for (const [key, name] of bKeys) {
+    if (!aKeys.has(key)) changes.push(`Designation removed: ${name}`);
+  }
+
+  return changes;
+}
+
 /**
  * Compare two policy bundles and return human-readable change lines.
  */
@@ -150,6 +235,6 @@ export function summarizePolicyChanges(changes, effectiveFromMonth = null) {
   const prefix = effectiveFromMonth
     ? `Effective from ${effectiveFromMonth}: `
     : '';
-  if (!changes?.length) return `${prefix}Policy saved (no changes detected)`;
+  if (!changes?.length) return `${prefix}Saved (no changes detected)`;
   return `${prefix}${changes.join('; ')}`;
 }

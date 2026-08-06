@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyConfigFields';
+import ClientConfigActivityLog from '../components/clientPolicy/ClientConfigActivityLog';
 import {
   DEFAULT_ATTENDANCE_POLICY,
   buildLeaveAllowancesForDesignations,
@@ -64,8 +65,6 @@ export default function PayrollClientPolicyPage() {
   const [saved, setSaved] = useState(false);
   const [savedRecalcCount, setSavedRecalcCount] = useState(0);
   const [policyChanges, setPolicyChanges] = useState([]);
-  const [policyHistory, setPolicyHistory] = useState([]);
-  const [showPolicyHistory, setShowPolicyHistory] = useState(false);
   const [recalcError, setRecalcError] = useState(null);
   const [effectiveFromMonth, setEffectiveFromMonth] = useState(currentMonthValue);
   const [confirmEarlyEffective, setConfirmEarlyEffective] = useState(false);
@@ -93,19 +92,6 @@ export default function PayrollClientPolicyPage() {
   useEffect(() => {
     loadClient();
   }, [loadClient, location.pathname]);
-
-  const loadPolicyHistory = useCallback(async () => {
-    try {
-      const rows = await api.listClientPolicyChanges(id);
-      setPolicyHistory(rows ?? []);
-    } catch {
-      setPolicyHistory([]);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    if (showPolicyHistory) loadPolicyHistory();
-  }, [showPolicyHistory, loadPolicyHistory]);
 
   const validate = () => {
     const errs = {};
@@ -269,34 +255,8 @@ export default function PayrollClientPolicyPage() {
       <form onSubmit={onSubmit} className="rounded-lg border border-slate-200 bg-white p-6">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-slate-900">Project Configuration</h2>
-          <button
-            type="button"
-            onClick={() => setShowPolicyHistory((v) => !v)}
-            className="text-sm text-indigo-600 hover:text-indigo-800"
-          >
-            {showPolicyHistory ? 'Hide policy change history' : 'Policy change history'}
-          </button>
+          <ClientConfigActivityLog clientId={id} className="contents" />
         </div>
-        {showPolicyHistory && (
-          <div className="mb-5 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
-            {policyHistory.length === 0 ? (
-              <p className="text-slate-500">No policy changes recorded yet.</p>
-            ) : (
-              <ul className="space-y-2">
-                {policyHistory.map((entry) => (
-                  <li key={entry.id} className="border-b border-slate-200 pb-2 last:border-0 last:pb-0">
-                    <div className="text-xs text-slate-500">
-                      {entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}
-                      {' · '}
-                      {entry.actor_name || entry.actor_email || entry.actor_role || 'System'}
-                    </div>
-                    <div className="mt-1 text-slate-800">{entry.message}</div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
         <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
           <label htmlFor="effective-from-month" className="block text-sm font-medium text-slate-900">
             Effective from month

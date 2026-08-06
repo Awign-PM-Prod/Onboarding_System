@@ -15,17 +15,16 @@ export function isPlRejectedReview(row) {
 }
 
 /**
- * Prefer review-derived labels (PM/PL approved) over raw onboarding_status when present.
+ * Prefer review-derived labels (PM/PL approved / correction) over raw onboarding_status.
+ * "Not Sent" (missing role details) only applies when the form has not progressed.
  */
 export function resolveEmployeeStatusLabel(row, {
   forceNotSent = false,
   missingRoleDetails = false,
   showRespondedForSubmittedForms = false,
-  showRequestCorrectionForReview = false,
+  showRequestCorrectionForReview: _showRequestCorrectionForReview = false,
   statusForRow = null,
 } = {}) {
-  if (forceNotSent && missingRoleDetails) return 'NOT_SENT';
-
   if (typeof statusForRow === 'function') {
     const custom = String(statusForRow(row) ?? '').trim();
     if (custom) return custom;
@@ -33,10 +32,7 @@ export function resolveEmployeeStatusLabel(row, {
 
   if (isPlApprovedReview(row)) return 'PL APPROVED';
   if (isPlRejectedReview(row) && isPmApprovedReview(row)) return 'PL REJECTED';
-  if (
-    showRequestCorrectionForReview &&
-    String(row?.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED'
-  ) {
+  if (String(row?.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED') {
     return 'REQUEST CORRECTION';
   }
   if (isPmApprovedReview(row)) return 'PM APPROVED';
@@ -49,6 +45,8 @@ export function resolveEmployeeStatusLabel(row, {
   ) {
     return 'RESPONDED';
   }
+
+  if (forceNotSent && missingRoleDetails) return 'NOT_SENT';
 
   return String(row?.onboarding_status ?? '').trim() || '-';
 }

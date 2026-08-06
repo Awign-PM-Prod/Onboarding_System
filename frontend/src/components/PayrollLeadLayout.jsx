@@ -95,6 +95,7 @@ export default function PayrollLeadLayout() {
   const isClientsListPage = pathname === '/dashboard/clients';
   const isClientFormPage =
     pathname === '/clients/new' || /^\/clients\/[^/]+\/edit\/?$/.test(pathname);
+  const isProgramManagersPage = pathname.startsWith('/dashboard/program-managers');
 
   const loadClients = useCallback(async () => {
     try {
@@ -165,6 +166,14 @@ export default function PayrollLeadLayout() {
       label: 'Clients',
       active: clientsRailActive,
       icon: <IconClients className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
+      id: 'program-managers',
+      to: '/dashboard/program-managers',
+      label: 'Program Managers',
+      active: isProgramManagersPage,
+      icon: <IconOnboarding className="h-full w-full" />,
       onClick: () => setPanelOpenPersist(false)
     }
   ];

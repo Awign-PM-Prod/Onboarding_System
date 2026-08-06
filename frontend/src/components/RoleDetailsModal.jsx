@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { formatDesignationLabel } from '../lib/formatLabels';
 import { INDIAN_STATES } from '../lib/indianStates';
 import { displayNumericValue } from '../lib/numericInput';
+import { api } from '../lib/api';
 import ModalOverlay from './ModalOverlay';
+
 const empty = {
   designation: '',
   date_of_joining: '',
@@ -11,6 +13,14 @@ const empty = {
   ctc_value: '',
   state: ''
 };
+
+function effectiveMonthlyCtc(payType, ctcType, ctcValue) {
+  if (String(payType).toUpperCase() !== 'CTC') return null;
+  const v = Number(ctcValue);
+  if (!Number.isFinite(v)) return null;
+  if (String(ctcType).toUpperCase() === 'ANNUAL') return v / 12;
+  return v;
+}
 
 export default function RoleDetailsModal({
   title,
@@ -29,10 +39,70 @@ export default function RoleDetailsModal({
   }));
   const [fieldErrors, setFieldErrors] = useState({});
   const [sendOnboardingNow, setSendOnboardingNow] = useState(false);
+  const [minMonthlyCtc, setMinMonthlyCtc] = useState(null);
+  const [minLoading, setMinLoading] = useState(false);
 
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
 
   const isNetPay = form.pay_type === 'NET_PAY';
+
+  // Fetch state CTC minimum and autofill when CTC (raise to at least min).
+  useEffect(() => {
+    const state = form.state;
+    if (!state || !INDIAN_STATES.includes(state)) {
+      setMinMonthlyCtc(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setMinLoading(true);
+    api
+      .getSalaryMinimumForState(state)
+      .then((data) => {
+        if (cancelled) return;
+        const min =
+          data?.min_monthly_ctc != null && Number.isFinite(Number(data.min_monthly_ctc))
+            ? Number(data.min_monthly_ctc)
+            : null;
+        setMinMonthlyCtc(min);
+      })
+      .catch(() => {
+        if (!cancelled) setMinMonthlyCtc(null);
+      })
+      .finally(() => {
+        if (!cancelled) setMinLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [form.state]);
+
+  // When min is known (or switching back to CTC), raise amount if below floor.
+  useEffect(() => {
+    if (form.pay_type !== 'CTC' || minMonthlyCtc == null) return;
+    setForm((f) => {
+      if (f.pay_type !== 'CTC') return f;
+      const current = Number(f.ctc_value);
+      const empty = !Number.isFinite(current) || f.ctc_value === '';
+      const effective = empty
+        ? null
+        : String(f.ctc_type).toUpperCase() === 'ANNUAL'
+          ? current / 12
+          : current;
+      if (effective != null && effective >= minMonthlyCtc) return f;
+      return {
+        ...f,
+        ctc_type: 'MONTHLY',
+        ctc_value: String(minMonthlyCtc)
+      };
+    });
+  }, [form.pay_type, minMonthlyCtc]);
+
+  const monthlyEffective = effectiveMonthlyCtc(form.pay_type, form.ctc_type, form.ctc_value);
+  const belowMin =
+    !isNetPay &&
+    minMonthlyCtc != null &&
+    monthlyEffective != null &&
+    monthlyEffective < minMonthlyCtc;
 
   const validate = () => {
     const errors = {};
@@ -43,6 +113,9 @@ export default function RoleDetailsModal({
     const ctc = Number(form.ctc_value);
     if (!Number.isFinite(ctc) || ctc < 0) errors.ctc_value = 'Must be a non-negative number';
     if (!form.state) errors.state = 'Required';
+    if (belowMin) {
+      errors.ctc_value = `Must be at least ₹${minMonthlyCtc.toLocaleString('en-IN')} monthly CTC for ${form.state}`;
+    }
     return errors;
   };
 
@@ -65,6 +138,8 @@ export default function RoleDetailsModal({
   };
 
   const amountLabel = isNetPay ? 'Net Pay Amount' : 'CTC Amount';
+  const submitDisabled =
+    submitting || designations.length === 0 || belowMin || minLoading;
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -191,6 +266,18 @@ export default function RoleDetailsModal({
             </div>
           )}
 
+          {!isNetPay && form.state && (
+            <p className={`text-xs ${belowMin ? 'text-rose-600' : 'text-slate-500'}`}>
+              {minLoading
+                ? 'Loading minimum CTC for state…'
+                : minMonthlyCtc != null
+                  ? `Minimum monthly CTC for ${form.state}: ₹${minMonthlyCtc.toLocaleString('en-IN')}${
+                      belowMin ? ' — increase amount to enable Save' : ''
+                    }`
+                  : `No Super Admin minimum set for ${form.state}.`}
+            </p>
+          )}
+
           {showSendOnboardingOption && (
             <label className="flex items-start gap-2 text-sm text-slate-700">
               <input
@@ -213,7 +300,7 @@ export default function RoleDetailsModal({
             </button>
             <button
               type="submit"
-              disabled={submitting || designations.length === 0}
+              disabled={submitDisabled}
               className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-60"
             >
               {submitting ? 'Saving...' : 'Save Details'}
@@ -224,6 +311,7 @@ export default function RoleDetailsModal({
     </ModalOverlay>
   );
 }
+
 function Field({ label, error, children }) {
   return (
     <div>

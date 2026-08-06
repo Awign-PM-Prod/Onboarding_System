@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
+import ProfileLogoutMenu from './ProfileLogoutMenu';
 
 const ROLE_LABEL = {
   PAYROLL_LEAD: 'Payroll Lead',
   PROGRAM_MANAGER: 'Program Manager',
-  PAYROLL_HEAD: 'Payroll Head'
+  PAYROLL_HEAD: 'Payroll Head',
+  SUPER_ADMIN: 'Super Admin'
 };
 
 const STORAGE_KEY = 'obs.sidebar.collapsed';
@@ -229,46 +231,9 @@ export default function CollapsibleAppSidebar({
     writeSidebarCollapsed(value);
   };
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const settingsRef = useRef(null);
-
-  const initials = useMemo(
-    () => initialsFromName(profile?.name ?? user?.email ?? ''),
-    [profile?.name, user?.email]
-  );
-
-  const roleLabel = ROLE_LABEL[profile?.role] ?? profile?.role ?? '';
   const resolvedTopSlot = typeof topSlot === 'function' ? topSlot(collapsed) : topSlot;
 
-  useEffect(() => {
-    if (!settingsOpen) return undefined;
-
-    const handlePointerDown = (event) => {
-      if (settingsRef.current && !settingsRef.current.contains(event.target)) {
-        setSettingsOpen(false);
-      }
-    };
-
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') setSettingsOpen(false);
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [settingsOpen]);
-
-  useEffect(() => {
-    if (!collapsed) setSettingsOpen(false);
-  }, [collapsed]);
-
   const handleNav = () => {
-    setSettingsOpen(false);
     onNavigate?.();
   };
 
@@ -320,81 +285,34 @@ export default function CollapsibleAppSidebar({
       </nav>
 
       <div
-        ref={settingsRef}
-        className={`relative z-20 shrink-0 border-t border-white/10 ${collapsed ? 'px-2 py-3' : 'px-3 py-4'}`}
+        className={`relative z-20 shrink-0 overflow-visible border-t border-white/10 ${
+          collapsed ? 'px-2 py-3' : 'px-3 py-4'
+        }`}
       >
-        {settingsOpen && !collapsed && (
-          <div className="absolute bottom-full left-3 right-3 mb-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-xs text-slate-300 shadow-xl">
-            <p className="truncate font-medium text-white">{profile?.name}</p>
-            <p className="mt-0.5 truncate text-slate-400">{user?.email}</p>
-            <p className="mt-1 text-slate-500">{roleLabel}</p>
-            <button
-              type="button"
-              onClick={onSignOut}
-              className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-600 px-2 py-2 text-xs font-medium text-slate-200 hover:border-red-500/50 hover:bg-red-950/40 hover:text-red-100"
-            >
-              <IconLogout className="h-4 w-4" />
-              Log out
-            </button>
-          </div>
-        )}
-
         {collapsed ? (
-          <div className="flex flex-col items-stretch gap-2">
-            {settingsOpen && (
-              <div className="overflow-hidden rounded-lg border border-slate-700/80 bg-[#1e2438] shadow-lg">
-                <div className="px-2 py-2">
-                  <p className="truncate text-center text-[11px] font-semibold text-white" title={profile?.name ?? 'Profile'}>
-                    {profile?.name ?? 'Profile'}
-                  </p>
-                </div>
-                <div className="border-t border-white/10" aria-hidden />
-                <button
-                  type="button"
-                  onClick={onSignOut}
-                  className="flex w-full items-center justify-center gap-1.5 px-2 py-2.5 text-[11px] font-medium text-rose-400 transition hover:bg-white/5"
-                >
-                  <IconLogout className="h-4 w-4 shrink-0" />
-                  Logout
-                </button>
-              </div>
-            )}
-            <span
-              className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white ring-2 ring-indigo-400/30"
-              aria-hidden
-            >
-              {initials}
-            </span>
-            <button
-              type="button"
-              onClick={() => setSettingsOpen((v) => !v)}
-              className={itemClass(true, settingsOpen)}
-              aria-label="Settings"
-              aria-expanded={settingsOpen}
-              title="Settings"
-            >
-              <IconSettings className="h-5 w-5" />
-            </button>
-          </div>
+          <ProfileLogoutMenu
+            profile={profile}
+            user={user}
+            onSignOut={onSignOut}
+            variant="dark"
+            align="rail"
+            className="flex justify-center"
+          />
         ) : (
-          <div className="space-y-2">
-            <div className="flex items-center gap-3 rounded-xl px-1 py-1">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white">
-                {initials}
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-white">{profile?.name ?? 'Profile'}</p>
-                <p className="truncate text-xs text-slate-400">{roleLabel}</p>
-              </div>
+          <div className="flex items-center gap-3 rounded-xl px-1 py-1">
+            <ProfileLogoutMenu
+              profile={profile}
+              user={user}
+              onSignOut={onSignOut}
+              variant="dark"
+              align="rail"
+            />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-white">{profile?.name ?? 'Profile'}</p>
+              <p className="truncate text-xs text-slate-400">
+                {ROLE_LABEL[profile?.role] ?? profile?.role ?? ''}
+              </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setSettingsOpen((v) => !v)}
-              className={itemClass(false, settingsOpen)}
-            >
-              <IconSettings className="h-5 w-5" />
-              Settings
-            </button>
           </div>
         )}
       </div>

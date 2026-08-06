@@ -582,14 +582,14 @@ export function parseAmsAttendanceCsv(text, options = {}) {
     const amtType = strOrNull(col(row, colMap, 'Amt. Type', 'Amt Type', 'Amount Type'));
     const name = strOrNull(col(row, colMap, 'Employee Name', 'Name'));
 
-    // Skip empty / placeholder trailing rows
+    // Skip empty / placeholder trailing rows (no identity).
+    // Rows with Emp Code are kept even when Amt. Type is blank so exported
+    // templates (ctc_type often unset) still import all matching employees.
     if (!empCode && !name) continue;
+    // Exported sheets append a column-totals footer; ignore it on re-import.
+    if (!empCode && String(name).trim().toLowerCase() === 'total') continue;
     if (!empCode || empCode === '-') {
       errors.push({ row: r + 1, error: 'Missing Emp Code' });
-      continue;
-    }
-    if (!amtType || amtType === '-') {
-      // often placeholder
       continue;
     }
 
@@ -697,7 +697,7 @@ export function parseAmsAttendanceCsv(text, options = {}) {
       doj: toSqlDate(col(row, colMap, 'DOJ', 'Date of Joining'), sheetMeta.attendance_month),
       lwd: toSqlDate(col(row, colMap, 'LWD', 'Last Working Day'), sheetMeta.attendance_month),
       status_label,
-      amt_type: amtType,
+      amt_type: amtType && amtType !== '-' ? amtType : null,
       monthly_amt: numOrNull(col(row, colMap, 'Monthly Amt', 'Monthly Amount', 'CTC')),
       paid_days: numOrNull(col(row, colMap, 'Paid Days')),
       lop: numOrNull(col(row, colMap, 'LOP')),
@@ -708,6 +708,9 @@ export function parseAmsAttendanceCsv(text, options = {}) {
       remarks: strOrNull(col(row, colMap, 'Remarks', 'Remark')),
       addon_incentive: numOrNull(
         col(row, colMap, 'Add-on Incentive', 'Add-on Incentives', 'Addon Incentive', 'Addon Incentives')
+      ),
+      arrear_days: numOrNull(
+        col(row, colMap, 'Arrear Days', 'Arrear Day', 'Arrears Days', 'Arrears')
       ),
       day_marks: dayMarks
     });

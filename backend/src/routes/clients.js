@@ -13,15 +13,20 @@ import {
 } from '../utils/clientPolicy.js';
 import { normalizeAttendancePolicy } from '../utils/clientPolicyCore.js';
 import { recalculateAllAttendanceSheetsForClient } from '../utils/attendanceRecalc.js';
-import { diffClientPolicyBundles, summarizePolicyChanges } from '../utils/clientPolicyDiff.js';
+import {
+  diffClientCoreFields,
+  diffClientPolicyBundles,
+  summarizePolicyChanges
+} from '../utils/clientPolicyDiff.js';
 import { buildClientTemplateCsv, buildClientExportCsv, csvRowToClientPayload, parseClientCsvText } from '../utils/clientCsv.js';
+import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }
 });
 
-async function savePolicyWithAudit(clientId, body, actor) {
+async function savePolicyWithAudit(clientId, body, actor, { extraChanges = [] } = {}) {
   const beforeBundle = await fetchClientPolicyBundle(clientId);
   const savedPolicy = await upsertClientPolicyBundle(clientId, body);
   const afterBundle = await fetchClientPolicyBundle(clientId);
@@ -40,22 +45,28 @@ async function savePolicyWithAudit(clientId, body, actor) {
   await insertClientPolicyVersion(clientId, effectiveMonthDate, afterBundle, actor?.userId ?? null);
 
   const policyChanges = diffClientPolicyBundles(beforeBundle, afterBundle);
+  const allChanges = [...(extraChanges ?? []), ...policyChanges];
   const effectiveLabel = String(effectiveFromMonth).slice(0, 7);
-  const message = summarizePolicyChanges(policyChanges, effectiveLabel);
+  const message = summarizePolicyChanges(
+    allChanges,
+    policyChanges.length ? effectiveLabel : null
+  );
 
-  try {
-    await supabaseAdmin.from('client_policy_change_logs').insert({
-      client_id: clientId,
-      actor_user_id: actor?.userId ?? null,
-      actor_role: actor?.role ?? null,
-      changes_json: policyChanges,
-      message
-    });
-  } catch (logErr) {
-    console.warn('[clients] policy change log insert skipped:', logErr?.message || logErr);
+  if (allChanges.length) {
+    try {
+      await supabaseAdmin.from('client_policy_change_logs').insert({
+        client_id: clientId,
+        actor_user_id: actor?.userId ?? null,
+        actor_role: actor?.role ?? null,
+        changes_json: allChanges,
+        message
+      });
+    } catch (logErr) {
+      console.warn('[clients] policy change log insert skipped:', logErr?.message || logErr);
+    }
   }
 
-  return { savedPolicy, policyChanges, afterBundle, effectiveFromMonth: effectiveLabel };
+  return { savedPolicy, policyChanges: allChanges, afterBundle, effectiveFromMonth: effectiveLabel };
 }
 
 function mergeSavedPolicyResponse(full, savedPolicy) {
@@ -443,6 +454,13 @@ router.post('/', async (req, res, next) => {
     }
 
     const full = await createClientRecord(req.body, req.user.id);
+    await logOrgActivityFromReq(req, {
+      action: 'CLIENT_CREATED',
+      entityType: 'client',
+      entityId: full.id,
+      clientId: full.id,
+      summary: `Created client ${full.client_name || full.contract_code || full.id}`
+    });
     res.status(201).json(full);
   } catch (err) {
     if (err?.code === '23505') {
@@ -569,7 +587,7 @@ router.put('/:id', async (req, res, next) => {
 
     const { data: pm, error: pmErr } = await supabaseAdmin
       .from('users')
-      .select('id, role')
+      .select('id, role, name, email')
       .eq('id', req.body.program_manager_id)
       .maybeSingle();
     if (pmErr) throw pmErr;
@@ -577,7 +595,14 @@ router.put('/:id', async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid program_manager_id' });
     }
 
+    const beforeClient = await fetchClientWithRelations(id);
     const updatePayload = buildClientCorePayload(req.body);
+    const designations = normalizedDesignations(req.body.designations);
+    const coreChanges = diffClientCoreFields(beforeClient, {
+      ...updatePayload,
+      program_manager_name: pm.name,
+      designations
+    });
 
     const { error: updateErr } = await supabaseAdmin
       .from('clients')
@@ -596,17 +621,21 @@ router.put('/:id', async (req, res, next) => {
       .eq('client_id', id);
     if (delErr) throw delErr;
 
-    const designations = normalizedDesignations(req.body.designations);
     if (designations.length) {
       const rows = designations.map(name => ({ client_id: id, name }));
       const { error: insErr } = await supabaseAdmin.from('designations').insert(rows);
       if (insErr) throw insErr;
     }
 
-    const { savedPolicy, policyChanges, effectiveFromMonth } = await savePolicyWithAudit(id, req.body, {
-      userId: req.user.id,
-      role: 'PAYROLL_LEAD'
-    });
+    const { savedPolicy, policyChanges, effectiveFromMonth } = await savePolicyWithAudit(
+      id,
+      req.body,
+      {
+        userId: req.user.id,
+        role: 'PAYROLL_LEAD'
+      },
+      { extraChanges: coreChanges }
+    );
 
     let attendanceRecalc = { sheets_recalculated: 0, sheet_ids: [], recalc_error: null };
     try {
@@ -623,6 +652,14 @@ router.put('/:id', async (req, res, next) => {
     }
 
     const full = mergeSavedPolicyResponse(await fetchClientWithRelations(id), savedPolicy);
+    await logOrgActivityFromReq(req, {
+      action: 'CLIENT_UPDATED',
+      entityType: 'client',
+      entityId: id,
+      clientId: id,
+      summary: `Updated client ${full.client_name || id}`,
+      metadata: { policy_change_count: Array.isArray(policyChanges) ? policyChanges.length : 0 }
+    });
     res.json({
       ...full,
       policy_changes: policyChanges,
@@ -751,12 +788,18 @@ router.put('/:id/policy', async (req, res, next) => {
       .eq('client_id', id)
       .order('created_at', { ascending: true });
     if (desigErr) throw desigErr;
-    let designationNames = (designations ?? []).map((d) => d.name);
+    const beforeDesignations = (designations ?? []).map((d) => d.name);
+    let designationNames = beforeDesignations;
+    let designationChanges = [];
     if (Array.isArray(req.body?.designations)) {
       designationNames = normalizedDesignations(req.body.designations);
       if (!designationNames.length) {
         return res.status(400).json({ error: 'Validation failed', details: { designations: 'at least one required' } });
       }
+      designationChanges = diffClientCoreFields(
+        { designations: beforeDesignations },
+        { designations: designationNames }
+      );
       await syncClientDesignations(id, designationNames);
     }
 
@@ -774,10 +817,15 @@ router.put('/:id/policy', async (req, res, next) => {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }
 
-    const { savedPolicy, policyChanges, effectiveFromMonth } = await savePolicyWithAudit(id, req.body, {
-      userId: req.user.id,
-      role: 'PAYROLL_LEAD'
-    });
+    const { savedPolicy, policyChanges, effectiveFromMonth } = await savePolicyWithAudit(
+      id,
+      req.body,
+      {
+        userId: req.user.id,
+        role: 'PAYROLL_LEAD'
+      },
+      { extraChanges: designationChanges }
+    );
 
     let attendanceRecalc = { sheets_recalculated: 0, sheet_ids: [], recalc_error: null };
     try {
@@ -794,6 +842,14 @@ router.put('/:id/policy', async (req, res, next) => {
     }
 
     const full = mergeSavedPolicyResponse(await fetchClientWithRelations(id), savedPolicy);
+    await logOrgActivityFromReq(req, {
+      action: 'POLICY_UPDATED',
+      entityType: 'client',
+      entityId: id,
+      clientId: id,
+      summary: `Updated policy for ${full.client_name || id}`,
+      metadata: { policy_change_count: Array.isArray(policyChanges) ? policyChanges.length : 0 }
+    });
     res.json({
       ...full,
       policy_changes: policyChanges,
@@ -907,6 +963,18 @@ router.patch('/:id/program-manager', async (req, res, next) => {
     if (logErr) throw logErr;
 
     const full = await fetchClientWithRelations(id);
+    await logOrgActivityFromReq(req, {
+      action: 'PM_ASSIGNED',
+      entityType: 'client',
+      entityId: id,
+      clientId: id,
+      summary: `Assigned PM ${pm.name || programManagerId} on ${full.client_name || id}`,
+      metadata: {
+        from_program_manager_id: existing.program_manager_id,
+        to_program_manager_id: programManagerId,
+        reason
+      }
+    });
     res.json(full);
   } catch (err) {
     next(err);

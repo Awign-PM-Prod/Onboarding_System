@@ -2616,7 +2616,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       setSecondaryMobileOtpSent(true);
       setSecondaryMobileOtp('');
       setSecondaryMobileVerified(false);
-      setSecondaryMobileOtpHint(result?.message || 'OTP sent to this number on WhatsApp.');
+      setSecondaryMobileOtpHint(result?.message || 'OTP sent. If demo mode, use 123123.');
     } catch (err) {
       setSecondaryMobileOtpSent(false);
       setSecondaryMobileOtpHint('');
@@ -2889,7 +2889,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               inputMode="numeric"
               maxLength={10}
               placeholder="10-digit alternate mobile number"
-              hint="OTP is sent to this number on WhatsApp."
+              hint="OTP is sent to this number via SMS."
               otp={secondaryMobileOtp}
               onOtpChange={setSecondaryMobileOtp}
               otpSent={secondaryMobileOtpSent}
@@ -3239,7 +3239,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             inputMode="numeric"
             maxLength={10}
             placeholder="10-digit alternate mobile number"
-            hint="OTP is sent to this number on WhatsApp."
+            hint="OTP is sent to this number via SMS."
             otp={secondaryMobileOtp}
             onOtpChange={setSecondaryMobileOtp}
             otpSent={secondaryMobileOtpSent}
@@ -3747,7 +3747,9 @@ export default function OnboardingForm() {
   const setupAadhaarStepFromForm = (form) => {
     const savedAadhaar = normalizeAadhaar(form?.aadhaar_number ?? '');
     const savedKyc = aadhaarKycFromForm(form);
-    const canUseResumeFlow = form?.aadhaar_verified === true && TWELVE_DIGIT_REGEX.test(savedAadhaar);
+    // Resume only when verified AND KYC demographics were actually persisted.
+    const canUseResumeFlow =
+      form?.aadhaar_verified === true && TWELVE_DIGIT_REGEX.test(savedAadhaar) && Boolean(savedKyc?.aad_name);
 
     setAadhaar(savedAadhaar);
     setOtp('');
@@ -3896,15 +3898,29 @@ export default function OnboardingForm() {
       if (result?.aadhaar_number) {
         setAadhaar(normalizeAadhaar(result.aadhaar_number));
       }
-      setAadhaarKyc(result.aadhaarDetails ?? aadhaarKyc ?? null);
+
+      let nextKyc = aadhaarKycFromForm(result?.aadhaarDetails) ?? null;
       // Read back persisted form immediately so the flow reflects saved DB state.
       try {
         const { form } = await api.getJobAppForm({ mobile, employeeId });
         if (form?.aadhaar_number) setAadhaar(normalizeAadhaar(form.aadhaar_number));
-        setAadhaarKyc(aadhaarKycFromForm(form) ?? result.aadhaarDetails ?? aadhaarKyc ?? null);
+        nextKyc = aadhaarKycFromForm(form) ?? nextKyc;
       } catch {
         // Ignore refresh failures here; OTP verification already succeeded.
       }
+
+      if (!nextKyc?.aad_name) {
+        setAadhaarKyc(null);
+        setAadhaarComplete(false);
+        setAadhaarResumeFlow(false);
+        setAadhaarPhase('input');
+        setAadhaarError(
+          'Aadhaar was verified but KYC details were not returned. Please request a new OTP and try again.'
+        );
+        return;
+      }
+
+      setAadhaarKyc(nextKyc);
       setAadhaarComplete(true);
     } catch (err) {
       setAadhaarError(err.message || 'Verification failed.');

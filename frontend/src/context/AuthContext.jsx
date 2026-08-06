@@ -93,5 +93,6 @@ export function homeRouteForRole(role) {
   if (role === 'PROGRAM_MANAGER') return '/pm-dashboard/dashboard';
   if (role === 'PAYROLL_LEAD') return '/dashboard';
   if (role === 'PAYROLL_HEAD') return '/admin-dashboard';
+  if (role === 'SUPER_ADMIN') return '/super-admin/dashboard';
   return '/login';
 }

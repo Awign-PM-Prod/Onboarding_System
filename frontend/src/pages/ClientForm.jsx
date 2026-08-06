@@ -3,6 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import DesignationsInput from '../components/DesignationsInput';
 import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyConfigFields';
+import ClientConfigActivityLog from '../components/clientPolicy/ClientConfigActivityLog';
 import {
   DEFAULT_ATTENDANCE_POLICY,
   buildLeaveAllowancesForDesignations,
@@ -392,13 +393,19 @@ export default function ClientForm() {
 
       {saveSuccess && policyChanges.length > 0 && (
         <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-          <p className="font-medium">Client saved. Policy changes:</p>
+          <p className="font-medium">Client saved. Configuration changes:</p>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             {policyChanges.map((change) => (
               <li key={change}>{change}</li>
             ))}
           </ul>
           <p className="mt-2 text-xs text-emerald-700">Returning to dashboard…</p>
+        </div>
+      )}
+
+      {isEdit && (
+        <div className="mb-4">
+          <ClientConfigActivityLog clientId={id} />
         </div>
       )}
 

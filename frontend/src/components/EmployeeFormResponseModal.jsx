@@ -333,6 +333,9 @@ export default function EmployeeFormResponseModal({
   const isPayrollMode = reviewMode === 'payroll';
   const alreadyPayrollApproved =
     isPayrollMode && String(form?.payroll_review_status ?? '').trim() === 'PAYROLL_APPROVED';
+  const alreadyPmApproved =
+    !isPayrollMode && String(form?.review_status ?? '').trim().toUpperCase() === 'APPROVED';
+  const alreadyApprovedForCorrection = alreadyPayrollApproved || alreadyPmApproved;
   const [fieldMarks, setFieldMarks] = useState({});
   const [decisionReason, setDecisionReason] = useState('');
   const [decisionError, setDecisionError] = useState('');
@@ -463,9 +466,9 @@ export default function EmployeeFormResponseModal({
               {isPayrollMode ? 'Payroll Lead review' : 'Application response'}
             </h2>
             <p className="mt-0.5 truncate text-sm text-slate-600">{employeeName}</p>
-            {alreadyPayrollApproved && (
+            {alreadyApprovedForCorrection && (
               <p className="mt-0.5 text-xs text-emerald-700">
-                Already approved — review remains available. Mark incorrect fields to reject for correction.
+                Already approved — review remains available. Mark incorrect fields to send for correction.
               </p>
             )}
             {!isPayrollMode && (
@@ -661,9 +664,10 @@ export default function EmployeeFormResponseModal({
             )}
             <div className={`flex flex-wrap items-center gap-2 ${hasIncorrectMarks ? 'shrink-0 sm:justify-end' : 'justify-end'}`}>
               {!hasIncorrectMarks ? (
-                alreadyPayrollApproved ? (
+                alreadyApprovedForCorrection ? (
                   <p className="text-sm text-slate-500">
-                    Mark any incorrect field to reject this application for correction.
+                    Mark any incorrect field to{' '}
+                    {isPayrollMode ? 'reject this application for correction' : 'send this application for correction'}.
                   </p>
                 ) : (
                   <button
@@ -693,7 +697,13 @@ export default function EmployeeFormResponseModal({
                     disabled={deciding}
                     className="rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
                   >
-                    {deciding ? 'Submitting...' : alreadyPayrollApproved ? 'Reject for correction' : 'Reject'}
+                    {deciding
+                      ? 'Submitting...'
+                      : alreadyApprovedForCorrection
+                        ? isPayrollMode
+                          ? 'Reject for correction'
+                          : 'Reject'
+                        : 'Reject'}
                   </button>
                 </>
               )}

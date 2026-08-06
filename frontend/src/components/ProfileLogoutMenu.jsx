@@ -1,6 +1,32 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { IconLogout, ROLE_LABEL, initialsFromName } from './CollapsibleAppSidebar';
+
+const ROLE_LABEL = {
+  PAYROLL_LEAD: 'Payroll Lead',
+  PROGRAM_MANAGER: 'Program Manager',
+  PAYROLL_HEAD: 'Payroll Head',
+  SUPER_ADMIN: 'Super Admin'
+};
+
+function initialsFromName(name) {
+  if (!name || typeof name !== 'string') return '?';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function IconLogout({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"
+      />
+    </svg>
+  );
+}
 
 /**
  * Profile avatar that opens a logout popup.
@@ -39,7 +65,6 @@ export default function ProfileLogoutMenu({
     const gap = 8;
 
     if (isRail) {
-      // Open to the right of the avatar, bottom-aligned
       let left = rect.right + gap;
       if (left + menuWidth > window.innerWidth - 8) {
         left = Math.max(8, rect.left - menuWidth - gap);
@@ -52,7 +77,6 @@ export default function ProfileLogoutMenu({
       return;
     }
 
-    // Dropdown below trigger
     let left =
       align === 'left'
         ? rect.left
@@ -60,11 +84,23 @@ export default function ProfileLogoutMenu({
           ? rect.left + rect.width / 2 - menuWidth / 2
           : rect.right - menuWidth;
     left = Math.min(Math.max(8, left), window.innerWidth - menuWidth - 8);
-    setCoords({
-      top: rect.bottom + gap,
-      bottom: undefined,
-      left,
-    });
+
+    // Prefer opening below; flip above when near the bottom of the viewport.
+    const estimatedMenuHeight = 148;
+    const spaceBelow = window.innerHeight - rect.bottom - gap;
+    if (spaceBelow < estimatedMenuHeight) {
+      setCoords({
+        top: undefined,
+        bottom: window.innerHeight - rect.top + gap,
+        left,
+      });
+    } else {
+      setCoords({
+        top: rect.bottom + gap,
+        bottom: undefined,
+        left,
+      });
+    }
   };
 
   useLayoutEffect(() => {

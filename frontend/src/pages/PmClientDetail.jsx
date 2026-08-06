@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, useNavigate, useParams } from 'react-router-dom';
 import { PM_TAB_SEGMENT_TO_KEY, pmClientTabUrl } from '../lib/pmClientRoutes';
 import EmployeeTable from '../components/EmployeeTable';
@@ -76,11 +76,12 @@ function isMissingRoleDetails(row) {
 }
 
 function getTestingFormStatusLabel(row) {
-  if (isMissingRoleDetails(row)) return 'NOT_SENT';
   if (String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED') return 'PL APPROVED';
   if (String(row.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED') return 'REQUEST CORRECTION';
   if (String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED') return 'PM APPROVED';
+  if (String(row.form_review_status ?? '').trim().toUpperCase() === 'REJECTED') return 'PM REJECTED';
   if (String(row.form_submission_status ?? '').trim() === 'Submitted') return 'RESPONDED';
+  if (isMissingRoleDetails(row)) return 'NOT_SENT';
   return String(row.onboarding_status ?? '').trim() || '-';
 }
 
@@ -149,6 +150,7 @@ export default function PmClientDetail() {
   const [bulkRoleModalOpen, setBulkRoleModalOpen] = useState(false);
   const [bulkRoleForceSendOnboarding, setBulkRoleForceSendOnboarding] = useState(false);
   const [testingBulkMenuOpen, setTestingBulkMenuOpen] = useState(false);
+  const testingBulkMenuRef = useRef(null);
   const [testingJoiningModalOpen, setTestingJoiningModalOpen] = useState(false);
   const [rowRoleModalEmployee, setRowRoleModalEmployee] = useState(null);
   const [responseModalOpen, setResponseModalOpen] = useState(false);
@@ -331,7 +333,7 @@ export default function PmClientDetail() {
         else if (payrollReviewStatus === 'PENDING_PAYROLL_LEAD') latestStatus = 'Pending Payroll Review';
         else if (formReviewStatus === 'APPROVED') latestStatus = 'PM APPROVED';
         else if (formReviewStatus === 'REJECTED') latestStatus = 'PM Rejected';
-        else if (formReviewStatus === 'CORRECTION_REQUESTED') latestStatus = 'Correction Requested';
+        else if (formReviewStatus === 'CORRECTION_REQUESTED') latestStatus = 'Correction Mail Sent';
         else if (formSubmissionStatus === 'Submitted') latestStatus = 'Form Submitted';
 
         return { ...row, onboarding_status: latestStatus };
@@ -526,6 +528,24 @@ export default function PmClientDetail() {
   }, [activeTab, tabSegment, inProgressSubtab, plReviewedSubtab, testingSubtab]);
 
   useEffect(() => {
+    if (!testingBulkMenuOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (testingBulkMenuRef.current && !testingBulkMenuRef.current.contains(event.target)) {
+        setTestingBulkMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setTestingBulkMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [testingBulkMenuOpen]);
+
+  useEffect(() => {
     if (activeTab !== 'testing') return;
     setTestingSubtab('employees');
   }, [activeTab]);
@@ -636,6 +656,11 @@ export default function PmClientDetail() {
 
   const transferEmployees = async (employeeIds) => {
     if (!transferTargetClientId || employeeIds.length === 0) return;
+    const reason = String(transferReason ?? '').trim();
+    if (!reason) {
+      setError('Please enter an exit / transfer reason before confirming.');
+      return;
+    }
     setTransferLoading(true);
     setError(null);
     const targetClientName =
@@ -649,7 +674,7 @@ export default function PmClientDetail() {
             clientId: id,
             employeeId,
             targetClientId: transferTargetClientId,
-            reason: transferReason,
+            reason,
           });
           succeeded += 1;
         } catch {
@@ -665,10 +690,10 @@ export default function PmClientDetail() {
         );
       } else if (employeeIds.length === 1) {
         const employee = employees.find((row) => row.id === employeeIds[0]);
-        setToast(`${employee?.name ?? 'Employee'} transferred to ${targetClientName}.`);
+        setToast(`${employee?.name ?? 'Employee'} marked exited and transferred to ${targetClientName}.`);
         setTimeout(() => setToast(null), 3500);
       } else {
-        setToast(`Transferred ${succeeded} employees to ${targetClientName}.`);
+        setToast(`Marked exited and transferred ${succeeded} employees to ${targetClientName}.`);
         setTimeout(() => setToast(null), 3500);
       }
     } catch (err) {
@@ -1400,7 +1425,7 @@ export default function PmClientDetail() {
                 </button>
               </div>
               {(testingSubtab === 'employees' || testingSubtab === 'rejected') && (
-                <div className="relative">
+                <div className="relative" ref={testingBulkMenuRef}>
                   <button
                     type="button"
                     onClick={() => setTestingBulkMenuOpen((v) => !v)}
@@ -1413,7 +1438,7 @@ export default function PmClientDetail() {
                     </svg>
                   </button>
                   {testingBulkMenuOpen && (
-                    <div className="absolute right-0 z-20 mt-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                    <div className="absolute right-0 z-[60] mt-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
                       {testingSubtab === 'employees' && (
                         <>
                           <button
@@ -1945,7 +1970,8 @@ export default function PmClientDetail() {
           }
           showViewResponse={
             (activeTab === 'testing' && testingSubtab === 'employees') ||
-            (activeTab === 'in_progress' && inProgressSubtab !== 'form_sent' && inProgressSubtab !== 'approved')
+            (activeTab === 'in_progress' && inProgressSubtab !== 'form_sent') ||
+            (activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved')
           }
           onViewResponse={openResponseModal}
           reviewColumnLabel={activeTab === 'testing' ? 'Review' : 'View'}
@@ -2088,29 +2114,89 @@ export default function PmClientDetail() {
         )}
         {(transferModalEmployee || testingBulkTransferModalOpen) && (
           <ModalOverlay
-            onClose={() => {
-              setTransferModalEmployee(null);
-              setTestingBulkTransferModalOpen(false);
-            }}
+            onClose={closeTransferModal}
             backdropClassName="bg-slate-900/50"
           >
             <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
               <h3 className="text-lg font-semibold text-slate-900">
-                {testingBulkTransferModalOpen ? 'Transfer Employees (Bulk)' : 'Transfer Employee'}
+                {testingBulkTransferModalOpen
+                  ? 'Confirm transfer & mark exit (Bulk)'
+                  : 'Confirm transfer & mark exit'}
               </h3>
               <p className="mt-1 text-sm text-slate-600">
-                {testingBulkTransferModalOpen ? (
-                  <>
-                    Transfer {selectedIds.size} selected employee{selectedIds.size === 1 ? '' : 's'} to another project.
-                    Current onboarding data will reset and status will move to Available.
-                  </>
-                ) : (
-                  <>
-                    Transfer <span className="font-medium text-slate-800">{transferModalEmployee.name}</span> to another project.
-                    Current onboarding data will reset and status will move to Available.
-                  </>
-                )}
+                Review the details below. Transferring will mark exit from{' '}
+                <span className="font-medium text-slate-800">
+                  {client?.client_name || 'this project'}
+                </span>
+                , reset onboarding, and move the employee to Available on the target project.
               </p>
+
+              {!testingBulkTransferModalOpen && transferModalEmployee && (
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Employee details
+                  </p>
+                  <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                    <div>
+                      <dt className="text-xs text-slate-500">Name</dt>
+                      <dd className="font-medium text-slate-900">{transferModalEmployee.name || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">Reference ID</dt>
+                      <dd className="font-mono text-xs text-slate-800">
+                        {transferModalEmployee.reference_id || '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">Emp Code</dt>
+                      <dd className="font-mono text-xs text-slate-800">
+                        {transferModalEmployee.emp_code || '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">Mobile</dt>
+                      <dd className="text-slate-800">{transferModalEmployee.mobile || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">Email</dt>
+                      <dd className="break-all text-slate-800">{transferModalEmployee.email || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">Designation</dt>
+                      <dd className="text-slate-800">
+                        {formatDesignationLabel(transferModalEmployee.designation) || '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">Expected Date of Joining</dt>
+                      <dd className="text-slate-800">
+                        {transferModalEmployee.date_of_joining || '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-slate-500">Current project</dt>
+                      <dd className="text-slate-800">{client?.client_name || '—'}</dd>
+                    </div>
+                  </dl>
+                </div>
+              )}
+
+              {testingBulkTransferModalOpen && (
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm text-slate-700">
+                    <span className="font-semibold text-slate-900">{selectedIds.size}</span> selected
+                    employee{selectedIds.size === 1 ? '' : 's'} will be marked exited from{' '}
+                    <span className="font-medium">{client?.client_name || 'this project'}</span> and
+                    transferred.
+                  </p>
+                </div>
+              )}
+
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                This marks exit from the current project assignment (inactive with exit reason) before
+                assigning to the new project.
+              </div>
+
               <div className="mt-4 space-y-3">
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -2131,13 +2217,13 @@ export default function PmClientDetail() {
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Reason (optional)
+                    Exit / transfer reason <span className="normal-case text-rose-500">*</span>
                   </label>
                   <input
                     type="text"
                     value={transferReason}
                     onChange={(e) => setTransferReason(e.target.value)}
-                    placeholder="Transfer reason"
+                    placeholder="e.g. Project completed / Client request"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
                   />
                 </div>
@@ -2161,6 +2247,7 @@ export default function PmClientDetail() {
                   onClick={testingBulkTransferModalOpen ? handleTestingBulkTransfer : handleTransferEmployee}
                   disabled={
                     !transferTargetClientId ||
+                    !String(transferReason ?? '').trim() ||
                     transferLoading ||
                     (testingBulkTransferModalOpen && selectedIds.size === 0)
                   }
@@ -2169,8 +2256,8 @@ export default function PmClientDetail() {
                   {transferLoading
                     ? 'Transferring...'
                     : testingBulkTransferModalOpen
-                      ? `Transfer${selectedIds.size ? ` (${selectedIds.size})` : ''}`
-                      : 'Transfer'}
+                      ? `Confirm exit & transfer${selectedIds.size ? ` (${selectedIds.size})` : ''}`
+                      : 'Confirm exit & transfer'}
                 </button>
               </div>
             </div>
