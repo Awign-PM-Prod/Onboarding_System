@@ -1,12 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import CollapsibleAppSidebar, {
+import { WorkspaceBasePathProvider, useWorkspacePaths } from '../context/WorkspaceBasePath';
+import { api } from '../lib/api';
+import {
   IconClients,
   IconDashboard,
-  IconSettings,
-  readSidebarCollapsed
+  IconOnboarding,
+  IconSettings
 } from './CollapsibleAppSidebar';
+import TwoPaneSidebar, {
+  SidebarModulesPanel,
+  writeSidebarPanelOpen
+} from './TwoPaneSidebar';
 
 function IconMenu({ className }) {
   return (
@@ -24,6 +30,58 @@ function IconClose({ className }) {
   );
 }
 
+function IconCheck({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function IconReject({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
+function IconId({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5zm6-10.125a1.875 1.875 0 11-3.75 0 1.875 1.875 0 013.75 0zm1.294 6.336a6.721 6.721 0 01-3.17.789 6.721 6.721 0 01-3.168-.789 3.376 3.376 0 016.338 0z"
+      />
+    </svg>
+  );
+}
+
+function IconCalendar({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"
+      />
+    </svg>
+  );
+}
+
+function IconUserSwitch({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"
+      />
+    </svg>
+  );
+}
+
 function IconActivity({ className }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
@@ -36,75 +94,273 @@ function IconActivity({ className }) {
   );
 }
 
-export default function SuperAdminLayout() {
+function IconMail({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
+      />
+    </svg>
+  );
+}
+
+function IconLock({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+      />
+    </svg>
+  );
+}
+
+function IconWage({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15 8.25H9m6 3H9m3 6l-3-3h1.5a3 3 0 100-6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+      />
+    </svg>
+  );
+}
+
+function SuperAdminLayoutInner() {
   const navigate = useNavigate();
   const location = useLocation();
+  const paths = useWorkspacePaths();
   const { profile, user, signOut } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [clients, setClients] = useState([]);
+  const mainScrollRef = useRef(null);
+
+  const pathname = location.pathname;
+  const clientId = paths.matchClientId(pathname);
+  const isClientsListPage = pathname === paths.clients;
+  const isClientFormPage = paths.isClientFormPath(pathname);
+  const isProgramManagersPage = pathname.startsWith(paths.programManagers);
+  const isActivityPage = pathname.startsWith('/super-admin/activity');
+  const isSalaryPage = pathname.startsWith('/super-admin/salary-config');
+  const isTaskRemindersPage = pathname.startsWith('/super-admin/task-reminders');
+  const isStaffAccountsPage = pathname.startsWith('/super-admin/staff-accounts');
+
+  const loadClients = useCallback(async () => {
+    try {
+      const data = await api.listClients();
+      setClients(Array.isArray(data) ? data : []);
+    } catch {
+      setClients([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadClients();
+  }, [loadClients]);
+
+  useEffect(() => {
+    if (isClientsListPage) loadClients();
+  }, [isClientsListPage, loadClients]);
 
   useEffect(() => {
     setMobileNavOpen(false);
-  }, [location.pathname]);
+  }, [pathname]);
+
+  useEffect(() => {
+    mainScrollRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [pathname]);
+
+  const setPanelOpenPersist = (open) => {
+    setPanelOpen(open);
+    writeSidebarPanelOpen(open);
+  };
+
+  useEffect(() => {
+    if (clientId) {
+      setPanelOpen(true);
+      writeSidebarPanelOpen(true);
+    } else {
+      setPanelOpen(false);
+      writeSidebarPanelOpen(false);
+    }
+  }, [clientId]);
 
   const handleSignOut = async () => {
     await signOut();
     navigate('/login', { replace: true });
   };
 
-  if (location.pathname === '/super-admin') {
-    return <Navigate to="/super-admin/dashboard" replace />;
+  if (pathname === paths.basePath) {
+    return <Navigate to={paths.home} replace />;
   }
 
-  const pathname = location.pathname;
-  const items = [
+  const clientsRailActive = Boolean(clientId) || isClientsListPage || isClientFormPage;
+
+  const railItems = [
     {
       id: 'dashboard',
-      to: '/super-admin/dashboard',
+      to: paths.home,
       label: 'Dashboard',
-      active: pathname === '/super-admin/dashboard',
-      icon: <IconDashboard className="h-full w-full" />
+      active: pathname === paths.home,
+      icon: <IconDashboard className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
     },
     {
       id: 'clients',
-      to: '/super-admin/clients',
+      to: paths.clients,
       label: 'Clients',
-      active: pathname.startsWith('/super-admin/clients'),
-      icon: <IconClients className="h-full w-full" />
+      active: clientsRailActive,
+      icon: <IconClients className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
+      id: 'program-managers',
+      to: paths.programManagers,
+      label: 'Program Managers',
+      active: isProgramManagersPage,
+      icon: <IconOnboarding className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
     },
     {
       id: 'activity',
       to: '/super-admin/activity',
       label: 'Activity Logs',
-      active: pathname.startsWith('/super-admin/activity'),
-      icon: <IconActivity className="h-full w-full" />
+      active: isActivityPage,
+      icon: <IconActivity className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
     },
     {
       id: 'salary',
       to: '/super-admin/salary-config',
       label: 'Salary Config',
-      active: pathname.startsWith('/super-admin/salary-config'),
-      icon: <IconSettings className="h-full w-full" />
+      active: isSalaryPage,
+      icon: <IconWage className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
+      id: 'task-reminders',
+      to: '/super-admin/task-reminders',
+      label: 'Task Reminders',
+      active: isTaskRemindersPage,
+      icon: <IconMail className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
+      id: 'staff-accounts',
+      to: '/super-admin/staff-accounts',
+      label: 'Staff Accounts',
+      active: isStaffAccountsPage,
+      icon: <IconLock className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
     }
   ];
 
-  const renderSidebar = ({ forceExpanded = false } = {}) => (
-    <CollapsibleAppSidebar
-      homeTo="/super-admin/dashboard"
+  const moduleItems = clientId
+    ? [
+        {
+          id: 'dashboard',
+          to: paths.client(clientId, 'dashboard'),
+          label: 'Dashboard',
+          active: /\/client\/[^/]+\/dashboard\/?$/.test(pathname),
+          icon: <IconDashboard className="h-full w-full" />
+        },
+        {
+          id: 'pm-approved',
+          to: paths.client(clientId, 'approved-employees'),
+          label: 'PM Approved',
+          active: /\/approved-employees\/?$/.test(pathname),
+          icon: <IconOnboarding className="h-full w-full" />
+        },
+        {
+          id: 'approved',
+          to: paths.client(clientId, 'pl-approved-employees'),
+          label: 'Approved',
+          active: pathname.includes('/pl-approved-employees'),
+          icon: <IconCheck className="h-full w-full" />
+        },
+        {
+          id: 'rejected',
+          to: paths.client(clientId, 'rejected-employees'),
+          label: 'Rejected',
+          active: pathname.includes('/rejected-employees'),
+          icon: <IconReject className="h-full w-full" />
+        },
+        {
+          id: 'identity',
+          to: paths.client(clientId, 'identity-numbers'),
+          label: 'UAN & ESIC',
+          active: pathname.includes('/identity-numbers'),
+          icon: <IconId className="h-full w-full" />
+        },
+        {
+          id: 'attendance',
+          to: paths.client(clientId, 'attendance'),
+          label: 'Attendance',
+          active: pathname.includes('/attendance'),
+          icon: <IconCalendar className="h-full w-full" />
+        },
+        {
+          id: 'policy',
+          to: paths.client(clientId, 'policy'),
+          label: 'Policy Configuration',
+          active: pathname.includes('/policy'),
+          icon: <IconSettings className="h-full w-full" />
+        },
+        {
+          id: 'assign-pm',
+          to: paths.client(clientId, 'assign-pm'),
+          label: 'Re-Assign Program Manager',
+          active: pathname.includes('/assign-pm'),
+          icon: <IconUserSwitch className="h-full w-full" />
+        }
+      ]
+    : [];
+
+  const activeClient = clientId
+    ? clients.find((c) => String(c.id) === String(clientId))
+    : null;
+
+  const renderPanel = (closeDrawer) => (collapsed) => {
+    if (!clientId) return null;
+    return (
+      <SidebarModulesPanel
+        collapsed={collapsed}
+        clientName={activeClient?.client_name ?? 'Client'}
+        items={moduleItems}
+        onShowClients={() => {
+          navigate(paths.clients);
+          setPanelOpenPersist(false);
+          closeDrawer?.();
+        }}
+        onNavigate={closeDrawer}
+      />
+    );
+  };
+
+  const renderSidebar = ({ forceExpanded = false, labeledRail = false } = {}) => (
+    <TwoPaneSidebar
+      homeTo={paths.home}
       profile={profile}
       user={user}
       onSignOut={handleSignOut}
       onNavigate={() => setMobileNavOpen(false)}
-      collapsed={forceExpanded ? false : sidebarCollapsed}
-      onCollapsedChange={setSidebarCollapsed}
-      showCollapseToggle={!forceExpanded}
-      items={items}
+      railItems={railItems}
+      panelVisible={Boolean(clientId)}
+      panelExpanded={Boolean(clientId) && (panelOpen || forceExpanded)}
+      onPanelExpandedChange={labeledRail ? undefined : setPanelOpenPersist}
+      labeledRail={labeledRail}
+      panel={renderPanel(() => setMobileNavOpen(false))}
     />
   );
 
   return (
     <div className="flex h-screen max-h-screen w-full min-w-0 overflow-hidden bg-slate-100">
-      <aside className="relative z-30 hidden h-full max-h-screen shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
+      <aside className="relative z-30 hidden h-screen max-h-screen min-h-0 shrink-0 overflow-visible border-r border-slate-800/80 lg:block">
         {renderSidebar()}
       </aside>
 
@@ -122,11 +378,11 @@ export default function SuperAdminLayout() {
           mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        {renderSidebar({ forceExpanded: true })}
+        {renderSidebar({ forceExpanded: true, labeledRail: true })}
       </aside>
 
       <div className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="z-20 flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur lg:hidden">
+        <header className="z-20 flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur lg:hidden">
           <button
             type="button"
             onClick={() => setMobileNavOpen((v) => !v)}
@@ -136,13 +392,34 @@ export default function SuperAdminLayout() {
           >
             {mobileNavOpen ? <IconClose className="h-6 w-6" /> : <IconMenu className="h-6 w-6" />}
           </button>
-          <span className="min-w-0 truncate text-sm font-semibold text-slate-900">Staffing-Go</span>
+          {clientId ? (
+            <button
+              type="button"
+              onClick={() => navigate(paths.clients)}
+              className="inline-flex min-w-0 items-center gap-1.5 truncate text-sm font-medium text-slate-600 hover:text-slate-900"
+            >
+              <span aria-hidden className="text-base leading-none">
+                ←
+              </span>
+              <span className="truncate">Back to Clients</span>
+            </button>
+          ) : (
+            <span className="min-w-0 truncate text-sm font-semibold text-slate-900">Staffing-Go</span>
+          )}
         </header>
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain">
+        <div ref={mainScrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain">
           <Outlet />
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SuperAdminLayout() {
+  return (
+    <WorkspaceBasePathProvider basePath="/super-admin">
+      <SuperAdminLayoutInner />
+    </WorkspaceBasePathProvider>
   );
 }

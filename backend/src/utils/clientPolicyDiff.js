@@ -121,12 +121,27 @@ export function diffClientCoreFields(before, after) {
     changes.push(`Qualification upload required: ${formatBool(bQual)} → ${formatBool(aQual)}`);
   }
 
-  const bDesigs = (before?.designations ?? []).map((d) => String(d).trim()).filter(Boolean);
-  const aDesigs = (after?.designations ?? []).map((d) => String(d).trim()).filter(Boolean);
-  const bKeys = new Map(bDesigs.map((d) => [designationKey(d), d]));
-  const aKeys = new Map(aDesigs.map((d) => [designationKey(d), d]));
+  const bZoneDep = Boolean(before?.zone_dependency);
+  const aZoneDep = Boolean(after?.zone_dependency);
+  if (bZoneDep !== aZoneDep) {
+    changes.push(`Zone dependency: ${formatBool(bZoneDep)} → ${formatBool(aZoneDep)}`);
+  }
+
+  const designationLabel = (d) => {
+    if (d && typeof d === 'object') {
+      const name = String(d.name ?? '').trim();
+      const skill = String(d.skill_level ?? '').trim();
+      return skill ? `${name} (${skill})` : name;
+    }
+    return String(d ?? '').trim();
+  };
+  const bDesigs = (before?.designations ?? []).map(designationLabel).filter(Boolean);
+  const aDesigs = (after?.designations ?? []).map(designationLabel).filter(Boolean);
+  const bKeys = new Map(bDesigs.map((d) => [designationKey(d.split(' (')[0]), d]));
+  const aKeys = new Map(aDesigs.map((d) => [designationKey(d.split(' (')[0]), d]));
   for (const [key, name] of aKeys) {
     if (!bKeys.has(key)) changes.push(`Designation added: ${name}`);
+    else if (bKeys.get(key) !== name) changes.push(`Designation updated: ${bKeys.get(key)} → ${name}`);
   }
   for (const [key, name] of bKeys) {
     if (!aKeys.has(key)) changes.push(`Designation removed: ${name}`);

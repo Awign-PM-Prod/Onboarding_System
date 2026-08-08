@@ -430,8 +430,27 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ items })
     }),
-  getSalaryMinimumForState: (state) =>
-    request(`/api/salary-minimums/${encodeURIComponent(state)}`),
+  listDigestRecipients: () => request('/api/super-admin/digest-recipients'),
+  triggerRemainingTaskDigest: (body) =>
+    request('/api/super-admin/remaining-task-digest', {
+      method: 'POST',
+      body: JSON.stringify(body || {})
+    }),
+  listSuperAdminStaffUsers: () => request('/api/super-admin/staff-users'),
+  resetSuperAdminStaffPassword: (userId, body) =>
+    request(`/api/super-admin/users/${encodeURIComponent(userId)}/password`, {
+      method: 'POST',
+      body: JSON.stringify(body || {})
+    }),
+  getSalaryMinimumForState: (state, { zone, skill_level } = {}) => {
+    const q = new URLSearchParams();
+    if (zone) q.set('zone', zone);
+    if (skill_level) q.set('skill_level', skill_level);
+    const qs = q.toString();
+    return request(
+      `/api/salary-minimums/${encodeURIComponent(state)}${qs ? `?${qs}` : ''}`
+    );
+  },
 
   getAttendance: ({ clientId, month }) =>
     request(

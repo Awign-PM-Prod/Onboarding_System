@@ -20,11 +20,35 @@ import {
 } from '../utils/clientPolicyDiff.js';
 import { buildClientTemplateCsv, buildClientExportCsv, csvRowToClientPayload, parseClientCsvText } from '../utils/clientCsv.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
+import {
+  designationNameOf,
+  normalizeSkillLevel,
+  normalizedDesignationRows
+} from '../utils/wageConfig.js';
+import { canAccessClientAsLead, isSuperAdminRole, loadUserRole } from '../utils/roleAccess.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }
 });
+
+async function assertLeadClientAccess(req, clientId, { select = 'id, created_by' } = {}) {
+  const user = await loadUserRole(req.user.id);
+  if (!user) return { ok: false, status: 403, error: 'User profile not found' };
+  req.user.role = user.role;
+  req.user.name = user.name ?? null;
+
+  const { data: existing, error } = await supabaseAdmin
+    .from('clients')
+    .select(select)
+    .eq('id', clientId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!existing || !canAccessClientAsLead(user, existing)) {
+    return { ok: false, status: 404, error: 'Client not found' };
+  }
+  return { ok: true, client: existing, user };
+}
 
 async function savePolicyWithAudit(clientId, body, actor, { extraChanges = [] } = {}) {
   const beforeBundle = await fetchClientPolicyBundle(clientId);
@@ -144,6 +168,10 @@ function validateClientPayload(body) {
   if (typeof body.require_qualification_certificate_upload !== 'boolean') {
     errors.require_qualification_certificate_upload = 'must be boolean';
   }
+  if (body.zone_dependency !== undefined && body.zone_dependency !== null
+      && typeof body.zone_dependency !== 'boolean') {
+    errors.zone_dependency = 'must be boolean';
+  }
   if (body.insurance_applicable === true) {
     if (!body.insurance_name || !String(body.insurance_name).trim()) {
       errors.insurance_name = 'required when insurance is applicable';
@@ -151,8 +179,11 @@ function validateClientPayload(body) {
     const amount = body.insurance_amount;
     if (amount === undefined || amount === null || amount === '') {
       errors.insurance_amount = 'required when insurance is applicable';
-    } else if (Number.isNaN(Number(amount)) || Number(amount) < 0) {
-      errors.insurance_amount = 'must be a non-negative number';
+    } else {
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+        errors.insurance_amount = 'must be a non-negative whole number (no decimals)';
+      }
     }
   }
   if (openEnded === true) {
@@ -167,19 +198,35 @@ function validateClientPayload(body) {
       errors.contract_end_date = 'must be on or after contract_start_date';
     }
   }
-  let designations = [];
+  let designationNames = [];
   if (!Array.isArray(body.designations)) {
-    errors.designations = 'must be an array of strings';
+    errors.designations = 'must be an array of designations with skill_level';
   } else {
-    designations = body.designations.map(d => String(d).trim()).filter(Boolean);
-    if (designations.length === 0) {
-      errors.designations = 'at least one designation required';
+    let skillError = false;
+    for (const d of body.designations) {
+      const name = designationNameOf(d);
+      if (!name) continue;
+      if (d && typeof d === 'object' && d.skill_level != null && String(d.skill_level).trim() !== '') {
+        if (normalizeSkillLevel(d.skill_level) === undefined) {
+          errors.designations = 'skill_level must be SKILLED, SEMI_SKILLED, or UNSKILLED';
+          skillError = true;
+          break;
+        }
+      }
+    }
+    if (!skillError) {
+      const rows = normalizedDesignationRows(body.designations);
+      if (rows.length === 0) {
+        errors.designations = 'at least one designation required';
+      } else {
+        designationNames = rows.map((r) => r.name);
+      }
     }
   }
 
   validateAttendancePolicyPayload(body.attendance_policy, errors);
-  if (designations.length) {
-    validateLeaveAllowancesPayload(body.leave_allowances, designations, errors);
+  if (designationNames.length) {
+    validateLeaveAllowancesPayload(body.leave_allowances, designationNames, errors);
   }
   validateHolidaysPayload(body.holidays, errors);
 
@@ -199,9 +246,12 @@ function buildClientCorePayload(body, { includeCreatedBy = false, createdBy } = 
     program_manager_id: body.program_manager_id,
     insurance_applicable: body.insurance_applicable,
     insurance_name: body.insurance_applicable ? String(body.insurance_name).trim() : null,
-    insurance_amount: body.insurance_applicable ? Number(body.insurance_amount) : null,
+    insurance_amount: body.insurance_applicable
+      ? Math.round(Number(body.insurance_amount))
+      : null,
     require_license_upload: body.require_license_upload,
-    require_qualification_certificate_upload: body.require_qualification_certificate_upload
+    require_qualification_certificate_upload: body.require_qualification_certificate_upload,
+    zone_dependency: body.zone_dependency === true
   };
   if (includeCreatedBy) payload.created_by = createdBy;
   return payload;
@@ -220,9 +270,13 @@ async function createClientRecord(body, createdBy) {
     .single();
   if (insertErr) throw insertErr;
 
-  const designations = normalizedDesignations(body.designations);
+  const designations = normalizedDesignationRows(body.designations);
   if (designations.length) {
-    const rows = designations.map((name) => ({ client_id: created.id, name }));
+    const rows = designations.map((d) => ({
+      client_id: created.id,
+      name: d.name,
+      skill_level: d.skill_level
+    }));
     const { error: desigErr } = await supabaseAdmin.from('designations').insert(rows);
     if (desigErr) {
       await supabaseAdmin.from('clients').delete().eq('id', created.id);
@@ -241,28 +295,18 @@ async function createClientRecord(body, createdBy) {
   return fetchClientWithRelations(created.id);
 }
 
-function normalizedDesignations(input) {
-  const seen = new Set();
-  const out = [];
-  for (const raw of input) {
-    const name = String(raw).trim();
-    if (!name) continue;
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(name);
-  }
-  return out;
-}
-
-async function syncClientDesignations(clientId, designationNames) {
+async function syncClientDesignations(clientId, designationRows) {
   const { error: delErr } = await supabaseAdmin
     .from('designations')
     .delete()
     .eq('client_id', clientId);
   if (delErr) throw delErr;
-  if (!designationNames.length) return;
-  const rows = designationNames.map((name) => ({ client_id: clientId, name }));
+  if (!designationRows.length) return;
+  const rows = designationRows.map((d) => ({
+    client_id: clientId,
+    name: d.name,
+    skill_level: d.skill_level
+  }));
   const { error: insErr } = await supabaseAdmin.from('designations').insert(rows);
   if (insErr) throw insErr;
 }
@@ -277,7 +321,7 @@ async function fetchClientWithRelations(clientId) {
 
   const { data: designations, error: desigErr } = await supabaseAdmin
     .from('designations')
-    .select('name')
+    .select('name, skill_level')
     .eq('client_id', clientId)
     .order('created_at', { ascending: true });
   if (desigErr) throw desigErr;
@@ -326,7 +370,10 @@ async function fetchClientWithRelations(clientId) {
   return {
     ...client,
     program_manager_name: client.program_manager?.name ?? null,
-    designations: designations.map(d => d.name),
+    designations: (designations ?? []).map((d) => ({
+      name: d.name,
+      skill_level: d.skill_level || 'UNSKILLED'
+    })),
     employee_designations: employeeDesignations,
     ...policyBundle
   };
@@ -334,11 +381,21 @@ async function fetchClientWithRelations(clientId) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const { data: clients, error } = await supabaseAdmin
+    const user = await loadUserRole(req.user.id);
+    if (!user) return res.status(403).json({ error: 'User profile not found' });
+    if (user.role !== 'PAYROLL_LEAD' && !isSuperAdminRole(user.role)) {
+      return res.status(403).json({ error: 'Forbidden: requires role PAYROLL_LEAD or SUPER_ADMIN' });
+    }
+    req.user.role = user.role;
+
+    let listQuery = supabaseAdmin
       .from('clients')
       .select('*, program_manager:program_manager_id(id, name, email)')
-      .eq('created_by', req.user.id)
       .order('created_at', { ascending: false });
+    if (!isSuperAdminRole(user.role)) {
+      listQuery = listQuery.eq('created_by', req.user.id);
+    }
+    const { data: clients, error } = await listQuery;
     if (error) throw error;
 
     if (clients.length === 0) return res.json([]);
@@ -346,14 +403,17 @@ router.get('/', async (req, res, next) => {
     const ids = clients.map(c => c.id);
     const { data: desigs, error: desigErr } = await supabaseAdmin
       .from('designations')
-      .select('client_id, name')
+      .select('client_id, name, skill_level')
       .in('client_id', ids);
     if (desigErr) throw desigErr;
 
     const byClient = new Map();
     for (const d of desigs) {
       if (!byClient.has(d.client_id)) byClient.set(d.client_id, []);
-      byClient.get(d.client_id).push(d.name);
+      byClient.get(d.client_id).push({
+        name: d.name,
+        skill_level: d.skill_level || 'UNSKILLED'
+      });
     }
 
     const policyBundles = await Promise.all(
@@ -374,11 +434,18 @@ router.get('/', async (req, res, next) => {
 
 router.get('/dashboard-stats', async (req, res, next) => {
   try {
-    const { data: clients, error: cErr } = await supabaseAdmin
+    const user = await loadUserRole(req.user.id);
+    if (!user) return res.status(403).json({ error: 'User profile not found' });
+    req.user.role = user.role;
+
+    let clientsQuery = supabaseAdmin
       .from('clients')
       .select('id, client_name, contract_code')
-      .eq('created_by', req.user.id)
       .order('client_name', { ascending: true });
+    if (!isSuperAdminRole(user.role)) {
+      clientsQuery = clientsQuery.eq('created_by', req.user.id);
+    }
+    const { data: clients, error: cErr } = await clientsQuery;
     if (cErr) throw cErr;
 
     const clientRows = clients ?? [];
@@ -438,6 +505,12 @@ router.get('/dashboard-stats', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
+    const user = await loadUserRole(req.user.id);
+    if (!user || (user.role !== 'PAYROLL_LEAD' && !isSuperAdminRole(user.role))) {
+      return res.status(403).json({ error: 'Forbidden: requires role PAYROLL_LEAD or SUPER_ADMIN' });
+    }
+    req.user.role = user.role;
+
     const errors = validateClientPayload(req.body || {});
     if (Object.keys(errors).length) {
       return res.status(400).json({ error: 'Validation failed', details: errors });
@@ -472,6 +545,12 @@ router.post('/', async (req, res, next) => {
 
 router.post('/import', upload.single('file'), async (req, res, next) => {
   try {
+    const user = await loadUserRole(req.user.id);
+    if (!user || (user.role !== 'PAYROLL_LEAD' && !isSuperAdminRole(user.role))) {
+      return res.status(403).json({ error: 'Forbidden: requires role PAYROLL_LEAD or SUPER_ADMIN' });
+    }
+    req.user.role = user.role;
+
     if (!req.file?.buffer) {
       return res.status(400).json({ error: 'CSV file is required.' });
     }
@@ -570,15 +649,8 @@ router.put('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const { data: existing, error: findErr } = await supabaseAdmin
-      .from('clients')
-      .select('id, created_by')
-      .eq('id', id)
-      .maybeSingle();
-    if (findErr) throw findErr;
-    if (!existing || existing.created_by !== req.user.id) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
+    const access = await assertLeadClientAccess(req, id);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
 
     const errors = validateClientPayload(req.body || {});
     if (Object.keys(errors).length) {
@@ -597,7 +669,7 @@ router.put('/:id', async (req, res, next) => {
 
     const beforeClient = await fetchClientWithRelations(id);
     const updatePayload = buildClientCorePayload(req.body);
-    const designations = normalizedDesignations(req.body.designations);
+    const designations = normalizedDesignationRows(req.body.designations);
     const coreChanges = diffClientCoreFields(beforeClient, {
       ...updatePayload,
       program_manager_name: pm.name,
@@ -615,24 +687,14 @@ router.put('/:id', async (req, res, next) => {
       throw updateErr;
     }
 
-    const { error: delErr } = await supabaseAdmin
-      .from('designations')
-      .delete()
-      .eq('client_id', id);
-    if (delErr) throw delErr;
-
-    if (designations.length) {
-      const rows = designations.map(name => ({ client_id: id, name }));
-      const { error: insErr } = await supabaseAdmin.from('designations').insert(rows);
-      if (insErr) throw insErr;
-    }
+    await syncClientDesignations(id, designations);
 
     const { savedPolicy, policyChanges, effectiveFromMonth } = await savePolicyWithAudit(
       id,
       req.body,
       {
         userId: req.user.id,
-        role: 'PAYROLL_LEAD'
+        role: req.user.role || 'PAYROLL_LEAD'
       },
       { extraChanges: coreChanges }
     );
@@ -682,15 +744,8 @@ router.get('/csv-template', (_req, res) => {
 router.get('/:id/export', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { data: existing, error: findErr } = await supabaseAdmin
-      .from('clients')
-      .select('id, created_by')
-      .eq('id', id)
-      .maybeSingle();
-    if (findErr) throw findErr;
-    if (!existing || existing.created_by !== req.user.id) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
+    const access = await assertLeadClientAccess(req, id);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
     const full = await fetchClientWithRelations(id);
     const csv = buildClientExportCsv(full);
     const safeCode = String(full.contract_code || 'client')
@@ -710,15 +765,8 @@ router.get('/:id/export', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { data: existing, error: findErr } = await supabaseAdmin
-      .from('clients')
-      .select('id, created_by')
-      .eq('id', id)
-      .maybeSingle();
-    if (findErr) throw findErr;
-    if (!existing || existing.created_by !== req.user.id) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
+    const access = await assertLeadClientAccess(req, id);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
     const full = await fetchClientWithRelations(id);
     res.json(full);
   } catch (err) {
@@ -729,15 +777,8 @@ router.get('/:id', async (req, res, next) => {
 router.get('/:id/policy-changes', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { data: existing, error: findErr } = await supabaseAdmin
-      .from('clients')
-      .select('id, created_by')
-      .eq('id', id)
-      .maybeSingle();
-    if (findErr) throw findErr;
-    if (!existing || existing.created_by !== req.user.id) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
+    const access = await assertLeadClientAccess(req, id);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
 
     const { data: rows, error } = await supabaseAdmin
       .from('client_policy_change_logs')
@@ -772,27 +813,25 @@ router.put('/:id/policy', async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const { data: existing, error: findErr } = await supabaseAdmin
-      .from('clients')
-      .select('id, created_by')
-      .eq('id', id)
-      .maybeSingle();
-    if (findErr) throw findErr;
-    if (!existing || existing.created_by !== req.user.id) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
+    const access = await assertLeadClientAccess(req, id);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
 
     const { data: designations, error: desigErr } = await supabaseAdmin
       .from('designations')
-      .select('name')
+      .select('name, skill_level')
       .eq('client_id', id)
       .order('created_at', { ascending: true });
     if (desigErr) throw desigErr;
     const beforeDesignations = (designations ?? []).map((d) => d.name);
+    let designationRows = (designations ?? []).map((d) => ({
+      name: d.name,
+      skill_level: d.skill_level || 'UNSKILLED'
+    }));
     let designationNames = beforeDesignations;
     let designationChanges = [];
     if (Array.isArray(req.body?.designations)) {
-      designationNames = normalizedDesignations(req.body.designations);
+      designationRows = normalizedDesignationRows(req.body.designations);
+      designationNames = designationRows.map((d) => d.name);
       if (!designationNames.length) {
         return res.status(400).json({ error: 'Validation failed', details: { designations: 'at least one required' } });
       }
@@ -800,7 +839,7 @@ router.put('/:id/policy', async (req, res, next) => {
         { designations: beforeDesignations },
         { designations: designationNames }
       );
-      await syncClientDesignations(id, designationNames);
+      await syncClientDesignations(id, designationRows);
     }
 
     const errors = {};
@@ -822,7 +861,7 @@ router.put('/:id/policy', async (req, res, next) => {
       req.body,
       {
         userId: req.user.id,
-        role: 'PAYROLL_LEAD'
+        role: req.user.role || 'PAYROLL_LEAD'
       },
       { extraChanges: designationChanges }
     );
@@ -866,15 +905,8 @@ router.get('/:id/pm-transfers', async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const { data: existing, error: findErr } = await supabaseAdmin
-      .from('clients')
-      .select('id, created_by')
-      .eq('id', id)
-      .maybeSingle();
-    if (findErr) throw findErr;
-    if (!existing || existing.created_by !== req.user.id) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
+    const access = await assertLeadClientAccess(req, id);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
 
     const { data: rows, error } = await supabaseAdmin
       .from('client_pm_transfers')
@@ -922,15 +954,11 @@ router.patch('/:id/program-manager', async (req, res, next) => {
       return res.status(400).json({ error: 'program_manager_id is required' });
     }
 
-    const { data: existing, error: findErr } = await supabaseAdmin
-      .from('clients')
-      .select('id, created_by, program_manager_id')
-      .eq('id', id)
-      .maybeSingle();
-    if (findErr) throw findErr;
-    if (!existing || existing.created_by !== req.user.id) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
+    const access = await assertLeadClientAccess(req, id, {
+      select: 'id, created_by, program_manager_id'
+    });
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const existing = access.client;
 
     const { data: pm, error: pmErr } = await supabaseAdmin
       .from('users')

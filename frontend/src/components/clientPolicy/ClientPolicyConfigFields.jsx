@@ -9,6 +9,7 @@ import {
   ATTENDANCE_POLICY_ROLES,
   mergeAttendancePolicyRoles
 } from '../../lib/clientPolicy';
+import { designationNameOf } from '../../lib/wageConfig';
 
 /**
  * Shared policy configuration fields (payroll cycle, week off, comp off, leave, holidays).
@@ -77,7 +78,8 @@ export default function ClientPolicyConfigFields({
       )}
       {!canEditDesignations && designations.length > 0 && (
         <p className="text-xs text-slate-500">
-          Leave allowances are per designation: {designations.join(', ')}.
+          Leave allowances are per designation:{' '}
+          {designations.map((d) => designationNameOf(d)).filter(Boolean).join(', ')}.
         </p>
       )}
       <LeaveAllowancesTable

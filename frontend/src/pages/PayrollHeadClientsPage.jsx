@@ -103,7 +103,11 @@ export default function PayrollHeadClientsPage() {
                       <p className="font-medium text-slate-900">{c.client_name}</p>
                       {c.designations?.length > 0 && (
                         <p className="mt-0.5 text-xs text-slate-500">
-                          {c.designations.slice(0, 3).join(', ')}
+                          {c.designations
+                            .slice(0, 3)
+                            .map((d) => (d && typeof d === 'object' ? d.name : d))
+                            .filter(Boolean)
+                            .join(', ')}
                           {c.designations.length > 3 && ` +${c.designations.length - 3} more`}
                         </p>
                       )}

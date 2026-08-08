@@ -1,9 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { formatDesignationLabel } from '../lib/formatLabels';
 import { INDIAN_STATES } from '../lib/indianStates';
 import { displayNumericValue } from '../lib/numericInput';
 import { api } from '../lib/api';
 import ModalOverlay from './ModalOverlay';
+import {
+  SKILL_LEVEL_LABELS,
+  WAGE_ZONES,
+  ZONE_LABELS,
+  designationNameOf,
+  normalizeDesignationList,
+  normalizeSkillLevel
+} from '../lib/wageConfig';
 
 const empty = {
   designation: '',
@@ -11,7 +19,8 @@ const empty = {
   pay_type: 'CTC',
   ctc_type: 'MONTHLY',
   ctc_value: '',
-  state: ''
+  state: '',
+  zone: 'zone1'
 };
 
 function effectiveMonthlyCtc(payType, ctcType, ctcValue) {
@@ -29,13 +38,17 @@ export default function RoleDetailsModal({
   submitting = false,
   showSendOnboardingOption = false,
   defaultState = '',
+  zoneDependency = false,
   onClose,
   onSubmit
 }) {
+  const designationRows = useMemo(() => normalizeDesignationList(designations), [designations]);
+
   const [form, setForm] = useState(() => ({
     ...empty,
-    designation: designations[0] ?? '',
-    state: defaultState && INDIAN_STATES.includes(defaultState) ? defaultState : ''
+    designation: designationNameOf(designationRows[0]) || '',
+    state: defaultState && INDIAN_STATES.includes(defaultState) ? defaultState : '',
+    zone: 'zone1'
   }));
   const [fieldErrors, setFieldErrors] = useState({});
   const [sendOnboardingNow, setSendOnboardingNow] = useState(false);
@@ -46,17 +59,29 @@ export default function RoleDetailsModal({
 
   const isNetPay = form.pay_type === 'NET_PAY';
 
-  // Fetch state CTC minimum and autofill when CTC (raise to at least min).
+  const selectedSkill = useMemo(() => {
+    const match = designationRows.find(
+      (d) => d.name.toLowerCase() === String(form.designation).toLowerCase()
+    );
+    return normalizeSkillLevel(match?.skill_level, 'UNSKILLED');
+  }, [designationRows, form.designation]);
+
+  const lookupZone = zoneDependency ? form.zone || 'zone1' : 'zone1';
+
+  // Fetch wage CTC minimum and autofill when CTC (raise to at least min).
   useEffect(() => {
     const state = form.state;
-    if (!state || !INDIAN_STATES.includes(state)) {
+    if (!state || !INDIAN_STATES.includes(state) || !form.designation) {
       setMinMonthlyCtc(null);
       return undefined;
     }
     let cancelled = false;
     setMinLoading(true);
     api
-      .getSalaryMinimumForState(state)
+      .getSalaryMinimumForState(state, {
+        zone: lookupZone,
+        skill_level: selectedSkill
+      })
       .then((data) => {
         if (cancelled) return;
         const min =
@@ -74,25 +99,19 @@ export default function RoleDetailsModal({
     return () => {
       cancelled = true;
     };
-  }, [form.state]);
+  }, [form.state, form.designation, lookupZone, selectedSkill]);
 
-  // When min is known (or switching back to CTC), raise amount if below floor.
+  // When wage floor changes (zone / state / skill) or switching to CTC, set amount to the new min.
   useEffect(() => {
     if (form.pay_type !== 'CTC' || minMonthlyCtc == null) return;
     setForm((f) => {
       if (f.pay_type !== 'CTC') return f;
-      const current = Number(f.ctc_value);
-      const empty = !Number.isFinite(current) || f.ctc_value === '';
-      const effective = empty
-        ? null
-        : String(f.ctc_type).toUpperCase() === 'ANNUAL'
-          ? current / 12
-          : current;
-      if (effective != null && effective >= minMonthlyCtc) return f;
+      const next = String(minMonthlyCtc);
+      if (f.ctc_type === 'MONTHLY' && f.ctc_value === next) return f;
       return {
         ...f,
         ctc_type: 'MONTHLY',
-        ctc_value: String(minMonthlyCtc)
+        ctc_value: next
       };
     });
   }, [form.pay_type, minMonthlyCtc]);
@@ -113,6 +132,9 @@ export default function RoleDetailsModal({
     const ctc = Number(form.ctc_value);
     if (!Number.isFinite(ctc) || ctc < 0) errors.ctc_value = 'Must be a non-negative number';
     if (!form.state) errors.state = 'Required';
+    if (zoneDependency && !WAGE_ZONES.includes(form.zone)) {
+      errors.zone = 'Required';
+    }
     if (belowMin) {
       errors.ctc_value = `Must be at least ₹${minMonthlyCtc.toLocaleString('en-IN')} monthly CTC for ${form.state}`;
     }
@@ -124,22 +146,21 @@ export default function RoleDetailsModal({
     const errors = validate();
     setFieldErrors(errors);
     if (Object.keys(errors).length) return;
-    await onSubmit(
-      {
-        designation: form.designation,
-        date_of_joining: form.date_of_joining,
-        pay_type: form.pay_type,
-        ctc_type: isNetPay ? null : form.ctc_type,
-        ctc_value: Number(form.ctc_value),
-        state: form.state
-      },
-      { sendOnboardingNow }
-    );
+    const payload = {
+      designation: form.designation,
+      date_of_joining: form.date_of_joining,
+      pay_type: form.pay_type,
+      ctc_type: isNetPay ? null : form.ctc_type,
+      ctc_value: Number(form.ctc_value),
+      state: form.state
+    };
+    if (zoneDependency) payload.zone = form.zone;
+    await onSubmit(payload, { sendOnboardingNow });
   };
 
   const amountLabel = isNetPay ? 'Net Pay Amount' : 'CTC Amount';
   const submitDisabled =
-    submitting || designations.length === 0 || belowMin || minLoading;
+    submitting || designationRows.length === 0 || belowMin || minLoading;
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -157,9 +178,11 @@ export default function RoleDetailsModal({
               value={form.designation}
               onChange={(e) => set({ designation: e.target.value })}
             >
-              {designations.length === 0 && <option value="">No designations found</option>}
-              {designations.map((d) => (
-                <option key={d} value={d}>{formatDesignationLabel(d)}</option>
+              {designationRows.length === 0 && <option value="">No designations found</option>}
+              {designationRows.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {formatDesignationLabel(d.name)} ({SKILL_LEVEL_LABELS[d.skill_level] || d.skill_level})
+                </option>
               ))}
             </select>
           </Field>
@@ -186,6 +209,20 @@ export default function RoleDetailsModal({
               </select>
             </Field>
           </div>
+
+          {zoneDependency && (
+            <Field label="Zone" error={fieldErrors.zone}>
+              <select
+                className="input"
+                value={form.zone}
+                onChange={(e) => set({ zone: e.target.value })}
+              >
+                {WAGE_ZONES.map((z) => (
+                  <option key={z} value={z}>{ZONE_LABELS[z]}</option>
+                ))}
+              </select>
+            </Field>
+          )}
 
           <Field label="Pay Type" error={fieldErrors.pay_type}>
             <div className="flex overflow-hidden rounded-md border border-slate-300">
@@ -266,15 +303,15 @@ export default function RoleDetailsModal({
             </div>
           )}
 
-          {!isNetPay && form.state && (
+          {!isNetPay && form.state && form.designation && (
             <p className={`text-xs ${belowMin ? 'text-rose-600' : 'text-slate-500'}`}>
               {minLoading
-                ? 'Loading minimum CTC for state…'
+                ? 'Loading minimum CTC…'
                 : minMonthlyCtc != null
-                  ? `Minimum monthly CTC for ${form.state}: ₹${minMonthlyCtc.toLocaleString('en-IN')}${
+                  ? `Minimum monthly CTC for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}: ₹${minMonthlyCtc.toLocaleString('en-IN')}${
                       belowMin ? ' — increase amount to enable Save' : ''
                     }`
-                  : `No Super Admin minimum set for ${form.state}.`}
+                  : `No Super Admin minimum set for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}.`}
             </p>
           )}
 

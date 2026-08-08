@@ -3,6 +3,7 @@ import {
   DEFAULT_ATTENDANCE_POLICY,
   normalizeAttendancePolicyForForm
 } from './clientPolicy';
+import { designationNameOf, normalizeSkillLevel } from './wageConfig';
 
 export const CLIENT_CSV_HEADERS = [
   'client_name',
@@ -17,6 +18,7 @@ export const CLIENT_CSV_HEADERS = [
   'insurance_name',
   'insurance_amount',
   'designations',
+  'zone_dependency',
   'require_license_upload',
   'require_qualification_certificate_upload',
   'payroll_cycle_start_day',
@@ -116,6 +118,34 @@ function splitList(raw, sep = ';') {
     .filter(Boolean);
 }
 
+/** Parse "Role:SKILLED;Other:UNSKILLED" or plain "Role;Other" (defaults UNSKILLED). */
+function parseDesignations(raw) {
+  return splitList(raw, ';')
+    .map((part) => {
+      const idx = part.lastIndexOf(':');
+      if (idx <= 0) return { name: part, skill_level: 'UNSKILLED' };
+      const name = part.slice(0, idx).trim();
+      const skillPart = part.slice(idx + 1).trim();
+      return { name, skill_level: normalizeSkillLevel(skillPart, 'UNSKILLED') };
+    })
+    .filter((d) => d.name);
+}
+
+function encodeDesignations(designations) {
+  return (designations ?? [])
+    .map((d) => {
+      const name = designationNameOf(d);
+      if (!name) return null;
+      const skill =
+        d && typeof d === 'object'
+          ? normalizeSkillLevel(d.skill_level, 'UNSKILLED')
+          : 'UNSKILLED';
+      return `${name}:${skill}`;
+    })
+    .filter(Boolean)
+    .join(';');
+}
+
 function parseHolidays(raw) {
   return splitList(raw, ';')
     .map((part) => {
@@ -158,7 +188,8 @@ function buildLeaveAllowances(designations, row) {
     paternity_days: parseNumber(cell(row, 'leave_paternity_days'), 15),
     earned_days: parseNumber(cell(row, 'leave_earned_days'), 18)
   };
-  return designations.map((designation) => {
+  return designations.map((entry) => {
+    const designation = designationNameOf(entry);
     const fromDetail = detailMap.get(designation.toLowerCase());
     if (fromDetail) return { ...fromDetail, designation };
     return { designation, ...defaults };
@@ -189,7 +220,7 @@ export function parseClientCsvText(text) {
 
 /** Convert one CSV row into ClientForm state shape. Resolves PM via programManagers list. */
 export function csvRowToClientForm(row, programManagers = []) {
-  const designations = splitList(cell(row, 'designations'), ';');
+  const designations = parseDesignations(cell(row, 'designations'));
   const openEnded = parseBool(cell(row, 'open_ended_contract'), false);
   const insuranceApplicable = parseBool(cell(row, 'insurance_applicable'), false);
   const email = cell(row, 'program_manager_email').toLowerCase();
@@ -244,6 +275,7 @@ export function csvRowToClientForm(row, programManagers = []) {
       cell(row, 'require_qualification_certificate_upload'),
       true
     ),
+    zone_dependency: parseBool(cell(row, 'zone_dependency'), false),
     designations,
     attendance_policy,
     leave_allowances: buildLeaveAllowances(designations, row),
@@ -264,7 +296,8 @@ export function buildClientTemplateCsv() {
     insurance_applicable: 'false',
     insurance_name: '',
     insurance_amount: '',
-    designations: 'Technician;Supervisor',
+    designations: 'Technician:SKILLED;Supervisor:SEMI_SKILLED',
+    zone_dependency: 'false',
     require_license_upload: 'true',
     require_qualification_certificate_upload: 'true',
     payroll_cycle_start_day: '25',
@@ -326,9 +359,8 @@ export function clientToExportRow(client, programManagerEmail = '') {
     insurance_applicable: boolStr(client?.insurance_applicable),
     insurance_name: client?.insurance_name ?? '',
     insurance_amount: client?.insurance_amount ?? '',
-    designations: Array.isArray(client?.designations)
-      ? client.designations.join(';')
-      : '',
+    designations: encodeDesignations(client?.designations),
+    zone_dependency: boolStr(Boolean(client?.zone_dependency)),
     require_license_upload: boolStr(client?.require_license_upload !== false),
     require_qualification_certificate_upload:
       boolStr(client?.require_qualification_certificate_upload !== false),

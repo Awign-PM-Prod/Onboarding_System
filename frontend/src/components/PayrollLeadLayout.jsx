@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { WorkspaceBasePathProvider, useWorkspacePaths } from '../context/WorkspaceBasePath';
 import { api } from '../lib/api';
 import {
   IconClients,
@@ -81,9 +82,10 @@ function IconUserSwitch({ className }) {
   );
 }
 
-export default function PayrollLeadLayout() {
+function PayrollLeadLayoutInner() {
   const navigate = useNavigate();
   const location = useLocation();
+  const paths = useWorkspacePaths();
   const { profile, user, signOut } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -91,11 +93,10 @@ export default function PayrollLeadLayout() {
   const mainScrollRef = useRef(null);
 
   const pathname = location.pathname;
-  const clientId = pathname.match(/^\/dashboard\/client\/([^/]+)/)?.[1] ?? null;
-  const isClientsListPage = pathname === '/dashboard/clients';
-  const isClientFormPage =
-    pathname === '/clients/new' || /^\/clients\/[^/]+\/edit\/?$/.test(pathname);
-  const isProgramManagersPage = pathname.startsWith('/dashboard/program-managers');
+  const clientId = paths.matchClientId(pathname);
+  const isClientsListPage = pathname === paths.clients;
+  const isClientFormPage = paths.isClientFormPath(pathname);
+  const isProgramManagersPage = pathname.startsWith(paths.programManagers);
 
   const loadClients = useCallback(async () => {
     try {
@@ -145,8 +146,8 @@ export default function PayrollLeadLayout() {
     navigate('/login', { replace: true });
   };
 
-  if (pathname === '/dashboard') {
-    return <Navigate to="/dashboard/dashboard" replace />;
+  if (pathname === paths.basePath) {
+    return <Navigate to={paths.home} replace />;
   }
 
   const clientsRailActive = Boolean(clientId) || isClientsListPage || isClientFormPage;
@@ -154,15 +155,15 @@ export default function PayrollLeadLayout() {
   const railItems = [
     {
       id: 'dashboard',
-      to: '/dashboard/dashboard',
+      to: paths.home,
       label: 'Dashboard',
-      active: pathname === '/dashboard/dashboard',
+      active: pathname === paths.home,
       icon: <IconDashboard className="h-full w-full" />,
       onClick: () => setPanelOpenPersist(false)
     },
     {
       id: 'clients',
-      to: '/dashboard/clients',
+      to: paths.clients,
       label: 'Clients',
       active: clientsRailActive,
       icon: <IconClients className="h-full w-full" />,
@@ -170,7 +171,7 @@ export default function PayrollLeadLayout() {
     },
     {
       id: 'program-managers',
-      to: '/dashboard/program-managers',
+      to: paths.programManagers,
       label: 'Program Managers',
       active: isProgramManagersPage,
       icon: <IconOnboarding className="h-full w-full" />,
@@ -178,61 +179,60 @@ export default function PayrollLeadLayout() {
     }
   ];
 
-  const base = clientId ? `/dashboard/client/${clientId}` : '';
   const moduleItems = clientId
     ? [
         {
           id: 'dashboard',
-          to: `${base}/dashboard`,
+          to: paths.client(clientId, 'dashboard'),
           label: 'Dashboard',
-          active: /\/dashboard\/?$/.test(pathname),
+          active: /\/client\/[^/]+\/dashboard\/?$/.test(pathname),
           icon: <IconDashboard className="h-full w-full" />
         },
         {
           id: 'pm-approved',
-          to: `${base}/approved-employees`,
+          to: paths.client(clientId, 'approved-employees'),
           label: 'PM Approved',
           active: /\/approved-employees\/?$/.test(pathname),
           icon: <IconOnboarding className="h-full w-full" />
         },
         {
           id: 'approved',
-          to: `${base}/pl-approved-employees`,
+          to: paths.client(clientId, 'pl-approved-employees'),
           label: 'Approved',
           active: pathname.includes('/pl-approved-employees'),
           icon: <IconCheck className="h-full w-full" />
         },
         {
           id: 'rejected',
-          to: `${base}/rejected-employees`,
+          to: paths.client(clientId, 'rejected-employees'),
           label: 'Rejected',
           active: pathname.includes('/rejected-employees'),
           icon: <IconReject className="h-full w-full" />
         },
         {
           id: 'identity',
-          to: `${base}/identity-numbers`,
+          to: paths.client(clientId, 'identity-numbers'),
           label: 'UAN & ESIC',
           active: pathname.includes('/identity-numbers'),
           icon: <IconId className="h-full w-full" />
         },
         {
           id: 'attendance',
-          to: `${base}/attendance`,
+          to: paths.client(clientId, 'attendance'),
           label: 'Attendance',
           active: pathname.includes('/attendance'),
           icon: <IconCalendar className="h-full w-full" />
         },
         {
           id: 'policy',
-          to: `${base}/policy`,
+          to: paths.client(clientId, 'policy'),
           label: 'Policy Configuration',
           active: pathname.includes('/policy'),
           icon: <IconSettings className="h-full w-full" />
         },
         {
           id: 'assign-pm',
-          to: `${base}/assign-pm`,
+          to: paths.client(clientId, 'assign-pm'),
           label: 'Re-Assign Program Manager',
           active: pathname.includes('/assign-pm'),
           icon: <IconUserSwitch className="h-full w-full" />
@@ -252,7 +252,7 @@ export default function PayrollLeadLayout() {
         clientName={activeClient?.client_name ?? 'Client'}
         items={moduleItems}
         onShowClients={() => {
-          navigate('/dashboard/clients');
+          navigate(paths.clients);
           setPanelOpenPersist(false);
           closeDrawer?.();
         }}
@@ -263,7 +263,7 @@ export default function PayrollLeadLayout() {
 
   const renderSidebar = ({ forceExpanded = false, labeledRail = false } = {}) => (
     <TwoPaneSidebar
-      homeTo="/dashboard/dashboard"
+      homeTo={paths.home}
       profile={profile}
       user={user}
       onSignOut={handleSignOut}
@@ -314,7 +314,7 @@ export default function PayrollLeadLayout() {
           {clientId ? (
             <button
               type="button"
-              onClick={() => navigate('/dashboard/clients')}
+              onClick={() => navigate(paths.clients)}
               className="inline-flex min-w-0 items-center gap-1.5 truncate text-sm font-medium text-slate-600 hover:text-slate-900"
             >
               <span aria-hidden className="text-base leading-none">
@@ -332,5 +332,13 @@ export default function PayrollLeadLayout() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function PayrollLeadLayout() {
+  return (
+    <WorkspaceBasePathProvider basePath="/dashboard">
+      <PayrollLeadLayoutInner />
+    </WorkspaceBasePathProvider>
   );
 }

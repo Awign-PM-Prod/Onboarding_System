@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 import { formatContractPeriod } from '../lib/clientCsv';
 import ClientCsvImportModal from '../components/ClientCsvImportModal';
 
@@ -16,6 +17,7 @@ function downloadBlob(blob, filename) {
 }
 
 export default function PayrollLeadClientsPage() {
+  const paths = useWorkspacePaths();
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -23,6 +25,21 @@ export default function PayrollLeadClientsPage() {
   const [search, setSearch] = useState('');
   const [exportingId, setExportingId] = useState(null);
   const [showImport, setShowImport] = useState(false);
+  const [downloadingMaster, setDownloadingMaster] = useState(false);
+  const isSuperAdminWorkspace = paths.basePath === '/super-admin';
+
+  const handleDownloadMaster = async () => {
+    setDownloadingMaster(true);
+    setActionError('');
+    try {
+      const blob = await api.downloadSuperAdminMasterReport();
+      downloadBlob(blob, 'master-report-all-clients.csv');
+    } catch (err) {
+      setActionError(err.message || 'Could not download master report.');
+    } finally {
+      setDownloadingMaster(false);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -84,9 +101,13 @@ export default function PayrollLeadClientsPage() {
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Clients</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+            {isSuperAdminWorkspace ? 'All Clients' : 'Clients'}
+          </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Select a client to open its workspace, or add a new client.
+            {isSuperAdminWorkspace
+              ? 'Org-wide client workspace — create, edit, operate any client. Download a master employee report.'
+              : 'Select a client to open its workspace, or add a new client.'}
           </p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
@@ -99,6 +120,16 @@ export default function PayrollLeadClientsPage() {
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
+          {isSuperAdminWorkspace && (
+            <button
+              type="button"
+              onClick={handleDownloadMaster}
+              disabled={downloadingMaster || loading}
+              className="inline-flex shrink-0 items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+            >
+              {downloadingMaster ? 'Downloading…' : 'Master report'}
+            </button>
+          )}
           <button
             type="button"
             onClick={downloadTemplate}
@@ -114,7 +145,7 @@ export default function PayrollLeadClientsPage() {
             Import CSV
           </button>
           <Link
-            to="/clients/new"
+            to={paths.clientNew}
             className="inline-flex shrink-0 items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700"
           >
             Add Client
@@ -150,7 +181,7 @@ export default function PayrollLeadClientsPage() {
           </p>
           {!search && (
             <Link
-              to="/clients/new"
+              to={paths.clientNew}
               className="mt-3 inline-flex text-sm font-medium text-indigo-700 hover:underline"
             >
               Add your first client
@@ -187,14 +218,18 @@ export default function PayrollLeadClientsPage() {
                   <tr key={c.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
                       <Link
-                        to={`/dashboard/client/${c.id}/dashboard`}
+                        to={paths.client(c.id, 'dashboard')}
                         className="font-medium text-indigo-700 hover:underline"
                       >
                         {c.client_name}
                       </Link>
                       {c.designations?.length > 0 && (
                         <p className="mt-0.5 text-xs text-slate-500">
-                          {c.designations.slice(0, 3).join(', ')}
+                          {c.designations
+                            .slice(0, 3)
+                            .map((d) => (d && typeof d === 'object' ? d.name : d))
+                            .filter(Boolean)
+                            .join(', ')}
                           {c.designations.length > 3 && ` +${c.designations.length - 3} more`}
                         </p>
                       )}
@@ -235,7 +270,7 @@ export default function PayrollLeadClientsPage() {
                           {exportingId === c.id ? 'Exporting…' : 'Export'}
                         </button>
                         <Link
-                          to={`/clients/${c.id}/edit`}
+                          to={paths.clientEdit(c.id)}
                           className="text-sm font-medium text-slate-600 hover:text-indigo-700 hover:underline"
                         >
                           Edit

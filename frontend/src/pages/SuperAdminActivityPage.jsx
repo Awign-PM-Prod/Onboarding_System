@@ -24,7 +24,9 @@ const ACTION_OPTIONS = [
   { value: 'ATTENDANCE_UPLOAD', label: 'Attendance upload' },
   { value: 'ATTENDANCE_SUBMIT', label: 'Attendance submit' },
   { value: 'ATTENDANCE_UNSUBMIT', label: 'Attendance unsubmit' },
-  { value: 'SALARY_MINIMUMS_UPDATED', label: 'Salary minimums updated' }
+  { value: 'SALARY_MINIMUMS_UPDATED', label: 'Salary minimums updated' },
+  { value: 'PASSWORD_RESET', label: 'Password reset' },
+  { value: 'REMAINING_TASK_DIGEST_TRIGGERED', label: 'Task digest triggered' }
 ];
 
 function formatWhen(iso) {

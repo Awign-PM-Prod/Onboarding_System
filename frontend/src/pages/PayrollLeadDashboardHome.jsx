@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 
 function Card({ title, value, tone = 'slate' }) {
   const valueClass =
@@ -22,6 +23,7 @@ function Card({ title, value, tone = 'slate' }) {
 }
 
 export default function PayrollLeadDashboardHome() {
+  const paths = useWorkspacePaths();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [stats, setStats] = useState({ totals: null, clients: [] });
@@ -117,7 +119,7 @@ export default function PayrollLeadDashboardHome() {
                       <tr key={c.client_id}>
                         <td className="px-3 py-2">
                           <Link
-                            to={`/dashboard/client/${c.client_id}/dashboard`}
+                            to={paths.client(c.client_id, 'dashboard')}
                             className="font-medium text-indigo-700 hover:underline"
                           >
                             {c.client_name}

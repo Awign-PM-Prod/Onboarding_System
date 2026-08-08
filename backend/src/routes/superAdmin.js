@@ -3,10 +3,22 @@ import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { INDIAN_STATES, normalizeIndianState } from '../utils/indianStates.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
+import { SKILL_LEVELS, WAGE_ZONES, normalizeSkillLevel, normalizeWageZone } from '../utils/wageConfig.js';
+import { runRemainingTaskDigest } from '../jobs/remainingTaskDigest.js';
 
 const router = Router();
 
 router.use(requireRole('SUPER_ADMIN'));
+
+const ESIC_MONTHLY_LIMIT = 43900;
+
+function effectiveMonthlyCTC(ctcType, ctcValue) {
+  if (ctcValue == null) return null;
+  const v = Number(ctcValue);
+  if (!isFinite(v)) return null;
+  if (String(ctcType).toUpperCase() === 'ANNUAL') return v / 12;
+  return v;
+}
 
 function emptyPipelineCounts() {
   return {
@@ -18,6 +30,17 @@ function emptyPipelineCounts() {
     pm_correction_requested: 0,
     payroll_approved: 0,
     payroll_rejected: 0
+  };
+}
+
+function emptyComplianceCounts() {
+  return {
+    form_submitted: 0,
+    with_uan: 0,
+    without_uan: 0,
+    with_esic_under_limit: 0,
+    without_esic_under_limit: 0,
+    outside_esic_limit: 0
   };
 }
 
@@ -64,6 +87,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
 
     const clientRows = clients ?? [];
     const totals = emptyPipelineCounts();
+    const compliance = emptyComplianceCounts();
     let totalEmployees = 0;
     let totalOnboarded = 0;
     let totalDropout = 0;
@@ -78,6 +102,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
           total_dropout: 0,
           active_employees: 0
         },
+        compliance,
         clients: []
       });
     }
@@ -85,7 +110,9 @@ router.get('/dashboard-stats', async (req, res, next) => {
     const clientIds = clientRows.map((c) => c.id);
     const { data: employees, error: eErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, onboarding_initiated, joining_status')
+      .select(
+        'id, client_id, onboarding_initiated, joining_status, ctc_type, ctc_value, payroll_pf_uan_number, payroll_esic_number'
+      )
       .in('client_id', clientIds);
     if (eErr) throw eErr;
 
@@ -112,7 +139,10 @@ router.get('/dashboard-stats', async (req, res, next) => {
           client_id: c.id,
           client_name: c.client_name,
           contract_code: c.contract_code,
-          employee_count: 0
+          employee_count: 0,
+          total_onboarded: 0,
+          total_dropout: 0,
+          active_employees: 0
         }
       ])
     );
@@ -125,13 +155,37 @@ router.get('/dashboard-stats', async (req, res, next) => {
       applyPipelineCounts(current, employee, form);
       applyPipelineCounts(totals, employee, form);
 
+      if (form?.submission_status === 'Submitted') compliance.form_submitted += 1;
+
+      const monthlyCTC = effectiveMonthlyCTC(employee.ctc_type, employee.ctc_value);
+      if (monthlyCTC !== null) {
+        const hasUan =
+          typeof employee.payroll_pf_uan_number === 'string' &&
+          employee.payroll_pf_uan_number.trim() !== '';
+        if (hasUan) compliance.with_uan += 1;
+        else compliance.without_uan += 1;
+
+        const hasEsic =
+          typeof employee.payroll_esic_number === 'string' &&
+          employee.payroll_esic_number.trim() !== '';
+        if (monthlyCTC <= ESIC_MONTHLY_LIMIT) {
+          if (hasEsic) compliance.with_esic_under_limit += 1;
+          else compliance.without_esic_under_limit += 1;
+        } else {
+          compliance.outside_esic_limit += 1;
+        }
+      }
+
       if (form?.payroll_review_status === 'PAYROLL_APPROVED') {
         totalOnboarded += 1;
+        current.total_onboarded += 1;
         const js = employee.joining_status;
         if (js === 'NOT_JOINED' || js === 'JOINED_ABSCONDED') {
           totalDropout += 1;
+          current.total_dropout += 1;
         }
       }
+      current.active_employees = current.total_onboarded - current.total_dropout;
     }
 
     return res.json({
@@ -143,6 +197,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
         total_dropout: totalDropout,
         active_employees: totalOnboarded - totalDropout
       },
+      compliance,
       clients: clientRows.map((c) => byClient.get(c.id))
     });
   } catch (err) {
@@ -423,24 +478,33 @@ router.get('/activity', async (req, res, next) => {
   }
 });
 
-// GET /api/super-admin/salary-minimums
+// GET /api/super-admin/salary-minimums — full state × zone × skill matrix
 router.get('/salary-minimums', async (req, res, next) => {
   try {
     const { data, error } = await supabaseAdmin
-      .from('state_salary_minimums')
-      .select('state, min_monthly_ctc, updated_by, updated_at');
+      .from('state_wage_minimums')
+      .select('state, zone, skill_level, min_monthly_ctc, updated_by, updated_at');
     if (error) throw error;
 
-    const byState = new Map((data ?? []).map((r) => [r.state, r]));
-    const rows = INDIAN_STATES.map((state) => {
-      const existing = byState.get(state);
-      return {
-        state,
-        min_monthly_ctc: existing ? Number(existing.min_monthly_ctc) : null,
-        updated_by: existing?.updated_by ?? null,
-        updated_at: existing?.updated_at ?? null
-      };
-    });
+    const byKey = new Map(
+      (data ?? []).map((r) => [`${r.state}|${r.zone}|${r.skill_level}`, r])
+    );
+    const rows = [];
+    for (const state of INDIAN_STATES) {
+      for (const zone of WAGE_ZONES) {
+        for (const skill_level of SKILL_LEVELS) {
+          const existing = byKey.get(`${state}|${zone}|${skill_level}`);
+          rows.push({
+            state,
+            zone,
+            skill_level,
+            min_monthly_ctc: existing ? Number(existing.min_monthly_ctc) : null,
+            updated_by: existing?.updated_by ?? null,
+            updated_at: existing?.updated_at ?? null
+          });
+        }
+      }
+    }
 
     res.json(rows);
   } catch (err) {
@@ -448,7 +512,7 @@ router.get('/salary-minimums', async (req, res, next) => {
   }
 });
 
-// PUT /api/super-admin/salary-minimums — body: { items: [{ state, min_monthly_ctc }] }
+// PUT /api/super-admin/salary-minimums — body: { items: [{ state, zone, skill_level, min_monthly_ctc }] }
 router.put('/salary-minimums', async (req, res, next) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : null;
@@ -464,13 +528,25 @@ router.put('/salary-minimums', async (req, res, next) => {
         errors.push(`Invalid state: ${item?.state}`);
         continue;
       }
+      const zone = normalizeWageZone(item?.zone);
+      if (!zone) {
+        errors.push(`Invalid zone for ${state}: ${item?.zone}`);
+        continue;
+      }
+      const skill_level = normalizeSkillLevel(item?.skill_level);
+      if (!skill_level) {
+        errors.push(`Invalid skill_level for ${state}/${zone}: ${item?.skill_level}`);
+        continue;
+      }
       const min = Number(item?.min_monthly_ctc);
       if (!Number.isFinite(min) || min < 0) {
-        errors.push(`Invalid min_monthly_ctc for ${state}`);
+        errors.push(`Invalid min_monthly_ctc for ${state}/${zone}/${skill_level}`);
         continue;
       }
       upserts.push({
         state,
+        zone,
+        skill_level,
         min_monthly_ctc: min,
         updated_by: req.user.id,
         updated_at: new Date().toISOString()
@@ -482,19 +558,181 @@ router.put('/salary-minimums', async (req, res, next) => {
     }
 
     const { data, error } = await supabaseAdmin
-      .from('state_salary_minimums')
-      .upsert(upserts, { onConflict: 'state' })
-      .select('state, min_monthly_ctc, updated_by, updated_at');
+      .from('state_wage_minimums')
+      .upsert(upserts, { onConflict: 'state,zone,skill_level' })
+      .select('state, zone, skill_level, min_monthly_ctc, updated_by, updated_at');
     if (error) throw error;
 
     await logOrgActivityFromReq(req, {
       action: 'SALARY_MINIMUMS_UPDATED',
-      entityType: 'state_salary_minimums',
-      summary: `Updated salary minimums for ${upserts.length} state(s)`,
-      metadata: { states: upserts.map((u) => ({ state: u.state, min_monthly_ctc: u.min_monthly_ctc })) }
+      entityType: 'state_wage_minimums',
+      summary: `Updated wage minimums for ${upserts.length} cell(s)`,
+      metadata: {
+        items: upserts.map((u) => ({
+          state: u.state,
+          zone: u.zone,
+          skill_level: u.skill_level,
+          min_monthly_ctc: u.min_monthly_ctc
+        }))
+      }
     });
 
     res.json(data ?? []);
+  } catch (err) {
+    next(err);
+  }
+});
+
+async function listPmAndPlUsers() {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('id, name, email, role')
+    .in('role', ['PROGRAM_MANAGER', 'PAYROLL_LEAD']);
+  if (error) throw error;
+
+  const roleOrder = { PROGRAM_MANAGER: 0, PAYROLL_LEAD: 1 };
+  return (data ?? []).slice().sort((a, b) => {
+    const ro = (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9);
+    if (ro !== 0) return ro;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+}
+
+// GET /api/super-admin/staff-users
+router.get('/staff-users', async (_req, res, next) => {
+  try {
+    res.json(await listPmAndPlUsers());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/super-admin/digest-recipients
+router.get('/digest-recipients', async (_req, res, next) => {
+  try {
+    res.json(await listPmAndPlUsers());
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/users/:userId/password
+router.post('/users/:userId/password', async (req, res, next) => {
+  try {
+    const userId = String(req.params.userId ?? '').trim();
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const confirmPassword =
+      typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : null;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required.' });
+    }
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    }
+    if (confirmPassword !== null && password !== confirmPassword) {
+      return res.status(400).json({ error: 'Passwords do not match.' });
+    }
+
+    const { data: profile, error: profileErr } = await supabaseAdmin
+      .from('users')
+      .select('id, name, email, role')
+      .eq('id', userId)
+      .maybeSingle();
+    if (profileErr) throw profileErr;
+    if (!profile) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    if (!['PROGRAM_MANAGER', 'PAYROLL_LEAD'].includes(profile.role)) {
+      return res.status(403).json({
+        error: 'Password reset is only allowed for Program Managers and Payroll Leads.'
+      });
+    }
+
+    const { error: authErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      password
+    });
+    if (authErr) {
+      return res.status(400).json({ error: authErr.message || 'Could not update password.' });
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'PASSWORD_RESET',
+      entityType: 'users',
+      entityId: userId,
+      summary: `Reset password for ${profile.name || profile.email} (${profile.role})`,
+      metadata: {
+        target_user_id: userId,
+        target_email: profile.email,
+        target_role: profile.role
+      }
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/remaining-task-digest
+router.post('/remaining-task-digest', async (req, res, next) => {
+  try {
+    const scope = String(req.body?.scope ?? '').trim().toLowerCase();
+    const role = String(req.body?.role ?? '').trim().toUpperCase();
+    const userId = String(req.body?.userId ?? '').trim();
+
+    if (!['all', 'role', 'user'].includes(scope)) {
+      return res.status(400).json({ error: 'scope must be all, role, or user.' });
+    }
+    if (scope === 'role' && !['PROGRAM_MANAGER', 'PAYROLL_LEAD'].includes(role)) {
+      return res.status(400).json({ error: 'role must be PROGRAM_MANAGER or PAYROLL_LEAD.' });
+    }
+    if (scope === 'user' && !userId) {
+      return res.status(400).json({ error: 'userId is required when scope is user.' });
+    }
+
+    let userIds;
+    if (scope === 'all') {
+      userIds = undefined;
+    } else if (scope === 'role') {
+      const { data, error } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('role', role);
+      if (error) throw error;
+      userIds = (data ?? []).map((r) => r.id);
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from('users')
+        .select('id, role')
+        .eq('id', userId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data || !['PROGRAM_MANAGER', 'PAYROLL_LEAD'].includes(data.role)) {
+        return res.status(400).json({ error: 'userId must be a Program Manager or Payroll Lead.' });
+      }
+      userIds = [data.id];
+    }
+
+    const summary = await runRemainingTaskDigest(
+      userIds === undefined ? {} : { userIds }
+    );
+
+    await logOrgActivityFromReq(req, {
+      action: 'REMAINING_TASK_DIGEST_TRIGGERED',
+      entityType: 'users',
+      summary: `Triggered remaining-task digests (scope=${scope}${scope === 'role' ? `, role=${role}` : ''}${scope === 'user' ? `, user=${userId}` : ''}): sent=${summary.sent}, skipped=${summary.skipped}, failed=${summary.failed}`,
+      metadata: {
+        scope,
+        role: scope === 'role' ? role : null,
+        userId: scope === 'user' ? userId : null,
+        sent: summary.sent,
+        skipped: summary.skipped,
+        failed: summary.failed
+      }
+    });
+
+    res.json({ ok: true, ...summary });
   } catch (err) {
     next(err);
   }

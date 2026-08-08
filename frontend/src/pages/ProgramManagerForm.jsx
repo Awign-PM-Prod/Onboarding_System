@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 
 const emptyForm = {
   name: '',
@@ -11,6 +12,7 @@ const emptyForm = {
 
 export default function ProgramManagerForm() {
   const navigate = useNavigate();
+  const paths = useWorkspacePaths();
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -58,7 +60,7 @@ export default function ProgramManagerForm() {
         email: form.email.trim().toLowerCase(),
         password: form.password
       });
-      navigate('/dashboard/program-managers', { replace: true });
+      navigate(paths.programManagers, { replace: true });
     } catch (err) {
       setError(err.message || 'Could not create program manager.');
     } finally {
@@ -73,7 +75,7 @@ export default function ProgramManagerForm() {
     <main className="mx-auto max-w-xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6">
         <Link
-          to="/dashboard/program-managers"
+          to={paths.programManagers}
           className="text-sm font-medium text-indigo-700 hover:underline"
         >
           ← Back to Program Managers
@@ -167,7 +169,7 @@ export default function ProgramManagerForm() {
 
         <div className="flex items-center justify-end gap-3 pt-2">
           <Link
-            to="/dashboard/program-managers"
+            to={paths.programManagers}
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
           >
             Cancel

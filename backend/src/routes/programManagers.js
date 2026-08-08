@@ -20,7 +20,7 @@ router.get('/', async (_req, res, next) => {
   }
 });
 
-router.post('/', requireRole('PAYROLL_LEAD'), async (req, res, next) => {
+router.post('/', requireRole(['PAYROLL_LEAD', 'SUPER_ADMIN']), async (req, res, next) => {
   try {
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';

@@ -1,0 +1,64 @@
+/** Wage zones and skill tiers (keep in sync with backend/src/utils/wageConfig.js). */
+
+export const WAGE_ZONES = ['zone1', 'zone2', 'zone3'];
+export const SKILL_LEVELS = ['SKILLED', 'SEMI_SKILLED', 'UNSKILLED'];
+
+export const SKILL_LEVEL_LABELS = {
+  SKILLED: 'Skilled',
+  SEMI_SKILLED: 'Semi-skilled',
+  UNSKILLED: 'Unskilled'
+};
+
+export const ZONE_LABELS = {
+  zone1: 'Zone 1',
+  zone2: 'Zone 2',
+  zone3: 'Zone 3'
+};
+
+export function normalizeWageZone(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const z = String(raw).trim().toLowerCase().replace(/\s+/g, '');
+  return WAGE_ZONES.includes(z) ? z : null;
+}
+
+export function normalizeSkillLevel(raw, defaultValue = 'UNSKILLED') {
+  if (raw === undefined || raw === null || raw === '') return defaultValue;
+  const s = String(raw).trim().toUpperCase().replace(/[-\s]+/g, '_');
+  if (s === 'SKILLED') return 'SKILLED';
+  if (s === 'SEMI_SKILLED' || s === 'SEMISKILLED' || s === 'SEMI') return 'SEMI_SKILLED';
+  if (s === 'UNSKILLED') return 'UNSKILLED';
+  return defaultValue;
+}
+
+export function designationNameOf(entry) {
+  if (entry && typeof entry === 'object') return String(entry.name ?? '').trim();
+  return String(entry ?? '').trim();
+}
+
+export function normalizeDesignationEntry(entry, defaultSkill = 'UNSKILLED') {
+  const name = designationNameOf(entry);
+  if (!name) return null;
+  const skill =
+    entry && typeof entry === 'object'
+      ? normalizeSkillLevel(entry.skill_level, defaultSkill)
+      : defaultSkill;
+  return { name, skill_level: skill };
+}
+
+export function normalizeDesignationList(list) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of list ?? []) {
+    const entry = normalizeDesignationEntry(raw);
+    if (!entry) continue;
+    const key = entry.name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
+export function designationNamesFrom(list) {
+  return normalizeDesignationList(list).map((d) => d.name);
+}

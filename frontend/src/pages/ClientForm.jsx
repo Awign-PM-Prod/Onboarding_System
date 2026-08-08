@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 import DesignationsInput from '../components/DesignationsInput';
 import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyConfigFields';
 import ClientConfigActivityLog from '../components/clientPolicy/ClientConfigActivityLog';
@@ -18,6 +19,7 @@ import {
   parseClientCsvText,
   triggerCsvDownload
 } from '../lib/clientCsv';
+import { normalizeDesignationList } from '../lib/wageConfig';
 
 const emptyForm = {
   client_name: '',
@@ -33,6 +35,7 @@ const emptyForm = {
   insurance_amount: '',
   require_license_upload: true,
   require_qualification_certificate_upload: true,
+  zone_dependency: false,
   designations: [],
   attendance_policy: { ...DEFAULT_ATTENDANCE_POLICY },
   leave_allowances: [],
@@ -53,6 +56,7 @@ function downloadBlob(blob, filename) {
 export default function ClientForm() {
   const { id } = useParams();
   const isEdit = Boolean(id);
+  const paths = useWorkspacePaths();
   const navigate = useNavigate();
 
   const [pms, setPms] = useState([]);
@@ -95,10 +99,13 @@ export default function ClientForm() {
           program_manager_id: found.program_manager_id,
           insurance_applicable: found.insurance_applicable,
           insurance_name: found.insurance_name ?? '',
-          insurance_amount: found.insurance_amount != null ? String(found.insurance_amount) : '',
+          insurance_amount: found.insurance_amount != null
+            ? String(Math.round(Number(found.insurance_amount)))
+            : '',
           require_license_upload: found.require_license_upload !== false,
           require_qualification_certificate_upload: found.require_qualification_certificate_upload !== false,
-          designations: found.designations ?? [],
+          zone_dependency: Boolean(found.zone_dependency),
+          designations: normalizeDesignationList(found.designations ?? []),
           attendance_policy: normalizeAttendancePolicyForForm(found.attendance_policy),
           leave_allowances: (found.leave_allowances?.length
             ? found.leave_allowances
@@ -149,8 +156,11 @@ export default function ClientForm() {
     if (form.insurance_applicable) {
       if (form.insurance_amount === '' || form.insurance_amount == null) {
         errs.insurance_amount = 'Required when insurance is applicable';
-      } else if (Number.isNaN(Number(form.insurance_amount)) || Number(form.insurance_amount) < 0) {
-        errs.insurance_amount = 'Must be a non-negative number';
+      } else {
+        const amt = Number(form.insurance_amount);
+        if (!Number.isFinite(amt) || amt < 0 || !Number.isInteger(amt)) {
+          errs.insurance_amount = 'Must be a whole number (no decimals)';
+        }
       }
     }
     if (typeof form.require_license_upload !== 'boolean') {
@@ -159,8 +169,13 @@ export default function ClientForm() {
     if (typeof form.require_qualification_certificate_upload !== 'boolean') {
       errs.require_qualification_certificate_upload = 'Required';
     }
+    if (typeof form.zone_dependency !== 'boolean') {
+      errs.zone_dependency = 'Required';
+    }
     if (form.designations.length === 0) {
       errs.designations = 'Add at least one designation';
+    } else if (form.designations.some((d) => !d?.skill_level)) {
+      errs.designations = 'Set skill level for each designation';
     }
     if (form.leave_allowances.length !== form.designations.length) {
       errs.leave_allowances = 'Leave allowances required for each designation';
@@ -235,7 +250,9 @@ export default function ClientForm() {
           ...form,
           designations: form.designations,
           insurance_name: form.insurance_applicable ? form.insurance_name : null,
-          insurance_amount: form.insurance_applicable ? Number(form.insurance_amount) : null
+          insurance_amount: form.insurance_applicable
+            ? Math.round(Number(form.insurance_amount))
+            : null
         },
         pm?.email || ''
       );
@@ -266,7 +283,9 @@ export default function ClientForm() {
         contract_end_date: form.open_ended_contract ? null : form.contract_end_date,
         attendance_policy: normalizeAttendancePolicyForForm(form.attendance_policy),
         insurance_name: form.insurance_applicable ? form.insurance_name : null,
-        insurance_amount: form.insurance_applicable ? Number(form.insurance_amount) : null,
+        insurance_amount: form.insurance_applicable
+          ? Math.round(Number(form.insurance_amount))
+          : null,
         holidays: (form.holidays ?? []).filter((h) => h.holiday_date)
       };
       if (isEdit) {
@@ -276,9 +295,9 @@ export default function ClientForm() {
         if (changes.length) {
           setPolicyChanges(changes);
           setSaveSuccess(true);
-          window.setTimeout(() => navigate('/dashboard/clients'), 2500);
+          window.setTimeout(() => navigate(paths.clients), 2500);
         } else {
-          navigate('/dashboard/clients');
+          navigate(paths.clients);
         }
       } else {
         const created = await api.createClient(payload);
@@ -303,7 +322,7 @@ export default function ClientForm() {
     return (
       <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
         <div className="mb-6">
-          <Link to="/dashboard/clients" className="text-sm text-indigo-600 hover:text-indigo-800">
+          <Link to={paths.clients} className="text-sm text-indigo-600 hover:text-indigo-800">
             &larr; Back to clients
           </Link>
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">Client Created</h1>
@@ -325,13 +344,13 @@ export default function ClientForm() {
               {exporting ? 'Exporting…' : 'Export Client Details (CSV)'}
             </button>
             <Link
-              to={`/dashboard/client/${createdClient.id}/dashboard`}
+              to={paths.client(createdClient.id, 'dashboard')}
               className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Open Client Workspace
             </Link>
             <Link
-              to="/dashboard/clients"
+              to={paths.clients}
               className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Back to Clients
@@ -346,7 +365,7 @@ export default function ClientForm() {
     <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link to="/dashboard/clients" className="text-sm text-indigo-600 hover:text-indigo-800">
+          <Link to={paths.clients} className="text-sm text-indigo-600 hover:text-indigo-800">
             &larr; Back to clients
           </Link>
           <h1 className="mt-2 text-2xl font-semibold text-slate-900">
@@ -536,10 +555,18 @@ export default function ClientForm() {
                 <input
                   type="number"
                   min="0"
-                  step="0.01"
+                  step="1"
+                  inputMode="numeric"
                   value={form.insurance_amount}
-                  onChange={e => set({ insurance_amount: e.target.value })}
-                  placeholder="0.00"
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      set({ insurance_amount: '' });
+                      return;
+                    }
+                    if (/^\d+$/.test(raw)) set({ insurance_amount: raw });
+                  }}
+                  placeholder="0"
                   className="input"
                 />
               </Field>
@@ -551,6 +578,31 @@ export default function ClientForm() {
               value={form.designations}
               onChange={onDesignationsChange}
             />
+          </Field>
+
+          <Field label="Zone dependency for wages" error={fieldErrors.zone_dependency}>
+            <div className="flex gap-4 text-sm">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={form.zone_dependency === true}
+                  onChange={() => set({ zone_dependency: true })}
+                />
+                Yes
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  checked={form.zone_dependency === false}
+                  onChange={() => set({ zone_dependency: false })}
+                />
+                No
+              </label>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              When Yes, Program Managers must select zone1–zone3 when setting employee CTC. When No,
+              wage floors use zone1 for the designation skill level.
+            </p>
           </Field>
 
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 space-y-5">
@@ -611,7 +663,7 @@ export default function ClientForm() {
 
           <div className="flex justify-end gap-3 pt-2">
             <Link
-              to="/dashboard/clients"
+              to={paths.clients}
               className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50"
             >
               Cancel

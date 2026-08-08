@@ -32,14 +32,17 @@ router.get('/clients', async (req, res, next) => {
     const ids = clientRows.map((c) => c.id);
     const { data: desigs, error: desigErr } = await supabaseAdmin
       .from('designations')
-      .select('client_id, name')
+      .select('client_id, name, skill_level')
       .in('client_id', ids);
     if (desigErr) throw desigErr;
 
     const byClient = new Map();
     for (const d of desigs ?? []) {
       if (!byClient.has(d.client_id)) byClient.set(d.client_id, []);
-      byClient.get(d.client_id).push(d.name);
+      byClient.get(d.client_id).push({
+        name: d.name,
+        skill_level: d.skill_level || 'UNSKILLED'
+      });
     }
 
     res.json(

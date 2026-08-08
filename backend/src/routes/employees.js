@@ -6,6 +6,9 @@ import { supabaseAdmin } from '../supabase.js';
 import { buildJobAppFormExportCsv } from '../jobAppFormExport.js';
 import { normalizeIndianState } from '../utils/indianStates.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
+import { normalizeWageZone } from '../utils/wageConfig.js';
+import { listAccessibleClientIds } from '../utils/roleAccess.js';
+import { invokeResendEmail } from '../utils/sendEmail.js';
 
 const router = Router();
 
@@ -146,44 +149,15 @@ function buildReviewStatusEmail({ kind, name, reason, formLink }) {
 }
 
 async function invokeReviewStatusEmail({ toEmail, toName, subject, html, text }) {
-  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
-  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
-  if (!supabaseUrl || !serviceRoleKey) {
-    console.warn('[review-status-email] Missing Supabase env; skipping email send');
-    return { skipped: true };
-  }
-  if (!toEmail) return { skipped: true, reason: 'no_recipient' };
-
-  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(SEND_REVIEW_STATUS_EMAIL_EDGE_FUNCTION)}`;
-  try {
-    const resp = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        apikey: serviceRoleKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        subject,
-        recipients: [{ name: toName || '', email: toEmail, html, text }]
-      })
-    });
-    const raw = await resp.text();
-    let body = null;
-    try {
-      body = raw ? JSON.parse(raw) : null;
-    } catch {
-      body = null;
-    }
-    if (!resp.ok) {
-      console.warn('[review-status-email] Edge failed', body?.error || resp.status);
-      return { ok: false, error: body?.error || `Edge failed (${resp.status})` };
-    }
-    return { ok: true, body };
-  } catch (err) {
-    console.warn('[review-status-email] invoke error', err?.message || err);
-    return { ok: false, error: err?.message || String(err) };
-  }
+  return invokeResendEmail({
+    toEmail,
+    toName,
+    subject,
+    html,
+    text,
+    edgeFunction: SEND_REVIEW_STATUS_EMAIL_EDGE_FUNCTION,
+    logLabel: 'review-status-email'
+  });
 }
 
 async function notifyEmployeeReviewStatus({ employee, formEmail, kind, reason, employeeId }) {
@@ -284,6 +258,14 @@ async function invokeSendOnboardingWhatsappEdge({ recipients }) {
 }
 
 async function fetchOwnedClient(req, clientId) {
+  const { data: userRow, error: uErr } = await supabaseAdmin
+    .from('users')
+    .select('role')
+    .eq('id', req.user.id)
+    .maybeSingle();
+  if (uErr) throw uErr;
+  if (userRow?.role) req.user.role = userRow.role;
+
   const { data, error } = await supabaseAdmin
     .from('clients')
     .select('id, program_manager_id, created_by')
@@ -291,6 +273,7 @@ async function fetchOwnedClient(req, clientId) {
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
+  if (userRow?.role === 'SUPER_ADMIN') return data;
   const ownedByPm = data.program_manager_id === req.user.id;
   const ownedByLead = data.created_by === req.user.id;
   return ownedByPm || ownedByLead ? data : null;
@@ -303,14 +286,17 @@ async function fetchPayrollLeadOwnedClient(req, clientId) {
     .eq('id', req.user.id)
     .maybeSingle();
   if (uErr) throw uErr;
-  if (userRow?.role !== 'PAYROLL_LEAD') return null;
+  if (userRow?.role) req.user.role = userRow.role;
+  if (userRow?.role !== 'PAYROLL_LEAD' && userRow?.role !== 'SUPER_ADMIN') return null;
   const { data, error } = await supabaseAdmin
     .from('clients')
     .select('id, created_by')
     .eq('id', clientId)
     .maybeSingle();
   if (error) throw error;
-  if (!data || data.created_by !== req.user.id) return null;
+  if (!data) return null;
+  if (userRow.role === 'SUPER_ADMIN') return data;
+  if (data.created_by !== req.user.id) return null;
   return data;
 }
 
@@ -332,16 +318,38 @@ async function fetchProgramManagerOwnedClient(req, clientId) {
   return data;
 }
 
-async function fetchClientDesignations(clientId) {
+async function fetchClientDesignationMap(clientId) {
   const { data, error } = await supabaseAdmin
     .from('designations')
-    .select('name')
+    .select('name, skill_level')
     .eq('client_id', clientId);
   if (error) throw error;
-  return new Set(data.map(d => d.name.toLowerCase()));
+  const byName = new Map();
+  for (const d of data ?? []) {
+    byName.set(String(d.name).toLowerCase(), {
+      name: d.name,
+      skill_level: d.skill_level || 'UNSKILLED'
+    });
+  }
+  return byName;
 }
 
-function validateRoleDetails(raw, designationSet) {
+async function fetchClientDesignations(clientId) {
+  const map = await fetchClientDesignationMap(clientId);
+  return new Set(map.keys());
+}
+
+async function fetchClientZoneDependency(clientId) {
+  const { data, error } = await supabaseAdmin
+    .from('clients')
+    .select('zone_dependency')
+    .eq('id', clientId)
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data?.zone_dependency);
+}
+
+function validateRoleDetails(raw, designationMap, { zoneDependency = false } = {}) {
   const errors = [];
   const designation = String(raw.designation ?? '').trim();
   const doj = String(raw.date_of_joining ?? '').trim();
@@ -366,9 +374,19 @@ function validateRoleDetails(raw, designationSet) {
   if (!Number.isFinite(ctcValue) || ctcValue < 0) errors.push('ctc_value must be a non-negative number');
   if (doj && Number.isNaN(Date.parse(doj))) errors.push('date_of_joining must be a valid date');
   if (!state) errors.push('state is required and must be a valid Indian state/UT');
-  if (designation && !designationSet.has(designation.toLowerCase())) {
+
+  const desigMeta = designation ? designationMap.get(designation.toLowerCase()) : null;
+  if (designation && !desigMeta) {
     errors.push(`designation "${designation}" is not defined on this client`);
   }
+
+  let zone = null;
+  if (zoneDependency) {
+    const z = normalizeWageZone(raw.zone);
+    if (!z) errors.push('zone is required (zone1, zone2, or zone3)');
+    else zone = z;
+  }
+
   if (errors.length) return { errors };
   return {
     roleDetails: {
@@ -377,21 +395,28 @@ function validateRoleDetails(raw, designationSet) {
       pay_type: payType,
       ctc_type: ctcType,
       ctc_value: ctcValue,
-      state
-    }
+      state,
+      zone
+    },
+    skill_level: desigMeta?.skill_level || 'UNSKILLED'
   };
 }
 
-/** Monthly CTC floor from Super Admin state_salary_minimums. Net Pay is not checked. */
-async function assertCtcMeetsStateMinimum(roleDetails) {
+/** Monthly CTC floor from Super Admin state_wage_minimums. Net Pay is not checked. */
+async function assertCtcMeetsWageMinimum(roleDetails, skillLevel) {
   if (!roleDetails || roleDetails.pay_type !== 'CTC') return null;
   const state = roleDetails.state;
   if (!state) return null;
 
+  const zone = roleDetails.zone || 'zone1';
+  const skill_level = skillLevel || 'UNSKILLED';
+
   const { data, error } = await supabaseAdmin
-    .from('state_salary_minimums')
+    .from('state_wage_minimums')
     .select('min_monthly_ctc')
     .eq('state', state)
+    .eq('zone', zone)
+    .eq('skill_level', skill_level)
     .maybeSingle();
   if (error) throw error;
   if (!data || data.min_monthly_ctc == null) return null;
@@ -400,11 +425,13 @@ async function assertCtcMeetsStateMinimum(roleDetails) {
   if (!Number.isFinite(min)) return null;
 
   let monthly = Number(roleDetails.ctc_value);
-  if (!Number.isFinite(monthly)) return `ctc_value must meet minimum monthly CTC of ${min} for ${state}`;
+  if (!Number.isFinite(monthly)) {
+    return `ctc_value must meet minimum monthly CTC of ${min} for ${state}`;
+  }
   if (String(roleDetails.ctc_type).toUpperCase() === 'ANNUAL') monthly = monthly / 12;
 
   if (monthly < min) {
-    return `Monthly CTC must be at least ${min} for ${state} (got effective monthly ${monthly})`;
+    return `Monthly CTC must be at least ${min} for ${state} / ${zone} / ${skill_level} (got effective monthly ${monthly})`;
   }
   return null;
 }
@@ -948,6 +975,7 @@ router.post('/', async (req, res, next) => {
           ctc_type: null,
           ctc_value: null,
           state: null,
+          zone: null,
           emp_code: null
         };
         validated.push({
@@ -1084,6 +1112,7 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
           ctc_type: null,
           ctc_value: null,
           state: null,
+          zone: null,
           emp_code: null
         };
         validated.push({
@@ -1145,12 +1174,9 @@ router.post('/initiate-onboarding', async (req, res, next) => {
     const ids = Array.isArray(req.body?.employee_ids) ? req.body.employee_ids : [];
     if (ids.length === 0) return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
 
-    const { data: targetClients, error: ownErr } = await supabaseAdmin
-      .from('clients')
-      .select('id')
-      .or(`program_manager_id.eq.${req.user.id},created_by.eq.${req.user.id}`);
-    if (ownErr) throw ownErr;
-    const ownedClientIds = targetClients.map(c => c.id);
+    const { user, clientIds: ownedClientIds } = await listAccessibleClientIds(req.user.id);
+    if (!user) return res.status(403).json({ error: 'User profile not found' });
+    req.user.role = user.role;
     if (ownedClientIds.length === 0) {
       return res.status(403).json({ error: 'No clients accessible to you' });
     }
@@ -1529,12 +1555,9 @@ router.post('/role-details', async (req, res, next) => {
     if (ids.length === 0) return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
     const { designation, date_of_joining, pay_type, ctc_type, ctc_value, state } = req.body || {};
 
-    const { data: targetClients, error: ownErr } = await supabaseAdmin
-      .from('clients')
-      .select('id')
-      .or(`program_manager_id.eq.${req.user.id},created_by.eq.${req.user.id}`);
-    if (ownErr) throw ownErr;
-    const ownedClientIds = targetClients.map(c => c.id);
+    const { user, clientIds: ownedClientIds } = await listAccessibleClientIds(req.user.id);
+    if (!user) return res.status(403).json({ error: 'User profile not found' });
+    req.user.role = user.role;
     if (ownedClientIds.length === 0) {
       return res.status(403).json({ error: 'No clients accessible to you' });
     }
@@ -1559,16 +1582,18 @@ router.post('/role-details', async (req, res, next) => {
       return res.status(400).json({ error: 'Bulk role details require employees from the same client' });
     }
 
-    const designationSet = await fetchClientDesignations(clientId);
+    const designationMap = await fetchClientDesignationMap(clientId);
+    const zoneDependency = await fetchClientZoneDependency(clientId);
     const validation = validateRoleDetails(
-      { designation, date_of_joining, pay_type, ctc_type, ctc_value, state },
-      designationSet
+      { designation, date_of_joining, pay_type, ctc_type, ctc_value, state, zone: req.body?.zone },
+      designationMap,
+      { zoneDependency }
     );
     if (validation.errors) {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
 
-    const minErr = await assertCtcMeetsStateMinimum(validation.roleDetails);
+    const minErr = await assertCtcMeetsWageMinimum(validation.roleDetails, validation.skill_level);
     if (minErr) {
       return res.status(400).json({ error: minErr, details: [minErr] });
     }
@@ -1590,6 +1615,8 @@ router.post('/role-details', async (req, res, next) => {
         employee_ids: updated.map((r) => r.id),
         designation: validation.roleDetails.designation,
         state: validation.roleDetails.state,
+        zone: validation.roleDetails.zone,
+        skill_level: validation.skill_level,
         pay_type: validation.roleDetails.pay_type
       }
     });
@@ -2676,13 +2703,14 @@ router.put('/:id/role-details', async (req, res, next) => {
       return res.status(400).json({ error: 'Only AVAILABLE employees can be role-specified' });
     }
 
-    const designationSet = await fetchClientDesignations(row.client_id);
-    const validation = validateRoleDetails(req.body || {}, designationSet);
+    const designationMap = await fetchClientDesignationMap(row.client_id);
+    const zoneDependency = await fetchClientZoneDependency(row.client_id);
+    const validation = validateRoleDetails(req.body || {}, designationMap, { zoneDependency });
     if (validation.errors) {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
 
-    const minErr = await assertCtcMeetsStateMinimum(validation.roleDetails);
+    const minErr = await assertCtcMeetsWageMinimum(validation.roleDetails, validation.skill_level);
     if (minErr) {
       return res.status(400).json({ error: minErr, details: [minErr] });
     }
@@ -2704,6 +2732,8 @@ router.put('/:id/role-details', async (req, res, next) => {
       metadata: {
         designation: validation.roleDetails.designation,
         state: validation.roleDetails.state,
+        zone: validation.roleDetails.zone,
+        skill_level: validation.skill_level,
         pay_type: validation.roleDetails.pay_type
       }
     });

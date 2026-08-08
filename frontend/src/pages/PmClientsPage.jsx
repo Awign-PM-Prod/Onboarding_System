@@ -121,7 +121,11 @@ export default function PmClientsPage() {
                     <td className="px-4 py-3 text-slate-600">
                       {c.designations?.length > 0 ? (
                         <>
-                          {c.designations.slice(0, 3).join(', ')}
+                          {c.designations
+                            .slice(0, 3)
+                            .map((d) => (d && typeof d === 'object' ? d.name : d))
+                            .filter(Boolean)
+                            .join(', ')}
                           {c.designations.length > 3 && ` +${c.designations.length - 3} more`}
                         </>
                       ) : (

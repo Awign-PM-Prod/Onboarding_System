@@ -1736,9 +1736,12 @@ export default function PmClientDetail() {
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
                 >
                   <option value="">All designations</option>
-                  {(client?.designations ?? []).map((d) => (
-                    <option key={d} value={d}>{formatDesignationLabel(d)}</option>
-                  ))}
+                  {(client?.designations ?? []).map((d) => {
+                    const name = d && typeof d === 'object' ? d.name : d;
+                    return (
+                      <option key={name} value={name}>{formatDesignationLabel(name)}</option>
+                    );
+                  })}
                 </select>
               </div>
               <div className="min-w-[220px]">
@@ -2095,6 +2098,7 @@ export default function PmClientDetail() {
             }
             designations={client?.designations ?? []}
             defaultState={client?.state ?? ''}
+            zoneDependency={Boolean(client?.zone_dependency)}
             submitting={roleDetailsLoading}
             showSendOnboardingOption={!bulkRoleForceSendOnboarding}
             onClose={handleBulkRoleModalClose}
@@ -2107,6 +2111,7 @@ export default function PmClientDetail() {
             description="Set designation, expected date of joining, CTC or Net Pay, and state for this employee."
             designations={client?.designations ?? []}
             defaultState={client?.state ?? ''}
+            zoneDependency={Boolean(client?.zone_dependency)}
             submitting={roleDetailsLoading}
             onClose={() => setRowRoleModalEmployee(null)}
             onSubmit={handleSingleRoleDetails}

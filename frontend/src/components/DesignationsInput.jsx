@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatDesignationLabel } from '../lib/formatLabels';
+import {
+  SKILL_LEVELS,
+  SKILL_LEVEL_LABELS,
+  designationNameOf,
+  normalizeDesignationList,
+  normalizeSkillLevel
+} from '../lib/wageConfig';
 
 /** Predefined designations Payroll Lead can multi-select when creating/editing a client. */
 export const DESIGNATION_OPTIONS = [
@@ -33,22 +40,23 @@ export default function DesignationsInput({ value = [], onChange }) {
   const [query, setQuery] = useState('');
   const [showOtherInput, setShowOtherInput] = useState(false);
   const [otherName, setOtherName] = useState('');
+  const [otherSkill, setOtherSkill] = useState('UNSKILLED');
   const [otherError, setOtherError] = useState('');
+  const [pendingSkillByName, setPendingSkillByName] = useState({});
   const rootRef = useRef(null);
   const otherInputRef = useRef(null);
 
-  const selected = Array.isArray(value) ? value : [];
+  const selected = useMemo(() => normalizeDesignationList(value), [value]);
 
   const selectedSet = useMemo(
-    () => new Set(selected.map((v) => normalizeName(v)).filter(Boolean)),
+    () => new Set(selected.map((v) => normalizeName(v.name)).filter(Boolean)),
     [selected]
   );
 
-  // Keep any existing custom values (e.g. from older clients) visible even if not in the catalog.
   const catalog = useMemo(() => {
-    const extras = selected.filter(
-      (name) => !DESIGNATION_OPTIONS.some((opt) => namesMatch(opt, name))
-    );
+    const extras = selected
+      .map((d) => d.name)
+      .filter((name) => !DESIGNATION_OPTIONS.some((opt) => namesMatch(opt, name)));
     return [...DESIGNATION_OPTIONS, ...extras];
   }, [selected]);
 
@@ -69,6 +77,7 @@ export default function DesignationsInput({ value = [], onChange }) {
         setQuery('');
         setShowOtherInput(false);
         setOtherName('');
+        setOtherSkill('UNSKILLED');
         setOtherError('');
       }
     };
@@ -82,16 +91,30 @@ export default function DesignationsInput({ value = [], onChange }) {
     }
   }, [showOtherInput]);
 
+  const emit = (next) => onChange(normalizeDesignationList(next));
+
   const toggle = (name) => {
     if (selectedSet.has(name)) {
-      onChange(selected.filter((t) => t !== name));
+      emit(selected.filter((t) => t.name !== name));
       return;
     }
-    onChange([...selected, name]);
+    const skill = normalizeSkillLevel(pendingSkillByName[name], 'UNSKILLED');
+    emit([...selected, { name, skill_level: skill }]);
   };
 
-  const removeTag = (tag) => {
-    onChange(selected.filter((t) => t !== tag));
+  const setSkill = (name, skill_level) => {
+    const skill = normalizeSkillLevel(skill_level, 'UNSKILLED');
+    if (selectedSet.has(name)) {
+      emit(
+        selected.map((t) => (t.name === name ? { ...t, skill_level: skill } : t))
+      );
+      return;
+    }
+    setPendingSkillByName((prev) => ({ ...prev, [name]: skill }));
+  };
+
+  const removeTag = (tagName) => {
+    emit(selected.filter((t) => t.name !== tagName));
   };
 
   const addOtherDesignation = () => {
@@ -104,12 +127,13 @@ export default function DesignationsInput({ value = [], onChange }) {
       setOtherError('Choose a specific designation name');
       return;
     }
-    if (selected.some((t) => namesMatch(t, name))) {
+    if (selected.some((t) => namesMatch(t.name, name))) {
       setOtherError('This designation is already selected');
       return;
     }
-    onChange([...selected, name]);
+    emit([...selected, { name, skill_level: normalizeSkillLevel(otherSkill, 'UNSKILLED') }]);
     setOtherName('');
+    setOtherSkill('UNSKILLED');
     setOtherError('');
     setShowOtherInput(false);
   };
@@ -128,26 +152,29 @@ export default function DesignationsInput({ value = [], onChange }) {
         )}
         {selected.map((tag) => (
           <span
-            key={tag}
+            key={tag.name}
             className="inline-flex items-center gap-1 rounded bg-indigo-50 px-2 py-0.5 text-sm text-indigo-700"
           >
-            {formatDesignationLabel(tag)}
+            {formatDesignationLabel(tag.name)}
+            <span className="text-xs text-indigo-500">
+              ({SKILL_LEVEL_LABELS[tag.skill_level] || tag.skill_level})
+            </span>
             <span
               role="button"
               tabIndex={0}
               onClick={(e) => {
                 e.stopPropagation();
-                removeTag(tag);
+                removeTag(tag.name);
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
                   e.stopPropagation();
-                  removeTag(tag);
+                  removeTag(tag.name);
                 }
               }}
               className="cursor-pointer text-indigo-500 hover:text-indigo-800"
-              aria-label={`Remove ${tag}`}
+              aria-label={`Remove ${tag.name}`}
             >
               ×
             </span>
@@ -159,7 +186,7 @@ export default function DesignationsInput({ value = [], onChange }) {
       </button>
 
       <p className="mt-1 text-xs text-slate-500">
-        Select one or more designations from the list, or choose Others to add a custom name.
+        Select designations and set each as Skilled, Semi-skilled, or Unskilled (used for wage floors).
       </p>
 
       {open && (
@@ -174,23 +201,39 @@ export default function DesignationsInput({ value = [], onChange }) {
               autoFocus
             />
           </div>
-          <ul className="max-h-56 overflow-y-auto py-1" role="listbox" aria-multiselectable="true">
+          <ul className="max-h-72 overflow-y-auto py-1" role="listbox" aria-multiselectable="true">
             {filtered.length === 0 && !othersVisible && (
               <li className="px-3 py-2 text-sm text-slate-500">No matching designations.</li>
             )}
             {filtered.map((opt) => {
               const checked = selectedSet.has(opt);
+              const current = selected.find((t) => t.name === opt);
+              const skillValue = current?.skill_level
+                || pendingSkillByName[opt]
+                || 'UNSKILLED';
               return (
-                <li key={opt}>
-                  <label className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm text-slate-800 hover:bg-slate-50">
+                <li key={opt} className="border-b border-slate-50 px-3 py-2 last:border-0">
+                  <label className="flex cursor-pointer items-center gap-3 text-sm text-slate-800">
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={() => toggle(opt)}
                       className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                     />
-                    <span>{formatDesignationLabel(opt)}</span>
+                    <span className="flex-1">{formatDesignationLabel(opt)}</span>
                   </label>
+                  <div className="mt-1.5 pl-7">
+                    <select
+                      value={skillValue}
+                      onChange={(e) => setSkill(opt, e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
+                    >
+                      {SKILL_LEVELS.map((s) => (
+                        <option key={s} value={s}>{SKILL_LEVEL_LABELS[s]}</option>
+                      ))}
+                    </select>
+                  </div>
                 </li>
               );
             })}
@@ -237,6 +280,15 @@ export default function DesignationsInput({ value = [], onChange }) {
                       placeholder="Enter designation name"
                       className="w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"
                     />
+                    <select
+                      value={otherSkill}
+                      onChange={(e) => setOtherSkill(e.target.value)}
+                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-700"
+                    >
+                      {SKILL_LEVELS.map((s) => (
+                        <option key={s} value={s}>{SKILL_LEVEL_LABELS[s]}</option>
+                      ))}
+                    </select>
                     {otherError && <p className="text-xs text-red-600">{otherError}</p>}
                     <button
                       type="button"
@@ -255,3 +307,6 @@ export default function DesignationsInput({ value = [], onChange }) {
     </div>
   );
 }
+
+// Re-export helper for callers that still import from this module path.
+export { designationNameOf };

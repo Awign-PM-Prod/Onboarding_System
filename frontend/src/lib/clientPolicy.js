@@ -55,13 +55,22 @@ function designationKey(name) {
 export function mergeAttendancePolicyRoles(designations, extraRoles = ATTENDANCE_POLICY_ROLES) {
   const seen = new Set();
   const out = [];
-  for (const name of [...(designations ?? []), ...(extraRoles ?? [])]) {
-    const trimmed = String(name ?? '').trim();
+  for (const item of [...(designations ?? []), ...(extraRoles ?? [])]) {
+    const isObj = item && typeof item === 'object';
+    const trimmed = String(isObj ? item.name ?? '' : item ?? '').trim();
     if (!trimmed) continue;
     const key = designationKey(trimmed);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(trimmed);
+    const skillRaw = isObj ? item.skill_level : null;
+    const skill = String(skillRaw ?? 'UNSKILLED').trim().toUpperCase().replace(/[-\s]+/g, '_');
+    const skill_level =
+      skill === 'SKILLED' || skill === 'SEMI_SKILLED' || skill === 'UNSKILLED'
+        ? skill
+        : skill === 'SEMISKILLED' || skill === 'SEMI'
+          ? 'SEMI_SKILLED'
+          : 'UNSKILLED';
+    out.push({ name: trimmed, skill_level });
   }
   return out;
 }
@@ -111,7 +120,9 @@ export function buildLeaveAllowancesForDesignations(designations, existing = [])
   const byKey = new Map(
     (existing ?? []).map((r) => [normalizeDesignationKey(r.designation), r])
   );
-  return (designations ?? []).map((designation) => {
+  return (designations ?? []).map((entry) => {
+    const designation =
+      entry && typeof entry === 'object' ? String(entry.name ?? '').trim() : String(entry ?? '').trim();
     const prev = byKey.get(normalizeDesignationKey(designation));
     return {
       designation,

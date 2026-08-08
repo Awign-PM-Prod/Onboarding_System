@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 
 export default function PayrollLeadProgramManagersPage() {
+  const paths = useWorkspacePaths();
   const [pms, setPms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -56,7 +58,7 @@ export default function PayrollLeadProgramManagersPage() {
             />
           </div>
           <Link
-            to="/dashboard/program-managers/new"
+            to={paths.programManagerNew}
             className="inline-flex shrink-0 items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700"
           >
             Add Program Manager
@@ -86,7 +88,7 @@ export default function PayrollLeadProgramManagersPage() {
           </p>
           {!search && (
             <Link
-              to="/dashboard/program-managers/new"
+              to={paths.programManagerNew}
               className="mt-3 inline-flex text-sm font-medium text-indigo-700 hover:underline"
             >
               Add your first Program Manager

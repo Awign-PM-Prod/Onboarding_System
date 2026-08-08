@@ -10,6 +10,7 @@ import {
   normalizeAttendancePolicyForForm
 } from '../lib/clientPolicy';
 import { emitClientPolicyUpdated } from '../lib/clientPolicyEvents';
+import { normalizeDesignationList } from '../lib/wageConfig';
 
 function currentMonthValue() {
   const d = new Date();
@@ -28,7 +29,7 @@ function applyClientPolicyState(found, setters) {
   // Include designations found on the client's employees so every employee in
   // attendance gets a configurable leave-allowance row (denominator source).
   const mergedDesignations = mergeAttendancePolicyRoles(
-    found.designations ?? [],
+    normalizeDesignationList(found.designations ?? []),
     found.employee_designations ?? []
   );
   setDesignations(mergedDesignations);
@@ -153,6 +154,7 @@ export default function PayrollClientPolicyPage() {
             insurance_amount: client.insurance_applicable ? client.insurance_amount : null,
             require_license_upload: client.require_license_upload !== false,
             require_qualification_certificate_upload: client.require_qualification_certificate_upload !== false,
+            zone_dependency: Boolean(client.zone_dependency),
             designations,
             ...policyBody
           });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 import ClientProjectMetaHeader from '../components/ClientProjectMetaHeader';
 import {
   resolveEmployeeStatusLabel,
@@ -100,6 +101,7 @@ const PIPELINE_BADGES = {
 
 export default function PayrollClientDashboardHome() {
   const { id } = useParams();
+  const paths = useWorkspacePaths();
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [attendance, setAttendance] = useState({ sheet: null, rows: [] });
@@ -382,7 +384,7 @@ export default function PayrollClientDashboardHome() {
               ) : payrollRecords.length === 0 ? (
                 <div className="p-10 text-center text-sm text-slate-500">
                   No payroll records yet for this client.{' '}
-                  <Link to={`/dashboard/client/${id}/attendance`} className="font-medium text-indigo-700 hover:underline">
+                  <Link to={paths.client(id, 'attendance')} className="font-medium text-indigo-700 hover:underline">
                     Go to Attendance
                   </Link>
                 </div>
@@ -426,7 +428,7 @@ export default function PayrollClientDashboardHome() {
                       {payrollRecords.length === 1 ? '' : 's'}
                     </p>
                     <Link
-                      to={`/dashboard/client/${id}/attendance`}
+                      to={paths.client(id, 'attendance')}
                       className="text-sm font-medium text-indigo-700 hover:underline"
                     >
                       View All Records &rarr;

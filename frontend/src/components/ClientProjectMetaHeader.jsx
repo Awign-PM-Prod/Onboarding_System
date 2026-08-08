@@ -37,7 +37,10 @@ export default function ClientProjectMetaHeader({
   const [designationsExpanded, setDesignationsExpanded] = useState(false);
 
   const designationLabels = useMemo(
-    () => (Array.isArray(designations) ? designations : []).map((d) => formatDesignationLabel(d)).filter(Boolean),
+    () =>
+      (Array.isArray(designations) ? designations : [])
+        .map((d) => formatDesignationLabel(d && typeof d === 'object' ? d.name : d))
+        .filter(Boolean),
     [designations]
   );
 

@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import SuperAdminDashboardCharts from '../components/SuperAdminDashboardCharts';
+
+const POLL_MS = 15000;
 
 function Card({ title, value, tone = 'slate' }) {
   const valueClass =
@@ -37,10 +40,41 @@ const EMPTY = {
   active_employees: 0
 };
 
+const EMPTY_COMPLIANCE = {
+  form_submitted: 0,
+  with_uan: 0,
+  without_uan: 0,
+  with_esic_under_limit: 0,
+  without_esic_under_limit: 0,
+  outside_esic_limit: 0
+};
+
+function applyStatsPayload(data) {
+  return {
+    totals: { ...EMPTY, ...(data?.totals || {}) },
+    compliance: { ...EMPTY_COMPLIANCE, ...(data?.compliance || {}) },
+    clients: Array.isArray(data?.clients) ? data.clients : []
+  };
+}
+
 export default function SuperAdminDashboardHome() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [stats, setStats] = useState({ totals: EMPTY, clients: [] });
+  const [stats, setStats] = useState({
+    totals: EMPTY,
+    compliance: EMPTY_COMPLIANCE,
+    clients: []
+  });
+
+  const softRefresh = useCallback(async () => {
+    try {
+      const data = await api.getSuperAdminDashboardStats();
+      setStats(applyStatsPayload(data));
+      setError('');
+    } catch {
+      // Keep current UI on background refresh failure.
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -50,10 +84,7 @@ export default function SuperAdminDashboardHome() {
       .getSuperAdminDashboardStats()
       .then((data) => {
         if (!active) return;
-        setStats({
-          totals: { ...EMPTY, ...(data?.totals || {}) },
-          clients: Array.isArray(data?.clients) ? data.clients : []
-        });
+        setStats(applyStatsPayload(data));
       })
       .catch((err) => {
         if (!active) return;
@@ -67,14 +98,32 @@ export default function SuperAdminDashboardHome() {
     };
   }, []);
 
+  // Quiet poll so charts/KPIs stay current without a full loading flash.
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      softRefresh();
+    };
+    const intervalId = setInterval(tick, POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') softRefresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [softRefresh]);
+
   const t = stats.totals;
+  const c = stats.compliance;
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Super Admin Dashboard</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Overall view of clients and employees across the organisation.
+          Org-wide analytics, compliance, and client operations. Charts refresh automatically.
         </p>
       </div>
 
@@ -89,6 +138,8 @@ export default function SuperAdminDashboardHome() {
 
       {!loading && !error && (
         <>
+          <SuperAdminDashboardCharts totals={t} clients={stats.clients} />
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Card title="Clients" value={t.clients} tone="indigo" />
             <Card title="Employees" value={t.employees} />
@@ -102,6 +153,18 @@ export default function SuperAdminDashboardHome() {
             <Card title="Correction Requested" value={t.pm_correction_requested} tone="amber" />
             <Card title="Payroll Approved" value={t.payroll_approved} tone="emerald" />
             <Card title="Payroll Rejected" value={t.payroll_rejected} tone="rose" />
+          </div>
+
+          <div className="mt-6">
+            <h2 className="mb-3 text-sm font-semibold text-slate-900">Compliance</h2>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <Card title="Forms Submitted" value={c.form_submitted} tone="indigo" />
+              <Card title="With UAN" value={c.with_uan} tone="emerald" />
+              <Card title="Without UAN" value={c.without_uan} tone="amber" />
+              <Card title="ESIC under limit (with)" value={c.with_esic_under_limit} tone="emerald" />
+              <Card title="ESIC under limit (without)" value={c.without_esic_under_limit} tone="amber" />
+              <Card title="Outside ESIC limit" value={c.outside_esic_limit} />
+            </div>
           </div>
 
           <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -126,23 +189,23 @@ export default function SuperAdminDashboardHome() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {stats.clients.map((c) => (
-                      <tr key={c.client_id}>
+                    {stats.clients.map((row) => (
+                      <tr key={row.client_id}>
                         <td className="px-3 py-2">
                           <Link
-                            to={`/super-admin/clients/${c.client_id}`}
+                            to={`/super-admin/client/${row.client_id}/dashboard`}
                             className="font-medium text-indigo-700 hover:underline"
                           >
-                            {c.client_name}
+                            {row.client_name}
                           </Link>
-                          <div className="text-xs text-slate-500">{c.contract_code || '-'}</div>
+                          <div className="text-xs text-slate-500">{row.contract_code || '-'}</div>
                         </td>
-                        <td className="px-3 py-2 text-slate-700">{c.employee_count}</td>
-                        <td className="px-3 py-2 text-slate-700">{c.onboarding_activations}</td>
-                        <td className="px-3 py-2 text-slate-700">{c.employees_submitted}</td>
-                        <td className="px-3 py-2 text-amber-700">{c.submission_pending}</td>
-                        <td className="px-3 py-2 text-emerald-700">{c.pm_approved}</td>
-                        <td className="px-3 py-2 text-emerald-700">{c.payroll_approved}</td>
+                        <td className="px-3 py-2 text-slate-700">{row.employee_count}</td>
+                        <td className="px-3 py-2 text-slate-700">{row.onboarding_activations}</td>
+                        <td className="px-3 py-2 text-slate-700">{row.employees_submitted}</td>
+                        <td className="px-3 py-2 text-amber-700">{row.submission_pending}</td>
+                        <td className="px-3 py-2 text-emerald-700">{row.pm_approved}</td>
+                        <td className="px-3 py-2 text-emerald-700">{row.payroll_approved}</td>
                       </tr>
                     ))}
                   </tbody>

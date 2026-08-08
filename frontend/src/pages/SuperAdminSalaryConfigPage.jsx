@@ -1,6 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { displayNumericValue } from '../lib/numericInput';
+import {
+  SKILL_LEVELS,
+  SKILL_LEVEL_LABELS,
+  WAGE_ZONES,
+  ZONE_LABELS
+} from '../lib/wageConfig';
+
+function cellKey(state, zone, skill_level) {
+  return `${state}|${zone}|${skill_level}`;
+}
 
 export default function SuperAdminSalaryConfigPage() {
   const [rows, setRows] = useState([]);
@@ -29,50 +39,69 @@ export default function SuperAdminSalaryConfigPage() {
     load();
   }, []);
 
-  const setMin = (state, value) => {
+  const byKey = useMemo(() => {
+    const map = new Map();
+    for (const r of rows) {
+      map.set(cellKey(r.state, r.zone, r.skill_level), r);
+    }
+    return map;
+  }, [rows]);
+
+  const states = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const r of rows) {
+      if (!seen.has(r.state)) {
+        seen.add(r.state);
+        out.push(r.state);
+      }
+    }
+    return out;
+  }, [rows]);
+
+  const setMin = (state, zone, skill_level, value) => {
+    const key = cellKey(state, zone, skill_level);
     setRows((prev) =>
-      prev.map((r) => (r.state === state ? { ...r, min_monthly_ctc: value } : r))
+      prev.map((r) =>
+        r.state === state && r.zone === zone && r.skill_level === skill_level
+          ? { ...r, min_monthly_ctc: value }
+          : r
+      )
     );
-    setDirty((prev) => ({ ...prev, [state]: true }));
+    setDirty((prev) => ({ ...prev, [key]: true }));
     setSuccess('');
   };
 
   const handleSave = async () => {
-    const items = rows
-      .filter((r) => dirty[r.state])
-      .map((r) => {
-        const raw = r.min_monthly_ctc;
-        if (raw === '' || raw === null || raw === undefined) {
-          return { state: r.state, min_monthly_ctc: null, invalidEmpty: true };
-        }
-        const n = Number(raw);
-        return { state: r.state, min_monthly_ctc: n };
-      });
-
-    if (items.length === 0) {
+    const keys = Object.keys(dirty);
+    if (keys.length === 0) {
       setError('No changes to save.');
       return;
     }
 
-    for (const item of items) {
-      if (item.invalidEmpty) {
-        setError(`Enter a non-negative amount for ${item.state} (or discard that change).`);
+    const items = [];
+    for (const key of keys) {
+      const [state, zone, skill_level] = key.split('|');
+      const row = byKey.get(key);
+      const raw = row?.min_monthly_ctc;
+      if (raw === '' || raw === null || raw === undefined) {
+        setError(`Enter a non-negative amount for ${state} / ${ZONE_LABELS[zone] || zone} / ${SKILL_LEVEL_LABELS[skill_level] || skill_level}.`);
         return;
       }
-      if (!Number.isFinite(item.min_monthly_ctc) || item.min_monthly_ctc < 0) {
-        setError(`Invalid amount for ${item.state}. Enter a non-negative number.`);
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        setError(`Invalid amount for ${state} / ${ZONE_LABELS[zone] || zone} / ${SKILL_LEVEL_LABELS[skill_level] || skill_level}.`);
         return;
       }
+      items.push({ state, zone, skill_level, min_monthly_ctc: n });
     }
 
     setSaving(true);
     setError('');
     setSuccess('');
     try {
-      await api.saveSuperAdminSalaryMinimums(
-        items.map(({ state, min_monthly_ctc }) => ({ state, min_monthly_ctc }))
-      );
-      setSuccess(`Saved ${items.length} state minimum(s).`);
+      await api.saveSuperAdminSalaryMinimums(items);
+      setSuccess(`Saved ${items.length} wage minimum(s).`);
       await load();
     } catch (err) {
       setError(err.message || 'Could not save salary minimums.');
@@ -84,13 +113,13 @@ export default function SuperAdminSalaryConfigPage() {
   const dirtyCount = Object.keys(dirty).length;
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
+    <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Salary Configuration</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Set minimum monthly CTC by state. Program Managers must meet or exceed this when assigning CTC
-            (Net Pay is not constrained).
+            Set minimum monthly CTC by state, zone (zone1–zone3), and skill level. Program Managers must
+            meet or exceed this when assigning CTC (Net Pay is not constrained).
           </p>
         </div>
         <button
@@ -125,36 +154,66 @@ export default function SuperAdminSalaryConfigPage() {
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">State / UT</th>
-                  <th className="px-3 py-2 text-left font-medium">Min monthly CTC (₹)</th>
+                  <th className="px-3 py-2 text-left font-medium">Zone</th>
+                  {SKILL_LEVELS.map((s) => (
+                    <th key={s} className="px-3 py-2 text-left font-medium">
+                      {SKILL_LEVEL_LABELS[s]} (₹)
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
-                  <tr key={r.state} className={dirty[r.state] ? 'bg-amber-50/40' : undefined}>
-                    <td className="px-3 py-2 font-medium text-slate-800">{r.state}</td>
-                    <td className="px-3 py-2">
-                      <input
-                        className="w-40 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                        type="text"
-                        inputMode="decimal"
-                        placeholder="Not set"
-                        value={
-                          r.min_monthly_ctc === null || r.min_monthly_ctc === ''
-                            ? ''
-                            : displayNumericValue(String(r.min_monthly_ctc))
-                        }
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          if (raw === '') {
-                            setMin(r.state, '');
-                            return;
-                          }
-                          if (/^\d*\.?\d*$/.test(raw)) setMin(r.state, raw);
-                        }}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                {states.map((state) =>
+                  WAGE_ZONES.map((zone, zoneIdx) => {
+                    const rowDirty = SKILL_LEVELS.some((s) => dirty[cellKey(state, zone, s)]);
+                    return (
+                      <tr
+                        key={`${state}-${zone}`}
+                        className={rowDirty ? 'bg-amber-50/40' : undefined}
+                      >
+                        {zoneIdx === 0 ? (
+                          <td
+                            className="px-3 py-2 font-medium text-slate-800 align-top"
+                            rowSpan={WAGE_ZONES.length}
+                          >
+                            {state}
+                          </td>
+                        ) : null}
+                        <td className="px-3 py-2 text-slate-700">{ZONE_LABELS[zone]}</td>
+                        {SKILL_LEVELS.map((skill_level) => {
+                          const key = cellKey(state, zone, skill_level);
+                          const r = byKey.get(key);
+                          const val = r?.min_monthly_ctc;
+                          return (
+                            <td key={skill_level} className="px-3 py-2">
+                              <input
+                                className="w-28 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="Not set"
+                                value={
+                                  val === null || val === undefined || val === ''
+                                    ? ''
+                                    : displayNumericValue(String(val))
+                                }
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  if (raw === '') {
+                                    setMin(state, zone, skill_level, '');
+                                    return;
+                                  }
+                                  if (/^\d*\.?\d*$/.test(raw)) {
+                                    setMin(state, zone, skill_level, raw);
+                                  }
+                                }}
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

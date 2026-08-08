@@ -23,6 +23,8 @@ import {
   buildAttendanceExportCsv,
   exportFilename
 } from '../utils/attendanceExport.js';
+import { canAccessClientAsLead, loadUserRole } from '../utils/roleAccess.js';
+import { invokeResendEmail } from '../utils/sendEmail.js';
 
 const router = Router({ mergeParams: true });
 
@@ -31,19 +33,7 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
-const SEND_ATTENDANCE_EMAIL_EDGE_FUNCTION =
-  process.env.SEND_ATTENDANCE_EMAIL_EDGE_FUNCTION || 'send-attendance-email';
 const FRONTEND_URL = String(process.env.FRONTEND_URL || 'http://localhost:8088').trim() || 'http://localhost:8088';
-
-async function loadUserRole(userId) {
-  const { data, error } = await supabaseAdmin
-    .from('users')
-    .select('id, name, email, role')
-    .eq('id', userId)
-    .maybeSingle();
-  if (error) throw error;
-  return data;
-}
 
 async function resolveClientAccess(req, clientId) {
   const user = await loadUserRole(req.user.id);
@@ -58,7 +48,7 @@ async function resolveClientAccess(req, clientId) {
   if (!client) return { ok: false, status: 404, error: 'Client not found' };
 
   const isPm = user.role === 'PROGRAM_MANAGER' && client.program_manager_id === user.id;
-  const isPl = user.role === 'PAYROLL_LEAD' && client.created_by === user.id;
+  const isPl = canAccessClientAsLead(user, client);
   if (!isPm && !isPl) {
     return { ok: false, status: 403, error: 'Not authorized for this client' };
   }
@@ -178,48 +168,21 @@ async function writeLog({
 }
 
 async function invokeAttendanceEmail({ toEmail, toName, subject, html, text }) {
-  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
-  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
-  if (!supabaseUrl || !serviceRoleKey) {
-    console.warn('[attendance-email] Missing Supabase env; skipping email send');
-    return { skipped: true };
-  }
-  if (!toEmail) return { skipped: true, reason: 'no_recipient' };
-
-  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(SEND_ATTENDANCE_EMAIL_EDGE_FUNCTION)}`;
-  try {
-    const resp = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        apikey: serviceRoleKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        subject,
-        recipients: [{ name: toName || '', email: toEmail, html, text }]
-      })
-    });
-    const raw = await resp.text();
-    let body = null;
-    try {
-      body = raw ? JSON.parse(raw) : null;
-    } catch {
-      body = null;
-    }
-    if (!resp.ok) {
-      console.warn('[attendance-email] Edge failed', body?.error || resp.status);
-      return { ok: false, error: body?.error || `Edge failed (${resp.status})` };
-    }
-    return { ok: true, body };
-  } catch (err) {
-    console.warn('[attendance-email] invoke error', err?.message || err);
-    return { ok: false, error: err?.message || String(err) };
-  }
+  return invokeResendEmail({
+    toEmail,
+    toName,
+    subject,
+    html,
+    text,
+    logLabel: 'attendance-email'
+  });
 }
 
 function attendanceLink(clientId, role) {
   const base = FRONTEND_URL.replace(/\/+$/, '');
+  if (role === 'SUPER_ADMIN') {
+    return `${base}/super-admin/client/${clientId}/attendance`;
+  }
   if (role === 'PAYROLL_LEAD') {
     return `${base}/dashboard/client/${clientId}/attendance`;
   }
