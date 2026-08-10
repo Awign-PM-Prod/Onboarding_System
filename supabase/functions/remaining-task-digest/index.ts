@@ -29,6 +29,7 @@ type PmBucket = {
   joining_overdue: number;
   submission_pending: number;
   role_assigned: number;
+  correction_requested: number;
 };
 type PlBucket = {
   client_id: string;
@@ -97,7 +98,15 @@ async function fetchInBatches<T>(
 }
 
 function pmActionableTotal(b: PmBucket) {
-  return b.awaiting_pm_review + b.pl_rejected + b.joining_today + b.joining_overdue;
+  return (
+    b.awaiting_pm_review +
+    b.pl_rejected +
+    b.joining_today +
+    b.joining_overdue +
+    b.submission_pending +
+    b.role_assigned +
+    b.correction_requested
+  );
 }
 
 function plActionableTotal(b: PlBucket) {
@@ -114,6 +123,7 @@ function emptyPmBucket(client: { id: string; client_name: string | null }): PmBu
     joining_overdue: 0,
     submission_pending: 0,
     role_assigned: 0,
+    correction_requested: 0,
   };
 }
 
@@ -145,6 +155,9 @@ function buildPmEmail(name: string, clients: PmBucket[], dashboardUrl: string) {
       items.push(`${c.submission_pending} form submission(s) pending (employee)`);
     }
     if (c.role_assigned) items.push(`${c.role_assigned} role assigned — form not sent`);
+    if (c.correction_requested) {
+      items.push(`${c.correction_requested} correction(s) awaiting employee update`);
+    }
     if (!items.length) continue;
     lines.push(
       `<p style="margin:16px 0 6px;font-weight:700;">${escapeHtml(c.client_name)}</p><ul style="margin:0 0 0 18px;padding:0;">${
@@ -272,6 +285,9 @@ async function buildPmDigests(
     }
     if (reviewStatus === "APPROVED" && payrollReviewStatus === "PAYROLL_REJECTED") {
       bucket.pl_rejected += 1;
+    }
+    if (reviewStatus === "CORRECTION_REQUESTED") {
+      bucket.correction_requested += 1;
     }
     if (emp.onboarding_initiated && submissionStatus !== "Submitted") {
       bucket.submission_pending += 1;

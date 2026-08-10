@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import ModalOverlay from '../components/ModalOverlay';
 
 const ACTOR_ROLES = [
   { value: '', label: 'All roles' },
@@ -29,6 +30,19 @@ const ACTION_OPTIONS = [
   { value: 'REMAINING_TASK_DIGEST_TRIGGERED', label: 'Task digest triggered' }
 ];
 
+const ACTION_LABELS = Object.fromEntries(
+  ACTION_OPTIONS.filter((o) => o.value).map((o) => [o.value, o.label])
+);
+
+const ROLE_LABELS = {
+  PAYROLL_LEAD: 'Payroll Lead',
+  PROGRAM_MANAGER: 'Program Manager',
+  SUPER_ADMIN: 'Super Admin',
+  PAYROLL_HEAD: 'Payroll Head'
+};
+
+const META_SKIP_KEYS = new Set(['changes', 'policy_change_count']);
+
 function formatWhen(iso) {
   if (!iso) return '—';
   try {
@@ -44,6 +58,82 @@ function formatWhen(iso) {
   }
 }
 
+function actionLabel(action) {
+  return ACTION_LABELS[action] || action || '—';
+}
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || role || '—';
+}
+
+function metaLabel(key) {
+  return String(key || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatMetaValue(value) {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '—';
+    if (value.every((v) => typeof v !== 'object' || v == null)) {
+      return value.map(String).join(', ');
+    }
+    return value
+      .map((item) => {
+        if (item && typeof item === 'object') {
+          return Object.entries(item)
+            .map(([k, v]) => `${metaLabel(k)}: ${v}`)
+            .join(', ');
+        }
+        return String(item);
+      })
+      .join('; ');
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .map(([k, v]) => `${metaLabel(k)}: ${v}`)
+      .join(', ');
+  }
+  return String(value);
+}
+
+function getMetadataChanges(row) {
+  const changes = row?.metadata?.changes;
+  return Array.isArray(changes) ? changes.filter((line) => String(line || '').trim()) : [];
+}
+
+function pickNearestPolicyLog(entries, activityRow) {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const targetMs = new Date(activityRow.created_at).getTime();
+  if (!Number.isFinite(targetMs)) return entries[0];
+
+  let best = null;
+  let bestScore = Infinity;
+  for (const entry of entries) {
+    const entryMs = new Date(entry.created_at).getTime();
+    if (!Number.isFinite(entryMs)) continue;
+    const delta = Math.abs(entryMs - targetMs);
+    const actorBonus =
+      activityRow.actor_user_id && entry.actor_user_id === activityRow.actor_user_id ? -1 : 0;
+    const score = delta + actorBonus;
+    if (score < bestScore) {
+      bestScore = score;
+      best = entry;
+    }
+  }
+  return best;
+}
+
+function ChevronIcon({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+    </svg>
+  );
+}
+
 export default function SuperAdminActivityPage() {
   const [items, setItems] = useState([]);
   const [nextCursor, setNextCursor] = useState(null);
@@ -52,6 +142,12 @@ export default function SuperAdminActivityPage() {
   const [error, setError] = useState('');
   const [action, setAction] = useState('');
   const [actorRole, setActorRole] = useState('');
+
+  const [selected, setSelected] = useState(null);
+  const [detailChanges, setDetailChanges] = useState([]);
+  const [detailMessage, setDetailMessage] = useState('');
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
 
   const load = useCallback(
     async ({ append = false, cursor = null } = {}) => {
@@ -85,13 +181,67 @@ export default function SuperAdminActivityPage() {
     load({ append: false });
   }, [load]);
 
+  const openDetail = async (row) => {
+    setSelected(row);
+    setDetailError('');
+    setDetailMessage('');
+    const embedded = getMetadataChanges(row);
+    if (embedded.length > 0) {
+      setDetailChanges(embedded);
+      setDetailLoading(false);
+      return;
+    }
+
+    const needsFallback =
+      (row.action === 'CLIENT_UPDATED' || row.action === 'POLICY_UPDATED') && row.client_id;
+
+    if (!needsFallback) {
+      setDetailChanges([]);
+      setDetailLoading(false);
+      return;
+    }
+
+    setDetailLoading(true);
+    setDetailChanges([]);
+    try {
+      const entries = await api.listClientPolicyChanges(row.client_id);
+      const nearest = pickNearestPolicyLog(entries, row);
+      const lines = Array.isArray(nearest?.changes_json)
+        ? nearest.changes_json.filter((line) => String(line || '').trim())
+        : [];
+      setDetailChanges(lines);
+      setDetailMessage(nearest?.message || '');
+      if (!lines.length && !nearest?.message) {
+        setDetailError('No field-level changes recorded for this event.');
+      }
+    } catch (err) {
+      setDetailError(err.message || 'Could not load field-level changes.');
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const closeDetail = () => {
+    setSelected(null);
+    setDetailChanges([]);
+    setDetailMessage('');
+    setDetailError('');
+    setDetailLoading(false);
+  };
+
+  const metadataEntries = selected
+    ? Object.entries(selected.metadata && typeof selected.metadata === 'object' ? selected.metadata : {})
+        .filter(([key, value]) => !META_SKIP_KEYS.has(key) && value != null && value !== '')
+    : [];
+
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Activity Logs</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Org-wide activity from Program Managers, Payroll Leads, and Super Admin.
+            Org-wide activity from Program Managers, Payroll Leads, and Super Admin. Click a row for
+            details.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -140,16 +290,31 @@ export default function SuperAdminActivityPage() {
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <ul className="divide-y divide-slate-100">
             {items.map((row) => (
-              <li key={row.id} className="px-4 py-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <p className="text-sm font-medium text-slate-900">{row.summary}</p>
-                  <time className="text-xs text-slate-500">{formatWhen(row.created_at)}</time>
-                </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  {[row.actor_name || 'Unknown', row.actor_role, row.action, row.client_name]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </p>
+              <li key={row.id}>
+                <button
+                  type="button"
+                  onClick={() => openDetail(row)}
+                  className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-slate-50 focus:bg-slate-50 focus:outline-none"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-sm font-medium text-slate-900">{row.summary}</p>
+                      <time className="text-xs text-slate-500">{formatWhen(row.created_at)}</time>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {[
+                        row.actor_name || 'Unknown',
+                        roleLabel(row.actor_role),
+                        actionLabel(row.action),
+                        row.client_name
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                    <p className="mt-1 text-xs font-medium text-indigo-700">View details</p>
+                  </div>
+                  <ChevronIcon className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
+                </button>
               </li>
             ))}
           </ul>
@@ -166,6 +331,93 @@ export default function SuperAdminActivityPage() {
             </div>
           )}
         </div>
+      )}
+
+      {selected && (
+        <ModalOverlay onClose={closeDetail}>
+          <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  {actionLabel(selected.action)}
+                </p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-900">{selected.summary}</h2>
+              </div>
+              <button
+                type="button"
+                onClick={closeDetail}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <dl className="mt-4 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs text-slate-500">When</dt>
+                <dd className="text-slate-800">{formatWhen(selected.created_at)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-slate-500">Actor</dt>
+                <dd className="text-slate-800">
+                  {selected.actor_name || 'Unknown'}
+                  {selected.actor_role ? ` · ${roleLabel(selected.actor_role)}` : ''}
+                </dd>
+              </div>
+              {selected.client_name && (
+                <div className="sm:col-span-2">
+                  <dt className="text-xs text-slate-500">Client</dt>
+                  <dd className="text-slate-800">{selected.client_name}</dd>
+                </div>
+              )}
+            </dl>
+
+            <div className="mt-5 border-t border-slate-100 pt-4">
+              <h3 className="text-sm font-semibold text-slate-900">Changed fields</h3>
+              {detailLoading && <p className="mt-2 text-sm text-slate-500">Loading changes…</p>}
+              {!detailLoading && detailError && (
+                <p className="mt-2 text-sm text-slate-500">{detailError}</p>
+              )}
+              {!detailLoading && !detailError && detailMessage && detailChanges.length === 0 && (
+                <p className="mt-2 text-sm text-slate-700">{detailMessage}</p>
+              )}
+              {!detailLoading && !detailError && detailChanges.length > 0 && (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                  {detailChanges.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              )}
+              {!detailLoading &&
+                !detailError &&
+                detailChanges.length === 0 &&
+                !detailMessage &&
+                !(
+                  selected.action === 'CLIENT_UPDATED' || selected.action === 'POLICY_UPDATED'
+                ) && (
+                  <p className="mt-2 text-sm text-slate-500">
+                    No field-level change list for this action.
+                  </p>
+                )}
+            </div>
+
+            {metadataEntries.length > 0 && (
+              <div className="mt-5 border-t border-slate-100 pt-4">
+                <h3 className="text-sm font-semibold text-slate-900">Other details</h3>
+                <dl className="mt-2 space-y-2 text-sm">
+                  {metadataEntries.map(([key, value]) => (
+                    <div key={key} className="grid grid-cols-1 gap-0.5 sm:grid-cols-3 sm:gap-2">
+                      <dt className="text-slate-500">{metaLabel(key)}</dt>
+                      <dd className="text-slate-800 sm:col-span-2 break-words">
+                        {formatMetaValue(value)}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
+          </div>
+        </ModalOverlay>
       )}
     </main>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 
 const SCOPES = [
@@ -22,7 +22,6 @@ export default function SuperAdminTaskRemindersPage() {
   const [result, setResult] = useState(null);
   const [scopeKey, setScopeKey] = useState('all');
   const [userId, setUserId] = useState('');
-  const [userQuery, setUserQuery] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -42,15 +41,6 @@ export default function SuperAdminTaskRemindersPage() {
       cancelled = true;
     };
   }, []);
-
-  const filteredUsers = useMemo(() => {
-    const q = userQuery.trim().toLowerCase();
-    if (!q) return recipients;
-    return recipients.filter((r) => {
-      const hay = `${r.name || ''} ${r.email || ''} ${r.role || ''}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [recipients, userQuery]);
 
   const buildPayload = () => {
     if (scopeKey === 'all') return { scope: 'all' };
@@ -149,17 +139,6 @@ export default function SuperAdminTaskRemindersPage() {
 
           {scopeKey === 'user' && (
             <div className="mt-5 space-y-3 border-t border-slate-100 pt-5">
-              <label className="block text-sm font-medium text-slate-900" htmlFor="user-search">
-                Find user
-              </label>
-              <input
-                id="user-search"
-                type="search"
-                value={userQuery}
-                onChange={(e) => setUserQuery(e.target.value)}
-                placeholder="Search by name or email"
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-              />
               <label className="block text-sm font-medium text-slate-900" htmlFor="user-select">
                 Recipient
               </label>
@@ -170,14 +149,14 @@ export default function SuperAdminTaskRemindersPage() {
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
               >
                 <option value="">Select a user…</option>
-                {filteredUsers.map((r) => (
+                {recipients.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.name} — {r.email} ({roleLabel(r.role)})
                   </option>
                 ))}
               </select>
-              {filteredUsers.length === 0 && (
-                <p className="text-sm text-slate-500">No matching Program Managers or Payroll Leads.</p>
+              {recipients.length === 0 && (
+                <p className="text-sm text-slate-500">No Program Managers or Payroll Leads available.</p>
               )}
             </div>
           )}

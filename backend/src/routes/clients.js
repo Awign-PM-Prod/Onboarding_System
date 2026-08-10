@@ -714,13 +714,17 @@ router.put('/:id', async (req, res, next) => {
     }
 
     const full = mergeSavedPolicyResponse(await fetchClientWithRelations(id), savedPolicy);
+    const clientUpdateChanges = Array.isArray(policyChanges) ? policyChanges.slice(0, 100) : [];
     await logOrgActivityFromReq(req, {
       action: 'CLIENT_UPDATED',
       entityType: 'client',
       entityId: id,
       clientId: id,
       summary: `Updated client ${full.client_name || id}`,
-      metadata: { policy_change_count: Array.isArray(policyChanges) ? policyChanges.length : 0 }
+      metadata: {
+        policy_change_count: clientUpdateChanges.length,
+        changes: clientUpdateChanges
+      }
     });
     res.json({
       ...full,
@@ -881,13 +885,17 @@ router.put('/:id/policy', async (req, res, next) => {
     }
 
     const full = mergeSavedPolicyResponse(await fetchClientWithRelations(id), savedPolicy);
+    const policyUpdateChanges = Array.isArray(policyChanges) ? policyChanges.slice(0, 100) : [];
     await logOrgActivityFromReq(req, {
       action: 'POLICY_UPDATED',
       entityType: 'client',
       entityId: id,
       clientId: id,
       summary: `Updated policy for ${full.client_name || id}`,
-      metadata: { policy_change_count: Array.isArray(policyChanges) ? policyChanges.length : 0 }
+      metadata: {
+        policy_change_count: policyUpdateChanges.length,
+        changes: policyUpdateChanges
+      }
     });
     res.json({
       ...full,

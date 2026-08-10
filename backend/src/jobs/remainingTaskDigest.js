@@ -36,7 +36,8 @@ function emptyPmClientBucket(client) {
     joining_today: 0,
     joining_overdue: 0,
     submission_pending: 0,
-    role_assigned: 0
+    role_assigned: 0,
+    correction_requested: 0
   };
 }
 
@@ -55,7 +56,10 @@ function pmActionableTotal(bucket) {
     bucket.awaiting_pm_review +
     bucket.pl_rejected +
     bucket.joining_today +
-    bucket.joining_overdue
+    bucket.joining_overdue +
+    bucket.submission_pending +
+    bucket.role_assigned +
+    bucket.correction_requested
   );
 }
 
@@ -98,6 +102,9 @@ function buildPmEmail({ name, clients, dashboardUrl }) {
     if (c.joining_overdue) items.push(`${c.joining_overdue} joining status overdue`);
     if (c.submission_pending) items.push(`${c.submission_pending} form submission(s) pending (employee)`);
     if (c.role_assigned) items.push(`${c.role_assigned} role assigned — form not sent`);
+    if (c.correction_requested) {
+      items.push(`${c.correction_requested} correction(s) awaiting employee update`);
+    }
     if (!items.length) continue;
 
     lines.push(
@@ -221,6 +228,9 @@ async function buildPmDigests(users, todayIst) {
     }
     if (reviewStatus === 'APPROVED' && payrollReviewStatus === 'PAYROLL_REJECTED') {
       bucket.pl_rejected += 1;
+    }
+    if (reviewStatus === 'CORRECTION_REQUESTED') {
+      bucket.correction_requested += 1;
     }
     if (emp.onboarding_initiated && submissionStatus !== 'Submitted') {
       bucket.submission_pending += 1;

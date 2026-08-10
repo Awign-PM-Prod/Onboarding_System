@@ -691,7 +691,11 @@ router.post('/remaining-task-digest', async (req, res, next) => {
       return res.status(400).json({ error: 'userId is required when scope is user.' });
     }
 
+    const roleLabel = (r) =>
+      r === 'PROGRAM_MANAGER' ? 'Program Manager' : r === 'PAYROLL_LEAD' ? 'Payroll Lead' : r;
+
     let userIds;
+    let targetUser = null;
     if (scope === 'all') {
       userIds = undefined;
     } else if (scope === 'role') {
@@ -704,13 +708,14 @@ router.post('/remaining-task-digest', async (req, res, next) => {
     } else {
       const { data, error } = await supabaseAdmin
         .from('users')
-        .select('id, role')
+        .select('id, name, email, role')
         .eq('id', userId)
         .maybeSingle();
       if (error) throw error;
       if (!data || !['PROGRAM_MANAGER', 'PAYROLL_LEAD'].includes(data.role)) {
         return res.status(400).json({ error: 'userId must be a Program Manager or Payroll Lead.' });
       }
+      targetUser = data;
       userIds = [data.id];
     }
 
@@ -718,14 +723,29 @@ router.post('/remaining-task-digest', async (req, res, next) => {
       userIds === undefined ? {} : { userIds }
     );
 
+    const counts = `sent ${summary.sent}, skipped ${summary.skipped}, failed ${summary.failed}`;
+    let digestSummary;
+    if (scope === 'all') {
+      digestSummary = `Sent remaining-task digests to all Program Managers and Payroll Leads (${counts})`;
+    } else if (scope === 'role') {
+      digestSummary = `Sent remaining-task digests to all ${roleLabel(role)}s (${counts})`;
+    } else {
+      const who = targetUser?.name || targetUser?.email || 'user';
+      digestSummary = `Sent remaining-task digest to ${who} (${roleLabel(targetUser?.role)}) (${counts})`;
+    }
+
     await logOrgActivityFromReq(req, {
       action: 'REMAINING_TASK_DIGEST_TRIGGERED',
       entityType: 'users',
-      summary: `Triggered remaining-task digests (scope=${scope}${scope === 'role' ? `, role=${role}` : ''}${scope === 'user' ? `, user=${userId}` : ''}): sent=${summary.sent}, skipped=${summary.skipped}, failed=${summary.failed}`,
+      entityId: scope === 'user' ? userId : null,
+      summary: digestSummary,
       metadata: {
         scope,
         role: scope === 'role' ? role : null,
         userId: scope === 'user' ? userId : null,
+        target_name: targetUser?.name ?? null,
+        target_email: targetUser?.email ?? null,
+        target_role: targetUser?.role ?? null,
         sent: summary.sent,
         skipped: summary.skipped,
         failed: summary.failed
