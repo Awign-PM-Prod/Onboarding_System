@@ -7,12 +7,15 @@ import programManagersRouter from './routes/programManagers.js';
 import clientsRouter from './routes/clients.js';
 import meRouter from './routes/me.js';
 import pmClientsRouter from './routes/pmClients.js';
+import pmAlertsRouter from './routes/pmAlerts.js';
 import employeesRouter from './routes/employees.js';
 import publicOnboardingRouter from './routes/publicOnboarding.js';
+import publicStaffAuthRouter from './routes/publicStaffAuth.js';
 import payrollHeadRouter from './routes/payrollHead.js';
 import superAdminRouter from './routes/superAdmin.js';
 import salaryMinimumsRouter from './routes/salaryMinimums.js';
 import attendanceRouter from './routes/attendance.js';
+import { startSupabaseKeepAlive } from './jobs/supabaseKeepAlive.js';
 
 const app = express();
 
@@ -43,8 +46,10 @@ app.use('/api/program-managers', requireAuth, programManagersRouter);
 app.use('/api/clients/:clientId/attendance', requireAuth, attendanceRouter);
 app.use('/api/clients', requireAuth, clientsRouter);
 app.use('/api/pm/clients', requireAuth, pmClientsRouter);
+app.use('/api/pm/alerts', requireAuth, pmAlertsRouter);
 app.use('/api/employees', requireAuth, employeesRouter);
 app.use('/api/public/onboarding', publicOnboardingRouter);
+app.use('/api/public/staff-auth', publicStaffAuthRouter);
 app.use('/api/admin', requireAuth, payrollHeadRouter);
 app.use('/api/super-admin', requireAuth, superAdminRouter);
 app.use('/api/salary-minimums', requireAuth, salaryMinimumsRouter);
@@ -57,4 +62,5 @@ app.use((err, _req, res, _next) => {
 const port = Number(process.env.PORT) || 8089;
 app.listen(port, () => {
   console.log(`API listening on http://localhost:${port} (GET / + /health)`);
+  startSupabaseKeepAlive();
 });

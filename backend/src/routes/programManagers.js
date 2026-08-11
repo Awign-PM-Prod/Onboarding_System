@@ -1,6 +1,16 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
+import { invokeResendEmail } from '../utils/sendEmail.js';
+import {
+  INVITE_TTL_MS,
+  buildInviteEmail,
+  buildSetPasswordLink,
+  generateRandomPassword,
+  generateRawToken,
+  hashToken,
+  placeholderNameFromEmail
+} from '../utils/staffInvite.js';
 
 const router = Router();
 
@@ -22,18 +32,10 @@ router.get('/', async (_req, res, next) => {
 
 router.post('/', requireRole(['PAYROLL_LEAD', 'SUPER_ADMIN']), async (req, res, next) => {
   try {
-    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
-    if (!name) {
-      return res.status(400).json({ error: 'Name is required' });
-    }
     if (!email || !EMAIL_RE.test(email)) {
       return res.status(400).json({ error: 'A valid email is required' });
-    }
-    if (!password || password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
     const { data: existing, error: existingErr } = await supabaseAdmin
@@ -46,11 +48,14 @@ router.post('/', requireRole(['PAYROLL_LEAD', 'SUPER_ADMIN']), async (req, res, 
       return res.status(409).json({ error: 'A user with this email already exists' });
     }
 
+    const placeholderName = placeholderNameFromEmail(email);
+    const tempPassword = generateRandomPassword();
+
     const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
       email,
-      password,
+      password: tempPassword,
       email_confirm: true,
-      user_metadata: { name }
+      user_metadata: { name: placeholderName }
     });
     if (authErr) {
       const msg = authErr.message || 'Could not create auth user';
@@ -69,11 +74,11 @@ router.post('/', requireRole(['PAYROLL_LEAD', 'SUPER_ADMIN']), async (req, res, 
       .from('users')
       .insert({
         id: authUser.id,
-        name,
+        name: placeholderName,
         email,
         role: 'PROGRAM_MANAGER'
       })
-      .select('id, name, email')
+      .select('id, email')
       .single();
 
     if (profileErr) {
@@ -84,7 +89,44 @@ router.post('/', requireRole(['PAYROLL_LEAD', 'SUPER_ADMIN']), async (req, res, 
       throw profileErr;
     }
 
-    res.status(201).json(profile);
+    const rawToken = generateRawToken();
+    const tokenHash = hashToken(rawToken);
+    const expiresAt = new Date(Date.now() + INVITE_TTL_MS).toISOString();
+
+    const { error: inviteErr } = await supabaseAdmin.from('staff_account_invites').insert({
+      user_id: authUser.id,
+      email,
+      token_hash: tokenHash,
+      expires_at: expiresAt,
+      invited_by: req.user?.id ?? null
+    });
+
+    if (inviteErr) {
+      await supabaseAdmin.from('users').delete().eq('id', authUser.id);
+      await supabaseAdmin.auth.admin.deleteUser(authUser.id);
+      throw inviteErr;
+    }
+
+    const setPasswordLink = buildSetPasswordLink(rawToken);
+    const mail = buildInviteEmail({ setPasswordLink });
+    const sendResult = await invokeResendEmail({
+      toEmail: email,
+      toName: placeholderName,
+      subject: mail.subject,
+      html: mail.html,
+      text: mail.text,
+      logLabel: 'pm-invite-email'
+    });
+
+    if (sendResult?.ok === false && !sendResult?.skipped) {
+      console.warn('[program-managers] invite email failed', sendResult.error);
+    }
+
+    res.status(201).json({
+      id: profile.id,
+      email: profile.email,
+      invite_email_sent: Boolean(sendResult?.ok)
+    });
   } catch (err) {
     next(err);
   }

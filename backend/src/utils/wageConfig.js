@@ -50,3 +50,63 @@ export function normalizedDesignationRows(input) {
 export function designationNamesFrom(input) {
   return normalizedDesignationRows(input).map((d) => d.name);
 }
+
+export const CUSHION_TYPES = ['ABSOLUTE', 'PERCENTAGE'];
+
+/** @returns {'ABSOLUTE'|'PERCENTAGE'|null|undefined} null if empty, undefined if invalid */
+export function normalizeCushionType(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const t = String(raw).trim().toUpperCase();
+  if (CUSHION_TYPES.includes(t)) return t;
+  return undefined;
+}
+
+/**
+ * Effective CTC floor = min + cushion.
+ * Absolute: min + value; Percentage: min + (min * value / 100).
+ */
+export function applyCushion(minCtc, cushionType, cushionValue) {
+  if (minCtc == null) return null;
+  const min = Number(minCtc);
+  if (!Number.isFinite(min)) return null;
+  const type = normalizeCushionType(cushionType);
+  if (!type) return min;
+  const val = Number(cushionValue);
+  if (!Number.isFinite(val) || val < 0) return min;
+  if (type === 'ABSOLUTE') return min + val;
+  if (type === 'PERCENTAGE') return min + (min * val) / 100;
+  return min;
+}
+
+/** Parse optional cushion pair from client body; returns { cushion_type, cushion_value } or errors. */
+export function parseClientCushion(body) {
+  const typeRaw = body?.cushion_type;
+  const valueRaw = body?.cushion_value;
+  const typeEmpty = typeRaw === undefined || typeRaw === null || String(typeRaw).trim() === '';
+  const valueEmpty = valueRaw === undefined || valueRaw === null || valueRaw === '';
+
+  if (typeEmpty && valueEmpty) {
+    return { cushion_type: null, cushion_value: null };
+  }
+  if (typeEmpty || valueEmpty) {
+    return { error: 'cushion_type and cushion_value must both be set or both empty' };
+  }
+
+  const cushion_type = normalizeCushionType(typeRaw);
+  if (!cushion_type) {
+    return { error: 'cushion_type must be ABSOLUTE or PERCENTAGE' };
+  }
+
+  const cushion_value = Number(valueRaw);
+  if (!Number.isFinite(cushion_value) || cushion_value < 0) {
+    return { error: 'cushion_value must be a non-negative number' };
+  }
+  if (cushion_type === 'PERCENTAGE' && cushion_value > 100) {
+    return { error: 'cushion_value for PERCENTAGE must be at most 100' };
+  }
+  if (cushion_type === 'ABSOLUTE' && !Number.isInteger(cushion_value)) {
+    return { error: 'cushion_value for ABSOLUTE must be a whole number' };
+  }
+
+  return { cushion_type, cushion_value };
+}

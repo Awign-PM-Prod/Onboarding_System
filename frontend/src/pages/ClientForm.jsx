@@ -11,6 +11,7 @@ import {
   normalizeAttendancePolicyForForm
 } from '../lib/clientPolicy';
 import { emitClientPolicyUpdated } from '../lib/clientPolicyEvents';
+import { ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
 import { INDIAN_STATES } from '../lib/indianStates';
 import {
   buildClientExportCsv,
@@ -19,7 +20,12 @@ import {
   parseClientCsvText,
   triggerCsvDownload
 } from '../lib/clientCsv';
-import { normalizeDesignationList } from '../lib/wageConfig';
+import {
+  CUSHION_TYPE_LABELS,
+  CUSHION_TYPES,
+  normalizeCushionType,
+  normalizeDesignationList
+} from '../lib/wageConfig';
 
 const emptyForm = {
   client_name: '',
@@ -36,6 +42,9 @@ const emptyForm = {
   require_license_upload: true,
   require_qualification_certificate_upload: true,
   zone_dependency: false,
+  cushion_enabled: false,
+  cushion_type: 'ABSOLUTE',
+  cushion_value: '',
   designations: [],
   attendance_policy: { ...DEFAULT_ATTENDANCE_POLICY },
   leave_allowances: [],
@@ -105,6 +114,12 @@ export default function ClientForm() {
           require_license_upload: found.require_license_upload !== false,
           require_qualification_certificate_upload: found.require_qualification_certificate_upload !== false,
           zone_dependency: Boolean(found.zone_dependency),
+          cushion_enabled: Boolean(found.cushion_type && found.cushion_value != null),
+          cushion_type: normalizeCushionType(found.cushion_type) || 'ABSOLUTE',
+          cushion_value:
+            found.cushion_value != null && found.cushion_value !== ''
+              ? String(found.cushion_value)
+              : '',
           designations: normalizeDesignationList(found.designations ?? []),
           attendance_policy: normalizeAttendancePolicyForForm(found.attendance_policy),
           leave_allowances: (found.leave_allowances?.length
@@ -171,6 +186,19 @@ export default function ClientForm() {
     }
     if (typeof form.zone_dependency !== 'boolean') {
       errs.zone_dependency = 'Required';
+    }
+    if (form.cushion_enabled) {
+      if (!normalizeCushionType(form.cushion_type)) {
+        errs.cushion_type = 'Select Absolute or Percentage';
+      }
+      const cv = Number(form.cushion_value);
+      if (form.cushion_value === '' || !Number.isFinite(cv) || cv < 0) {
+        errs.cushion_value = 'Enter a non-negative cushion value';
+      } else if (form.cushion_type === 'PERCENTAGE' && cv > 100) {
+        errs.cushion_value = 'Percentage must be at most 100';
+      } else if (form.cushion_type === 'ABSOLUTE' && !Number.isInteger(cv)) {
+        errs.cushion_value = 'Absolute cushion must be a whole number';
+      }
     }
     if (form.designations.length === 0) {
       errs.designations = 'Add at least one designation';
@@ -252,7 +280,9 @@ export default function ClientForm() {
           insurance_name: form.insurance_applicable ? form.insurance_name : null,
           insurance_amount: form.insurance_applicable
             ? Math.round(Number(form.insurance_amount))
-            : null
+            : null,
+          cushion_type: form.cushion_enabled ? form.cushion_type : null,
+          cushion_value: form.cushion_enabled ? form.cushion_value : null
         },
         pm?.email || ''
       );
@@ -286,8 +316,11 @@ export default function ClientForm() {
         insurance_amount: form.insurance_applicable
           ? Math.round(Number(form.insurance_amount))
           : null,
+        cushion_type: form.cushion_enabled ? form.cushion_type : null,
+        cushion_value: form.cushion_enabled ? Number(form.cushion_value) : null,
         holidays: (form.holidays ?? []).filter((h) => h.holiday_date)
       };
+      delete payload.cushion_enabled;
       if (isEdit) {
         const updated = await api.updateClient(id, payload);
         emitClientPolicyUpdated(id);
@@ -339,19 +372,19 @@ export default function ClientForm() {
               type="button"
               disabled={exporting}
               onClick={() => exportClientDetails(createdClient)}
-              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+              className={ACTION_BTN_SECONDARY}
             >
               {exporting ? 'Exporting…' : 'Export Client Details (CSV)'}
             </button>
             <Link
               to={paths.client(createdClient.id, 'dashboard')}
-              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className={ACTION_BTN_SECONDARY}
             >
               Open Client Workspace
             </Link>
             <Link
               to={paths.clients}
-              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className={ACTION_BTN_SECONDARY}
             >
               Back to Clients
             </Link>
@@ -376,12 +409,12 @@ export default function ClientForm() {
           <button
             type="button"
             onClick={downloadTemplate}
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className={ACTION_BTN_SECONDARY}
           >
             Download CSV Template
           </button>
           {!isEdit && (
-            <label className="cursor-pointer rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            <label className={`cursor-pointer ${ACTION_BTN_SECONDARY}`}>
               Import CSV
               <input
                 type="file"
@@ -396,7 +429,7 @@ export default function ClientForm() {
               type="button"
               disabled={exporting}
               onClick={() => exportClientDetails()}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              className={ACTION_BTN_SECONDARY}
             >
               {exporting ? 'Exporting…' : 'Export Details'}
             </button>
@@ -580,30 +613,114 @@ export default function ClientForm() {
             />
           </Field>
 
-          <Field label="Zone dependency for wages" error={fieldErrors.zone_dependency}>
-            <div className="flex gap-4 text-sm">
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="radio"
-                  checked={form.zone_dependency === true}
-                  onChange={() => set({ zone_dependency: true })}
-                />
-                Yes
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 space-y-5">
+            <h2 className="text-base font-semibold text-slate-900">Wage settings</h2>
+
+            <Field label="Zone dependency" error={fieldErrors.zone_dependency}>
+              <label className="inline-flex cursor-pointer items-center gap-3">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.zone_dependency}
+                  onClick={() => set({ zone_dependency: !form.zone_dependency })}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    form.zone_dependency ? 'bg-indigo-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      form.zone_dependency ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+                <span className="text-sm text-slate-700">
+                  {form.zone_dependency ? 'On — PM selects zone1–zone3' : 'Off — wage floors use zone1'}
+                </span>
               </label>
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="radio"
-                  checked={form.zone_dependency === false}
-                  onChange={() => set({ zone_dependency: false })}
-                />
-                No
+              <p className="mt-1 text-xs text-slate-500">
+                Some clients need zone-based wages; others do not. When off, CTC floors use zone1 for
+                the designation skill level.
+              </p>
+            </Field>
+
+            <Field label="CTC cushion" error={fieldErrors.cushion_type || fieldErrors.cushion_value}>
+              <label className="inline-flex cursor-pointer items-center gap-3">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.cushion_enabled}
+                  onClick={() =>
+                    set({
+                      cushion_enabled: !form.cushion_enabled,
+                      ...(form.cushion_enabled
+                        ? { cushion_value: '' }
+                        : { cushion_type: form.cushion_type || 'ABSOLUTE' })
+                    })
+                  }
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    form.cushion_enabled ? 'bg-indigo-600' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      form.cushion_enabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+                <span className="text-sm text-slate-700">
+                  {form.cushion_enabled ? 'On — add cushion to min CTC' : 'Off — use min CTC only'}
+                </span>
               </label>
-            </div>
-            <p className="mt-1 text-xs text-slate-500">
-              When Yes, Program Managers must select zone1–zone3 when setting employee CTC. When No,
-              wage floors use zone1 for the designation skill level.
-            </p>
-          </Field>
+              {form.cushion_enabled && (
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">Type</label>
+                    <select
+                      className="input"
+                      value={form.cushion_type}
+                      onChange={(e) => set({ cushion_type: e.target.value })}
+                    >
+                      {CUSHION_TYPES.map((t) => (
+                        <option key={t} value={t}>{CUSHION_TYPE_LABELS[t]}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">
+                      {form.cushion_type === 'PERCENTAGE' ? 'Percentage' : 'Amount (₹)'}
+                    </label>
+                    <input
+                      className="input"
+                      type="text"
+                      inputMode={form.cushion_type === 'PERCENTAGE' ? 'decimal' : 'numeric'}
+                      placeholder={form.cushion_type === 'PERCENTAGE' ? 'e.g. 10' : 'e.g. 2000'}
+                      value={form.cushion_value}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === '') {
+                          set({ cushion_value: '' });
+                          return;
+                        }
+                        if (form.cushion_type === 'PERCENTAGE') {
+                          if (/^\d*\.?\d*$/.test(raw)) set({ cushion_value: raw });
+                        } else if (/^\d+$/.test(raw)) {
+                          set({ cushion_value: raw });
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              <p className="mt-1 text-xs text-slate-500">
+                Final CTC floor at employee onboarding = Super Admin min CTC + cushion
+                {form.cushion_enabled && form.cushion_type === 'PERCENTAGE'
+                  ? ' (percentage of min CTC).'
+                  : form.cushion_enabled
+                    ? ' (absolute ₹).'
+                    : '.'}
+              </p>
+            </Field>
+          </div>
 
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 space-y-5">
             <h2 className="text-base font-semibold text-slate-900">Project Configuration</h2>

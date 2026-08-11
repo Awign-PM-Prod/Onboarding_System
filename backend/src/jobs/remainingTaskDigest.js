@@ -85,11 +85,23 @@ async function fetchInBatches(table, select, column, ids, applyFilters = (q) => 
   return rows;
 }
 
-function buildPmEmail({ name, clients, dashboardUrl }) {
+function remarksBlocks(remarks) {
+  const text = String(remarks ?? '').trim();
+  if (!text) return { html: '', textLines: [] };
+  const escaped = escapeHtml(text).replace(/\n/g, '<br/>');
+  return {
+    html: `<p style="margin:16px 0;padding:12px 14px;border-left:3px solid #334155;background:#f8fafc;"><strong>Note from Super Admin:</strong><br/>${escaped}</p>`,
+    textLines: ['Note from Super Admin:', text, '']
+  };
+}
+
+function buildPmEmail({ name, clients, dashboardUrl, remarks }) {
+  const note = remarksBlocks(remarks);
   const lines = [];
   const textLines = [
     `Hi ${name || 'there'},`,
     '',
+    ...note.textLines,
     'Here is your remaining onboarding work summary:',
     ''
   ];
@@ -125,19 +137,24 @@ function buildPmEmail({ name, clients, dashboardUrl }) {
     subject: 'Awign — remaining onboarding tasks',
     html: [
       `<p>Hi ${escapeHtml(name || 'there')},</p>`,
+      note.html,
       '<p>Here is your remaining onboarding work summary:</p>',
       ...lines,
       `<p style="margin-top:20px;"><a href="${escapeHtml(dashboardUrl)}">Open PM dashboard</a></p>`
-    ].join('\n'),
+    ]
+      .filter(Boolean)
+      .join('\n'),
     text: textLines.join('\n')
   };
 }
 
-function buildPlEmail({ name, clients, dashboardUrl }) {
+function buildPlEmail({ name, clients, dashboardUrl, remarks }) {
+  const note = remarksBlocks(remarks);
   const lines = [];
   const textLines = [
     `Hi ${name || 'there'},`,
     '',
+    ...note.textLines,
     'Here is your remaining payroll work summary:',
     ''
   ];
@@ -167,10 +184,13 @@ function buildPlEmail({ name, clients, dashboardUrl }) {
     subject: 'Awign — remaining payroll tasks',
     html: [
       `<p>Hi ${escapeHtml(name || 'there')},</p>`,
+      note.html,
       '<p>Here is your remaining payroll work summary:</p>',
       ...lines,
       `<p style="margin-top:20px;"><a href="${escapeHtml(dashboardUrl)}">Open payroll dashboard</a></p>`
-    ].join('\n'),
+    ]
+      .filter(Boolean)
+      .join('\n'),
     text: textLines.join('\n')
   };
 }
@@ -352,10 +372,10 @@ async function buildPlDigests(users) {
 }
 
 /**
- * @param {{ userIds?: string[] }} [options]
+ * @param {{ userIds?: string[], remarks?: string }} [options]
  * @returns {Promise<{ sent: number, skipped: number, failed: number, details: Array<object> }>}
  */
-export async function runRemainingTaskDigest({ userIds } = {}) {
+export async function runRemainingTaskDigest({ userIds, remarks } = {}) {
   let query = supabaseAdmin
     .from('users')
     .select('id, name, email, role')
@@ -364,6 +384,7 @@ export async function runRemainingTaskDigest({ userIds } = {}) {
   const filterIds = Array.isArray(userIds)
     ? [...new Set(userIds.map((id) => String(id || '').trim()).filter(Boolean))]
     : null;
+  const note = String(remarks ?? '').trim() || undefined;
 
   if (filterIds) {
     if (filterIds.length === 0) {
@@ -391,12 +412,14 @@ export async function runRemainingTaskDigest({ userIds } = {}) {
         ? buildPmEmail({
             name: digest.user.name,
             clients: digest.clients,
-            dashboardUrl: digest.dashboardUrl
+            dashboardUrl: digest.dashboardUrl,
+            remarks: note
           })
         : buildPlEmail({
             name: digest.user.name,
             clients: digest.clients,
-            dashboardUrl: digest.dashboardUrl
+            dashboardUrl: digest.dashboardUrl,
+            remarks: note
           });
 
     const result = await invokeResendEmail({

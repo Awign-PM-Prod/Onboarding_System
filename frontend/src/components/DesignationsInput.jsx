@@ -40,9 +40,8 @@ export default function DesignationsInput({ value = [], onChange }) {
   const [query, setQuery] = useState('');
   const [showOtherInput, setShowOtherInput] = useState(false);
   const [otherName, setOtherName] = useState('');
-  const [otherSkill, setOtherSkill] = useState('UNSKILLED');
+  const [otherSkill, setOtherSkill] = useState('SEMI_SKILLED');
   const [otherError, setOtherError] = useState('');
-  const [pendingSkillByName, setPendingSkillByName] = useState({});
   const rootRef = useRef(null);
   const otherInputRef = useRef(null);
 
@@ -77,7 +76,7 @@ export default function DesignationsInput({ value = [], onChange }) {
         setQuery('');
         setShowOtherInput(false);
         setOtherName('');
-        setOtherSkill('UNSKILLED');
+        setOtherSkill('SEMI_SKILLED');
         setOtherError('');
       }
     };
@@ -98,19 +97,19 @@ export default function DesignationsInput({ value = [], onChange }) {
       emit(selected.filter((t) => t.name !== name));
       return;
     }
-    const skill = normalizeSkillLevel(pendingSkillByName[name], 'UNSKILLED');
-    emit([...selected, { name, skill_level: skill }]);
+    emit([...selected, { name, skill_level: 'SEMI_SKILLED' }]);
   };
 
   const setSkill = (name, skill_level) => {
-    const skill = normalizeSkillLevel(skill_level, 'UNSKILLED');
+    const skill = normalizeSkillLevel(skill_level, 'SEMI_SKILLED');
     if (selectedSet.has(name)) {
       emit(
         selected.map((t) => (t.name === name ? { ...t, skill_level: skill } : t))
       );
       return;
     }
-    setPendingSkillByName((prev) => ({ ...prev, [name]: skill }));
+    // Choosing a skill also selects the designation (matches radio UX in list).
+    emit([...selected, { name, skill_level: skill }]);
   };
 
   const removeTag = (tagName) => {
@@ -131,9 +130,9 @@ export default function DesignationsInput({ value = [], onChange }) {
       setOtherError('This designation is already selected');
       return;
     }
-    emit([...selected, { name, skill_level: normalizeSkillLevel(otherSkill, 'UNSKILLED') }]);
+    emit([...selected, { name, skill_level: normalizeSkillLevel(otherSkill, 'SEMI_SKILLED') }]);
     setOtherName('');
-    setOtherSkill('UNSKILLED');
+    setOtherSkill('SEMI_SKILLED');
     setOtherError('');
     setShowOtherInput(false);
   };
@@ -208,9 +207,7 @@ export default function DesignationsInput({ value = [], onChange }) {
             {filtered.map((opt) => {
               const checked = selectedSet.has(opt);
               const current = selected.find((t) => t.name === opt);
-              const skillValue = current?.skill_level
-                || pendingSkillByName[opt]
-                || 'UNSKILLED';
+              const skillValue = checked ? (current?.skill_level || 'SEMI_SKILLED') : '';
               return (
                 <li key={opt} className="border-b border-slate-50 px-3 py-2 last:border-0">
                   <label className="flex cursor-pointer items-center gap-3 text-sm text-slate-800">
@@ -220,19 +217,26 @@ export default function DesignationsInput({ value = [], onChange }) {
                       onChange={() => toggle(opt)}
                       className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                     />
-                    <span className="flex-1">{formatDesignationLabel(opt)}</span>
+                    <span className="flex-1 font-medium">{formatDesignationLabel(opt)}</span>
                   </label>
-                  <div className="mt-1.5 pl-7">
-                    <select
-                      value={skillValue}
-                      onChange={(e) => setSkill(opt, e.target.value)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700"
-                    >
-                      {SKILL_LEVELS.map((s) => (
-                        <option key={s} value={s}>{SKILL_LEVEL_LABELS[s]}</option>
-                      ))}
-                    </select>
+                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 pl-7">
+                    {SKILL_LEVELS.map((s) => (
+                      <label
+                        key={s}
+                        className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-slate-700"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="radio"
+                          name={`skill-${opt}`}
+                          value={s}
+                          checked={skillValue === s}
+                          onChange={() => setSkill(opt, s)}
+                          className="h-3.5 w-3.5 border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span>{SKILL_LEVEL_LABELS[s]}</span>
+                      </label>
+                    ))}
                   </div>
                 </li>
               );
@@ -280,15 +284,24 @@ export default function DesignationsInput({ value = [], onChange }) {
                       placeholder="Enter designation name"
                       className="w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-indigo-300"
                     />
-                    <select
-                      value={otherSkill}
-                      onChange={(e) => setOtherSkill(e.target.value)}
-                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-700"
-                    >
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
                       {SKILL_LEVELS.map((s) => (
-                        <option key={s} value={s}>{SKILL_LEVEL_LABELS[s]}</option>
+                        <label
+                          key={s}
+                          className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-slate-700"
+                        >
+                          <input
+                            type="radio"
+                            name="other-designation-skill"
+                            value={s}
+                            checked={otherSkill === s}
+                            onChange={() => setOtherSkill(s)}
+                            className="h-3.5 w-3.5 border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span>{SKILL_LEVEL_LABELS[s]}</span>
+                        </label>
                       ))}
-                    </select>
+                    </div>
                     {otherError && <p className="text-xs text-red-600">{otherError}</p>}
                     <button
                       type="button"

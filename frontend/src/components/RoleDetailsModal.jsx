@@ -5,10 +5,13 @@ import { displayNumericValue } from '../lib/numericInput';
 import { api } from '../lib/api';
 import ModalOverlay from './ModalOverlay';
 import {
+  CUSHION_TYPE_LABELS,
   SKILL_LEVEL_LABELS,
   WAGE_ZONES,
   ZONE_LABELS,
+  applyCushion,
   designationNameOf,
+  normalizeCushionType,
   normalizeDesignationList,
   normalizeSkillLevel
 } from '../lib/wageConfig';
@@ -39,10 +42,14 @@ export default function RoleDetailsModal({
   showSendOnboardingOption = false,
   defaultState = '',
   zoneDependency = false,
+  cushionType = null,
+  cushionValue = null,
   onClose,
   onSubmit
 }) {
   const designationRows = useMemo(() => normalizeDesignationList(designations), [designations]);
+  const resolvedCushionType = normalizeCushionType(cushionType);
+  const hasCushion = Boolean(resolvedCushionType && cushionValue != null && cushionValue !== '');
 
   const [form, setForm] = useState(() => ({
     ...empty,
@@ -52,7 +59,7 @@ export default function RoleDetailsModal({
   }));
   const [fieldErrors, setFieldErrors] = useState({});
   const [sendOnboardingNow, setSendOnboardingNow] = useState(false);
-  const [minMonthlyCtc, setMinMonthlyCtc] = useState(null);
+  const [baseMinMonthlyCtc, setBaseMinMonthlyCtc] = useState(null);
   const [minLoading, setMinLoading] = useState(false);
 
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
@@ -68,11 +75,16 @@ export default function RoleDetailsModal({
 
   const lookupZone = zoneDependency ? form.zone || 'zone1' : 'zone1';
 
-  // Fetch wage CTC minimum and autofill when CTC (raise to at least min).
+  const effectiveFloor = useMemo(
+    () => applyCushion(baseMinMonthlyCtc, resolvedCushionType, cushionValue),
+    [baseMinMonthlyCtc, resolvedCushionType, cushionValue]
+  );
+
+  // Fetch wage CTC minimum; cushion is applied client-side for the effective floor.
   useEffect(() => {
     const state = form.state;
     if (!state || !INDIAN_STATES.includes(state) || !form.designation) {
-      setMinMonthlyCtc(null);
+      setBaseMinMonthlyCtc(null);
       return undefined;
     }
     let cancelled = false;
@@ -88,10 +100,10 @@ export default function RoleDetailsModal({
           data?.min_monthly_ctc != null && Number.isFinite(Number(data.min_monthly_ctc))
             ? Number(data.min_monthly_ctc)
             : null;
-        setMinMonthlyCtc(min);
+        setBaseMinMonthlyCtc(min);
       })
       .catch(() => {
-        if (!cancelled) setMinMonthlyCtc(null);
+        if (!cancelled) setBaseMinMonthlyCtc(null);
       })
       .finally(() => {
         if (!cancelled) setMinLoading(false);
@@ -101,12 +113,12 @@ export default function RoleDetailsModal({
     };
   }, [form.state, form.designation, lookupZone, selectedSkill]);
 
-  // When wage floor changes (zone / state / skill) or switching to CTC, set amount to the new min.
+  // When effective floor changes (zone / state / skill / cushion) or switching to CTC, set amount.
   useEffect(() => {
-    if (form.pay_type !== 'CTC' || minMonthlyCtc == null) return;
+    if (form.pay_type !== 'CTC' || effectiveFloor == null) return;
     setForm((f) => {
       if (f.pay_type !== 'CTC') return f;
-      const next = String(minMonthlyCtc);
+      const next = String(effectiveFloor);
       if (f.ctc_type === 'MONTHLY' && f.ctc_value === next) return f;
       return {
         ...f,
@@ -114,14 +126,14 @@ export default function RoleDetailsModal({
         ctc_value: next
       };
     });
-  }, [form.pay_type, minMonthlyCtc]);
+  }, [form.pay_type, effectiveFloor]);
 
   const monthlyEffective = effectiveMonthlyCtc(form.pay_type, form.ctc_type, form.ctc_value);
   const belowMin =
     !isNetPay &&
-    minMonthlyCtc != null &&
+    effectiveFloor != null &&
     monthlyEffective != null &&
-    monthlyEffective < minMonthlyCtc;
+    monthlyEffective < effectiveFloor;
 
   const validate = () => {
     const errors = {};
@@ -136,7 +148,7 @@ export default function RoleDetailsModal({
       errors.zone = 'Required';
     }
     if (belowMin) {
-      errors.ctc_value = `Must be at least ₹${minMonthlyCtc.toLocaleString('en-IN')} monthly CTC for ${form.state}`;
+      errors.ctc_value = `Must be at least ₹${Number(effectiveFloor).toLocaleString('en-IN')} monthly CTC for ${form.state}`;
     }
     return errors;
   };
@@ -307,10 +319,12 @@ export default function RoleDetailsModal({
             <p className={`text-xs ${belowMin ? 'text-rose-600' : 'text-slate-500'}`}>
               {minLoading
                 ? 'Loading minimum CTC…'
-                : minMonthlyCtc != null
-                  ? `Minimum monthly CTC for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}: ₹${minMonthlyCtc.toLocaleString('en-IN')}${
-                      belowMin ? ' — increase amount to enable Save' : ''
-                    }`
+                : baseMinMonthlyCtc != null && effectiveFloor != null
+                  ? hasCushion
+                    ? `Min ₹${baseMinMonthlyCtc.toLocaleString('en-IN')} + cushion (${CUSHION_TYPE_LABELS[resolvedCushionType] || resolvedCushionType}: ${cushionValue}${resolvedCushionType === 'PERCENTAGE' ? '%' : ''}) → ₹${Number(effectiveFloor).toLocaleString('en-IN')} for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}${belowMin ? ' — increase amount to enable Save' : ''}`
+                    : `Minimum monthly CTC for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}: ₹${Number(effectiveFloor).toLocaleString('en-IN')}${
+                        belowMin ? ' — increase amount to enable Save' : ''
+                      }`
                   : `No Super Admin minimum set for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}.`}
             </p>
           )}

@@ -132,6 +132,23 @@ export const api = {
   listProgramManagers: () => request('/api/program-managers'),
   createProgramManager: (payload) =>
     request('/api/program-managers', { method: 'POST', body: JSON.stringify(payload) }),
+  getStaffInvite: (token) =>
+    request(`/api/public/staff-auth/invite?token=${encodeURIComponent(token)}`),
+  setStaffPasswordFromInvite: (payload) =>
+    request('/api/public/staff-auth/set-password', {
+      method: 'POST',
+      body: JSON.stringify(payload || {})
+    }),
+  requestStaffPasswordReset: (payload) =>
+    request('/api/public/staff-auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify(payload || {})
+    }),
+  listPasswordResetRequests: (status = 'PENDING') => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    return request(`/api/super-admin/password-reset-requests?${q.toString()}`);
+  },
   listClients: () => request('/api/clients'),
   getClient: (id) => request(`/api/clients/${encodeURIComponent(id)}`),
   saveClientPolicy: (id, payload) =>
@@ -141,7 +158,14 @@ export const api = {
     }),
   listClientPolicyChanges: (id) =>
     request(`/api/clients/${encodeURIComponent(id)}/policy-changes`),
-  getPayrollDashboardStats: () => request('/api/clients/dashboard-stats'),
+  getPayrollDashboardStats: ({ from, to, client_id } = {}) => {
+    const q = new URLSearchParams();
+    if (from) q.set('from', from);
+    if (to) q.set('to', to);
+    if (client_id) q.set('client_id', client_id);
+    const qs = q.toString();
+    return request(`/api/clients/dashboard-stats${qs ? `?${qs}` : ''}`);
+  },
   downloadClientCsvTemplate: () => fileRequest('/api/clients/csv-template'),
   exportClientCsv: (id) =>
     fileRequest(`/api/clients/${encodeURIComponent(id)}/export`),
@@ -159,8 +183,57 @@ export const api = {
   listClientPmTransfers: (id) => request(`/api/clients/${id}/pm-transfers`),
 
   listPmClients: () => request('/api/pm/clients'),
-  getPmDashboardStats: () => request('/api/pm/clients/dashboard-stats'),
+  getPmDashboardStats: ({ from, to, client_id } = {}) => {
+    const q = new URLSearchParams();
+    if (from) q.set('from', from);
+    if (to) q.set('to', to);
+    if (client_id) q.set('client_id', client_id);
+    const qs = q.toString();
+    return request(`/api/pm/clients/dashboard-stats${qs ? `?${qs}` : ''}`);
+  },
   getPmJoiningStatusReminders: () => request('/api/pm/clients/joining-status-reminders'),
+  exportPmJoiningStatusReminder: ({ clientId, bucket = 'within_2_days' }) => {
+    const q = new URLSearchParams();
+    q.set('client_id', clientId);
+    q.set('bucket', bucket);
+    return fileRequest(`/api/pm/clients/joining-status-reminders/export?${q.toString()}`);
+  },
+  getPmDojExtendRequestUpdates: () => request('/api/pm/clients/doj-extend-request-updates'),
+  ackPmDojExtendRequestUpdates: (ids) =>
+    request('/api/pm/clients/doj-extend-request-updates/ack', {
+      method: 'POST',
+      body: JSON.stringify({ ids })
+    }),
+  sendPmBulkAlert: (payload) =>
+    request('/api/pm/alerts/send', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  requestDojExtend: ({ clientId, employeeId, reason }) =>
+    request(`/api/employees/${encodeURIComponent(employeeId)}/doj-extend-request`, {
+      method: 'POST',
+      body: JSON.stringify({
+        client_id: clientId,
+        reason: reason || null
+      })
+    }),
+  bulkRequestDojExtend: ({ clientId, employeeIds, reason }) =>
+    request('/api/employees/doj-extend-request/bulk', {
+      method: 'POST',
+      body: JSON.stringify({
+        client_id: clientId,
+        employee_ids: employeeIds,
+        reason: reason || null
+      })
+    }),
+  setExtendedDoj: ({ clientId, employeeId, dateOfJoining }) =>
+    request(`/api/employees/${encodeURIComponent(employeeId)}/extended-doj`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        client_id: clientId,
+        date_of_joining: dateOfJoining
+      })
+    }),
   listEmployees: (clientId) =>
     request(`/api/employees?client_id=${encodeURIComponent(clientId)}`),
   getEmployeeJobAppForm: ({ clientId, employeeId, payrollReview = false }) => {
@@ -406,7 +479,14 @@ export const api = {
   listAdminClients: () => request('/api/admin/clients'),
   getAdminComplianceStats: () => request('/api/admin/compliance-stats'),
 
-  getSuperAdminDashboardStats: () => request('/api/super-admin/dashboard-stats'),
+  getSuperAdminDashboardStats: ({ from, to, client_id } = {}) => {
+    const q = new URLSearchParams();
+    if (from) q.set('from', from);
+    if (to) q.set('to', to);
+    if (client_id) q.set('client_id', client_id);
+    const qs = q.toString();
+    return request(`/api/super-admin/dashboard-stats${qs ? `?${qs}` : ''}`);
+  },
   listSuperAdminClients: () => request('/api/super-admin/clients'),
   getSuperAdminClientEmployees: (clientId) =>
     request(`/api/super-admin/clients/${encodeURIComponent(clientId)}/employees`),
@@ -414,13 +494,15 @@ export const api = {
     const q = clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
     return fileRequest(`/api/super-admin/master-report${q}`);
   },
-  listSuperAdminActivity: ({ limit = 50, cursor, client_id, action, actor_role } = {}) => {
+  listSuperAdminActivity: ({ limit = 50, cursor, client_id, action, actor_role, from, to } = {}) => {
     const q = new URLSearchParams();
     if (limit) q.set('limit', String(limit));
     if (cursor) q.set('cursor', cursor);
     if (client_id) q.set('client_id', client_id);
     if (action) q.set('action', action);
     if (actor_role) q.set('actor_role', actor_role);
+    if (from) q.set('from', from);
+    if (to) q.set('to', to);
     const qs = q.toString();
     return request(`/api/super-admin/activity${qs ? `?${qs}` : ''}`);
   },
@@ -441,6 +523,16 @@ export const api = {
     request(`/api/super-admin/users/${encodeURIComponent(userId)}/password`, {
       method: 'POST',
       body: JSON.stringify(body || {})
+    }),
+  listSuperAdminDojExtendRequests: (status = 'PENDING') => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    return request(`/api/super-admin/doj-extend-requests?${q.toString()}`);
+  },
+  reviewSuperAdminDojExtendRequest: (requestId, { decision, note }) =>
+    request(`/api/super-admin/doj-extend-requests/${encodeURIComponent(requestId)}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ decision, note: note || null })
     }),
   getSalaryMinimumForState: (state, { zone, skill_level } = {}) => {
     const q = new URLSearchParams();

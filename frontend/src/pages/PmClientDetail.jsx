@@ -104,6 +104,16 @@ function canBulkSetInitialJoiningStatus(row) {
   return payrollApproved && pmApproved && !joiningStatus && changeCount === 0;
 }
 
+function canBulkRequestExtendDoj(row) {
+  const payrollApproved =
+    String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED';
+  const pmApproved = String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED';
+  const hasDoj = Boolean(String(row.date_of_joining ?? '').trim());
+  const unlocked = Boolean(row.doj_extend_unlock);
+  const pending = Boolean(row.doj_extend_request_pending);
+  return payrollApproved && pmApproved && hasDoj && !unlocked && !pending;
+}
+
 export default function PmClientDetail() {
   const { id, tab: tabSegment } = useParams();
   const navigate = useNavigate();
@@ -164,11 +174,18 @@ export default function PmClientDetail() {
   const [responsesExportLoading, setResponsesExportLoading] = useState(false);
   const [joiningBulkDate, setJoiningBulkDate] = useState('');
   const [joiningBulkLoading, setJoiningBulkLoading] = useState(false);
+  const [extendDojBulkReason, setExtendDojBulkReason] = useState('');
+  const [extendDojBulkLoading, setExtendDojBulkLoading] = useState(false);
   const [joiningInlineEmployeeId, setJoiningInlineEmployeeId] = useState(null);
   const [joiningInlineStatus, setJoiningInlineStatus] = useState('');
   const [joiningInlineDate, setJoiningInlineDate] = useState('');
   const [joiningInlineEmpCode, setJoiningInlineEmpCode] = useState('');
   const [joiningInlineLoading, setJoiningInlineLoading] = useState(false);
+  const [extendDojModalEmployee, setExtendDojModalEmployee] = useState(null);
+  const [extendDojReason, setExtendDojReason] = useState('');
+  const [extendDojLoading, setExtendDojLoading] = useState(false);
+  const [extendedDojDraftById, setExtendedDojDraftById] = useState({});
+  const [extendedDojSavingId, setExtendedDojSavingId] = useState(null);
   const [transferModalEmployee, setTransferModalEmployee] = useState(null);
   const [testingBulkTransferModalOpen, setTestingBulkTransferModalOpen] = useState(false);
   const [transferTargetClientId, setTransferTargetClientId] = useState('');
@@ -521,6 +538,7 @@ export default function PmClientDetail() {
     setTestingBulkTransferModalOpen(false);
     setJoiningBulkStatus('');
     setJoiningBulkDate('');
+    setExtendDojBulkReason('');
     setBulkRoleForceSendOnboarding(false);
     setTestingFormStatusFilter('');
     setTestingJoiningStatusFilter('');
@@ -934,10 +952,18 @@ export default function PmClientDetail() {
   };
 
   const closeTestingBulkJoiningModal = () => {
-    if (joiningBulkLoading) return;
+    if (joiningBulkLoading || extendDojBulkLoading) return;
     setTestingJoiningModalOpen(false);
     setJoiningBulkStatus('');
     setJoiningBulkDate('');
+    setExtendDojBulkReason('');
+  };
+
+  const resetTestingBulkJoiningModal = () => {
+    setTestingJoiningModalOpen(false);
+    setJoiningBulkStatus('');
+    setJoiningBulkDate('');
+    setExtendDojBulkReason('');
   };
 
   const handleTestingBulkJoiningStatus = async () => {
@@ -956,13 +982,54 @@ export default function PmClientDetail() {
           ? `${base} (${skipped} skipped — not PL Approved or status already set).`
           : base;
       },
-      onSuccess: () => closeTestingBulkJoiningModal(),
+      onSuccess: () => resetTestingBulkJoiningModal(),
     });
+  };
+
+  const handleTestingBulkExtendDoj = async () => {
+    if (selectedIds.size === 0 || extendDojBulkLoading || joiningBulkLoading) return;
+    const selectedRows = employees.filter((row) => selectedIds.has(row.id));
+    const eligibleRows = selectedRows.filter(canBulkRequestExtendDoj);
+    if (eligibleRows.length === 0) {
+      setError(
+        'None of the selected employees are eligible for Extend DOJ (need PL Approved, DOJ set, no pending/unlocked request).'
+      );
+      return;
+    }
+    const skipped = selectedRows.length - eligibleRows.length;
+    setExtendDojBulkLoading(true);
+    setError(null);
+    try {
+      const res = await api.bulkRequestDojExtend({
+        clientId: id,
+        employeeIds: eligibleRows.map((row) => row.id),
+        reason: extendDojBulkReason,
+      });
+      const failedCount = Array.isArray(res.failed) ? res.failed.length : 0;
+      const updated = Number(res.updated ?? 0);
+      let message = `Extend DOJ requested for ${updated} employee${updated === 1 ? '' : 's'}`;
+      if (skipped > 0) message += ` (${skipped} skipped)`;
+      if (failedCount > 0) message += `; ${failedCount} failed`;
+      setToast(message);
+      if (updated > 0) {
+        resetTestingBulkJoiningModal();
+        await softRefresh();
+      }
+    } catch (err) {
+      setError(err.message || 'Could not send Extend DOJ requests.');
+    } finally {
+      setExtendDojBulkLoading(false);
+    }
   };
 
   const testingBulkJoiningEligibleCount = useMemo(() => {
     if (!testingJoiningModalOpen) return 0;
     return employees.filter((row) => selectedIds.has(row.id) && canBulkSetInitialJoiningStatus(row)).length;
+  }, [employees, selectedIds, testingJoiningModalOpen]);
+
+  const testingBulkExtendDojEligibleCount = useMemo(() => {
+    if (!testingJoiningModalOpen) return 0;
+    return employees.filter((row) => selectedIds.has(row.id) && canBulkRequestExtendDoj(row)).length;
   }, [employees, selectedIds, testingJoiningModalOpen]);
 
   const startInlineJoiningEdit = (row) => {
@@ -1086,6 +1153,54 @@ export default function PmClientDetail() {
     setPageByTab((prev) => ({ ...prev, role_assigned: 1 }));
   };
 
+  const submitExtendDojRequest = async () => {
+    if (!extendDojModalEmployee || extendDojLoading) return;
+    setExtendDojLoading(true);
+    try {
+      await api.requestDojExtend({
+        clientId: id,
+        employeeId: extendDojModalEmployee.id,
+        reason: extendDojReason,
+      });
+      setToast(`Extend DOJ request sent for ${extendDojModalEmployee.name}. Waiting for Super Admin.`);
+      setExtendDojModalEmployee(null);
+      setExtendDojReason('');
+      await softRefresh();
+    } catch (err) {
+      setToast(err.message || 'Could not send Extend DOJ request.');
+    } finally {
+      setExtendDojLoading(false);
+    }
+  };
+
+  const saveExtendedDoj = async (row) => {
+    if (extendedDojSavingId) return;
+    const nextDate = String(extendedDojDraftById[row.id] ?? '').trim();
+    if (!nextDate) {
+      setToast('Select a new Extended DOJ.');
+      return;
+    }
+    setExtendedDojSavingId(row.id);
+    try {
+      await api.setExtendedDoj({
+        clientId: id,
+        employeeId: row.id,
+        dateOfJoining: nextDate,
+      });
+      setToast(`Extended DOJ saved for ${row.name}. Joining status cleared.`);
+      setExtendedDojDraftById((prev) => {
+        const next = { ...prev };
+        delete next[row.id];
+        return next;
+      });
+      await softRefresh();
+    } catch (err) {
+      setToast(err.message || 'Could not save Extended DOJ.');
+    } finally {
+      setExtendedDojSavingId(null);
+    }
+  };
+
   const transferTargetProjects = useMemo(
     () => pmClients.filter((pmClient) => pmClient.id !== id),
     [pmClients, id]
@@ -1097,6 +1212,13 @@ export default function PmClientDetail() {
     const canSecondStageAbscond = changeCount < 3 && status === 'JOINED_OTHER_DATE';
     const inTestingEmployees = activeTab === 'testing' && testingSubtab === 'employees';
     const isPayrollApprovedRow = String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED';
+    const isPmApprovedRow = String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED';
+    const canRequestExtendContext =
+      ((activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') || (inTestingEmployees && isPayrollApprovedRow)) &&
+      isPayrollApprovedRow &&
+      isPmApprovedRow;
+    const unlock = Boolean(row.doj_extend_unlock);
+    const pendingExtend = Boolean(row.doj_extend_request_pending);
     const canInlineEdit =
       ((activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') || (inTestingEmployees && isPayrollApprovedRow)) &&
       (
@@ -1104,7 +1226,61 @@ export default function PmClientDetail() {
         (changeCount < 2 && (status === 'JOINED' || status === 'JOINED_OTHER_DATE' || status === 'NOT_JOINED')) ||
         canSecondStageAbscond
       );
-    if (!canInlineEdit) return defaultLabel(row);
+
+    const extendControls = canRequestExtendContext ? (
+      <div className="mt-1.5 flex flex-col gap-1.5 border-t border-slate-100 pt-1.5">
+        {unlock ? (
+          <>
+            <label className="text-[11px] font-medium text-amber-800">Extended DOJ (editable once)</label>
+            <input
+              type="date"
+              value={extendedDojDraftById[row.id] ?? ''}
+              onChange={(e) =>
+                setExtendedDojDraftById((prev) => ({ ...prev, [row.id]: e.target.value }))
+              }
+              className="w-full rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300"
+            />
+            <button
+              type="button"
+              onClick={() => saveExtendedDoj(row)}
+              disabled={extendedDojSavingId === row.id}
+              className="self-start rounded bg-amber-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {extendedDojSavingId === row.id ? 'Saving…' : 'Save Extended DOJ'}
+            </button>
+          </>
+        ) : pendingExtend ? (
+          <span className="inline-flex w-fit rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
+            Extend DOJ pending
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setExtendDojModalEmployee(row);
+              setExtendDojReason('');
+            }}
+            className="self-start rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Request Extend DOJ
+          </button>
+        )}
+        {!unlock && (
+          <p className="text-[10px] text-slate-500">
+            Current DOJ: {row.date_of_joining || '—'}
+          </p>
+        )}
+      </div>
+    ) : null;
+
+    if (!canInlineEdit) {
+      return (
+        <div className="min-w-[220px]">
+          <div>{defaultLabel(row)}</div>
+          {extendControls}
+        </div>
+      );
+    }
 
     const currentValue = joiningInlineEmployeeId === row.id ? joiningInlineStatus : status;
     const currentDate = joiningInlineEmployeeId === row.id
@@ -1204,6 +1380,7 @@ export default function PmClientDetail() {
             {joiningInlineLoading ? 'Saving...' : 'Save'}
           </button>
         )}
+        {extendControls}
       </div>
     );
   };
@@ -2053,6 +2230,7 @@ export default function PmClientDetail() {
                     value={joiningBulkStatus}
                     onChange={(e) => setJoiningBulkStatus(e.target.value)}
                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    disabled={joiningBulkLoading || extendDojBulkLoading}
                   >
                     <option value="">Select status</option>
                     <option value="NOT_JOINED">Not Joined</option>
@@ -2066,24 +2244,59 @@ export default function PmClientDetail() {
               <div className="mt-5 flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={closeTestingBulkJoiningModal}
-                  disabled={joiningBulkLoading}
-                  className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
                   onClick={handleTestingBulkJoiningStatus}
                   disabled={
                     testingBulkJoiningEligibleCount === 0 ||
                     !joiningBulkStatus ||
-                    joiningBulkLoading
+                    joiningBulkLoading ||
+                    extendDojBulkLoading
                   }
                   className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {joiningBulkLoading ? 'Updating...' : 'Update joining status'}
                 </button>
+              </div>
+
+              <div className="mt-6 border-t border-slate-200 pt-5">
+                <h4 className="text-sm font-semibold text-slate-900">Request Extend DOJ</h4>
+                <p className="mt-1 text-sm text-slate-600">
+                  Applies to {testingBulkExtendDojEligibleCount} selected employee
+                  {testingBulkExtendDojEligibleCount === 1 ? '' : 's'} at PL Approved stage with DOJ set and no
+                  pending/unlocked request. Others in the selection will be skipped.
+                </p>
+                <label className="mt-3 mb-1 block text-xs font-medium text-slate-600">
+                  Reason (optional, applied to all)
+                </label>
+                <textarea
+                  value={extendDojBulkReason}
+                  onChange={(e) => setExtendDojBulkReason(e.target.value)}
+                  rows={2}
+                  disabled={joiningBulkLoading || extendDojBulkLoading}
+                  placeholder="Why do these employees need an extended joining date?"
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:opacity-60"
+                />
+                <div className="mt-4 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeTestingBulkJoiningModal}
+                    disabled={joiningBulkLoading || extendDojBulkLoading}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleTestingBulkExtendDoj}
+                    disabled={
+                      testingBulkExtendDojEligibleCount === 0 ||
+                      joiningBulkLoading ||
+                      extendDojBulkLoading
+                    }
+                    className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {extendDojBulkLoading ? 'Sending…' : 'Request Extend DOJ'}
+                  </button>
+                </div>
               </div>
             </div>
           </ModalOverlay>
@@ -2099,6 +2312,8 @@ export default function PmClientDetail() {
             designations={client?.designations ?? []}
             defaultState={client?.state ?? ''}
             zoneDependency={Boolean(client?.zone_dependency)}
+            cushionType={client?.cushion_type ?? null}
+            cushionValue={client?.cushion_value ?? null}
             submitting={roleDetailsLoading}
             showSendOnboardingOption={!bulkRoleForceSendOnboarding}
             onClose={handleBulkRoleModalClose}
@@ -2112,6 +2327,8 @@ export default function PmClientDetail() {
             designations={client?.designations ?? []}
             defaultState={client?.state ?? ''}
             zoneDependency={Boolean(client?.zone_dependency)}
+            cushionType={client?.cushion_type ?? null}
+            cushionValue={client?.cushion_value ?? null}
             submitting={roleDetailsLoading}
             onClose={() => setRowRoleModalEmployee(null)}
             onSubmit={handleSingleRoleDetails}
@@ -2268,6 +2485,58 @@ export default function PmClientDetail() {
             </div>
           </ModalOverlay>
         )}
+
+        {extendDojModalEmployee && (
+          <ModalOverlay
+            onClose={() => {
+              if (extendDojLoading) return;
+              setExtendDojModalEmployee(null);
+              setExtendDojReason('');
+            }}
+            backdropClassName="bg-slate-900/50"
+          >
+            <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl">
+              <h3 className="text-lg font-semibold text-slate-900">Request Extend DOJ</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Super Admin will approve or reject this request for{' '}
+                <span className="font-medium text-slate-900">{extendDojModalEmployee.name}</span>.
+                Current DOJ: {extendDojModalEmployee.date_of_joining || '—'}.
+              </p>
+              <label className="mt-4 mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Reason (optional)
+              </label>
+              <textarea
+                value={extendDojReason}
+                onChange={(e) => setExtendDojReason(e.target.value)}
+                rows={3}
+                placeholder="Why does this employee need an extended joining date?"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={extendDojLoading}
+                  onClick={() => {
+                    setExtendDojModalEmployee(null);
+                    setExtendDojReason('');
+                  }}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={extendDojLoading}
+                  onClick={submitExtendDojRequest}
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+                >
+                  {extendDojLoading ? 'Sending…' : 'Send request'}
+                </button>
+              </div>
+            </div>
+          </ModalOverlay>
+        )}
+
         <EmployeeFormResponseModal
           open={responseModalOpen}
           onClose={closeResponseModal}

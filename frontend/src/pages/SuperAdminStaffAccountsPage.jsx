@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import ModalOverlay from '../components/ModalOverlay';
+import { ACTION_BTN_PRIMARY } from '../lib/actionButtonStyles';
 
 function roleLabel(role) {
   if (role === 'PROGRAM_MANAGER') return 'Program Manager';
@@ -8,8 +10,20 @@ function roleLabel(role) {
   return role || '—';
 }
 
+function formatRequestedAt(value) {
+  if (!value) return '—';
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return String(value);
+  }
+}
+
 export default function SuperAdminStaffAccountsPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
+  const [pendingRequests, setPendingRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -25,11 +39,16 @@ export default function SuperAdminStaffAccountsPage() {
     setLoading(true);
     setError('');
     try {
-      const data = await api.listSuperAdminStaffUsers();
-      setUsers(Array.isArray(data) ? data : []);
+      const [staff, requests] = await Promise.all([
+        api.listSuperAdminStaffUsers(),
+        api.listPasswordResetRequests('PENDING')
+      ]);
+      setUsers(Array.isArray(staff) ? staff : []);
+      setPendingRequests(Array.isArray(requests) ? requests : []);
     } catch (err) {
       setError(err.message || 'Could not load staff accounts.');
       setUsers([]);
+      setPendingRequests([]);
     } finally {
       setLoading(false);
     }
@@ -38,6 +57,14 @@ export default function SuperAdminStaffAccountsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (location.state?.inviteSent) {
+      const email = location.state.inviteEmail || 'the Program Manager';
+      setSuccess(`Invite sent to ${email}. They can set their name and password from the email link.`);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -80,13 +107,21 @@ export default function SuperAdminStaffAccountsPage() {
 
     setSaving(true);
     try {
-      await api.resetSuperAdminStaffPassword(resetUser.id, { password, confirmPassword });
+      const result = await api.resetSuperAdminStaffPassword(resetUser.id, {
+        password,
+        confirmPassword,
+        sendEmail: true
+      });
+      const emailed = Boolean(result?.emailed);
       setSuccess(
-        `Password updated for ${resetUser.name}. Share the new password with them securely.`
+        emailed
+          ? `Password updated for ${resetUser.name || resetUser.email} and emailed to them.`
+          : `Password updated for ${resetUser.name || resetUser.email}. Email could not be sent — share the password securely.`
       );
       setResetUser(null);
       setPassword('');
       setConfirmPassword('');
+      await load();
     } catch (err) {
       setModalError(err.message || 'Could not reset password.');
     } finally {
@@ -100,18 +135,26 @@ export default function SuperAdminStaffAccountsPage() {
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Staff Accounts</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Reset login passwords for Program Managers and Payroll Leads. Share the new password with
-            the user outside the app.
+            Invite Program Managers by email and fulfill password reset requests for Program Managers
+            and Payroll Leads.
           </p>
         </div>
-        <div className="w-full sm:w-64">
-          <input
-            type="search"
-            placeholder="Search by name or email…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
+        <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
+          <div className="min-w-0 flex-1 sm:w-64 sm:flex-none">
+            <input
+              type="search"
+              placeholder="Search by name or email…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+          <Link
+            to="/super-admin/staff-accounts/new"
+            className={ACTION_BTN_PRIMARY}
+          >
+            Invite Program Manager
+          </Link>
         </div>
       </div>
 
@@ -133,6 +176,58 @@ export default function SuperAdminStaffAccountsPage() {
       {success && !loading && (
         <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
           {success}
+        </div>
+      )}
+
+      {!loading && !error && pendingRequests.length > 0 && (
+        <div className="mb-6 overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-3">
+            <h2 className="text-sm font-semibold text-amber-950">
+              Pending password reset requests ({pendingRequests.length})
+            </h2>
+            <p className="mt-0.5 text-xs text-amber-800">
+              Set a new password and email it to the requester.
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="px-4 py-2.5 text-left font-medium">Name</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Email</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Role</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Requested</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pendingRequests.map((req) => (
+                  <tr key={req.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 font-medium text-slate-900">{req.name || '—'}</td>
+                    <td className="px-4 py-3 text-slate-700">{req.email}</td>
+                    <td className="px-4 py-3 text-slate-700">{roleLabel(req.role)}</td>
+                    <td className="px-4 py-3 text-slate-700">{formatRequestedAt(req.requested_at)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openReset({
+                            id: req.user_id,
+                            name: req.name,
+                            email: req.email,
+                            role: req.role
+                          })
+                        }
+                        className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100"
+                      >
+                        Reset &amp; send
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -191,8 +286,9 @@ export default function SuperAdminStaffAccountsPage() {
           <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
             <h2 className="text-lg font-semibold text-slate-900">Reset password</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Set a new password for <span className="font-medium text-slate-800">{resetUser.name}</span>{' '}
-              ({resetUser.email}). Share it with them securely after saving.
+              Set a new password for{' '}
+              <span className="font-medium text-slate-800">{resetUser.name || resetUser.email}</span> (
+              {resetUser.email}). It will be emailed to them after you save.
             </p>
 
             <form onSubmit={handleReset} className="mt-4 space-y-3">
@@ -246,7 +342,7 @@ export default function SuperAdminStaffAccountsPage() {
                   disabled={saving}
                   className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
                 >
-                  {saving ? 'Saving…' : 'Save password'}
+                  {saving ? 'Saving…' : 'Save and send password'}
                 </button>
               </div>
             </form>

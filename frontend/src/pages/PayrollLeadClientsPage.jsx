@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWorkspacePaths } from '../context/WorkspaceBasePath';
+import { ACTION_BTN_PRIMARY, ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
 import { formatContractPeriod } from '../lib/clientCsv';
 import ClientCsvImportModal from '../components/ClientCsvImportModal';
 
@@ -59,16 +60,6 @@ export default function PayrollLeadClientsPage() {
     load();
   }, []);
 
-  const downloadTemplate = async () => {
-    setActionError('');
-    try {
-      const blob = await api.downloadClientCsvTemplate();
-      downloadBlob(blob, 'client-creation-template.csv');
-    } catch (err) {
-      setActionError(err.message || 'Could not download CSV template.');
-    }
-  };
-
   const exportClient = async (client) => {
     setExportingId(client.id);
     setActionError('');
@@ -125,28 +116,21 @@ export default function PayrollLeadClientsPage() {
               type="button"
               onClick={handleDownloadMaster}
               disabled={downloadingMaster || loading}
-              className="inline-flex shrink-0 items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+              className={ACTION_BTN_SECONDARY}
             >
               {downloadingMaster ? 'Downloading…' : 'Master report'}
             </button>
           )}
           <button
             type="button"
-            onClick={downloadTemplate}
-            className="inline-flex shrink-0 items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            CSV Template
-          </button>
-          <button
-            type="button"
             onClick={() => setShowImport(true)}
-            className="inline-flex shrink-0 items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+            className={ACTION_BTN_SECONDARY}
           >
             Import CSV
           </button>
           <Link
             to={paths.clientNew}
-            className="inline-flex shrink-0 items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700"
+            className={ACTION_BTN_PRIMARY}
           >
             Add Client
           </Link>

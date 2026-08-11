@@ -62,3 +62,30 @@ export function normalizeDesignationList(list) {
 export function designationNamesFrom(list) {
   return normalizeDesignationList(list).map((d) => d.name);
 }
+
+export const CUSHION_TYPES = ['ABSOLUTE', 'PERCENTAGE'];
+
+export const CUSHION_TYPE_LABELS = {
+  ABSOLUTE: 'Absolute (₹)',
+  PERCENTAGE: 'Percentage (%)'
+};
+
+export function normalizeCushionType(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const t = String(raw).trim().toUpperCase();
+  return CUSHION_TYPES.includes(t) ? t : null;
+}
+
+/** Effective CTC floor = min + cushion (absolute ₹ or % of min). */
+export function applyCushion(minCtc, cushionType, cushionValue) {
+  if (minCtc == null) return null;
+  const min = Number(minCtc);
+  if (!Number.isFinite(min)) return null;
+  const type = normalizeCushionType(cushionType);
+  if (!type) return min;
+  const val = Number(cushionValue);
+  if (!Number.isFinite(val) || val < 0) return min;
+  if (type === 'ABSOLUTE') return min + val;
+  if (type === 'PERCENTAGE') return min + (min * val) / 100;
+  return min;
+}

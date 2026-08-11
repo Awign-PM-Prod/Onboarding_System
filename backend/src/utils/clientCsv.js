@@ -1,6 +1,10 @@
 import Papa from 'papaparse';
 import { normalizeAttendancePolicy } from './clientPolicyCore.js';
-import { designationNameOf, normalizeSkillLevel } from './wageConfig.js';
+import {
+  designationNameOf,
+  normalizeCushionType,
+  normalizeSkillLevel
+} from './wageConfig.js';
 
 export const CLIENT_CSV_HEADERS = [
   // Core client
@@ -17,6 +21,8 @@ export const CLIENT_CSV_HEADERS = [
   'insurance_amount',
   'designations',
   'zone_dependency',
+  'cushion_type',
+  'cushion_value',
   'require_license_upload',
   'require_qualification_certificate_upload',
   // Project configuration — payroll cycle
@@ -250,6 +256,14 @@ export function csvRowToClientPayload(row) {
       true
     ),
     zone_dependency: parseBool(cell(row, 'zone_dependency'), false),
+    ...(() => {
+      const typeRaw = cell(row, 'cushion_type');
+      const valueRaw = cell(row, 'cushion_value');
+      if (!typeRaw && !valueRaw) return { cushion_type: null, cushion_value: null };
+      const cushion_type = normalizeCushionType(typeRaw);
+      const cushion_value = valueRaw === '' ? null : parseNumber(valueRaw, null);
+      return { cushion_type: cushion_type || null, cushion_value };
+    })(),
     designations,
     attendance_policy,
     leave_allowances: buildLeaveAllowances(designations, row),
@@ -298,6 +312,8 @@ export function buildClientTemplateCsv() {
     insurance_amount: '',
     designations: 'Technician:SKILLED;Supervisor:SEMI_SKILLED',
     zone_dependency: 'false',
+    cushion_type: '',
+    cushion_value: '',
     require_license_upload: 'true',
     require_qualification_certificate_upload: 'true',
     payroll_cycle_start_day: '25',
@@ -360,6 +376,8 @@ export function clientToExportRow(client) {
     insurance_amount: client?.insurance_amount ?? '',
     designations: encodeDesignations(client?.designations),
     zone_dependency: boolStr(Boolean(client?.zone_dependency)),
+    cushion_type: client?.cushion_type ?? '',
+    cushion_value: client?.cushion_value ?? '',
     require_license_upload: boolStr(client?.require_license_upload !== false),
     require_qualification_certificate_upload:
       boolStr(client?.require_qualification_certificate_upload !== false),

@@ -5,7 +5,7 @@ const AWIGN_SMS_URL = "https://core-api.awign.com/api/v1/sms/to_number";
 const TEMPLATE_ID = "1107160412653314461";
 const SENDER_ID = "IAWIGN";
 const CHANNEL = "telspiel_product";
-const CALLER_ID = "inviadda";
+const CALLER_ID = "staffing_go";
 /** Fixed Awign SMS app identifiers (not secrets) — same as curl example headers. */
 const AWIGN_SMS_CLIENT = "6Ok5D1iEP4zcV8S25HJmNA";
 const AWIGN_SMS_UID = "110986717252553637625";

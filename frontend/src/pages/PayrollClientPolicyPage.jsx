@@ -155,6 +155,8 @@ export default function PayrollClientPolicyPage() {
             require_license_upload: client.require_license_upload !== false,
             require_qualification_certificate_upload: client.require_qualification_certificate_upload !== false,
             zone_dependency: Boolean(client.zone_dependency),
+            cushion_type: client.cushion_type ?? null,
+            cushion_value: client.cushion_value ?? null,
             designations,
             ...policyBody
           });

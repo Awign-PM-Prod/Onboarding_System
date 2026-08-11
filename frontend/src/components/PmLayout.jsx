@@ -42,31 +42,316 @@ function IconCalendar({ className }) {
   );
 }
 
-function JoiningStatusReminderModal({ title, rows, onClose, onNext }) {
+function IconBulkAlerts({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
+      />
+    </svg>
+  );
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function JoiningStatusReminderModal({
+  title,
+  rows: initialRows,
+  bucket,
+  onClose,
+  onNext,
+  onRefresh,
+}) {
+  const [rows, setRows] = useState(() =>
+    (initialRows ?? []).map((r) => ({
+      ...r,
+      employees: Array.isArray(r.employees) ? r.employees : [],
+    }))
+  );
+  const [empCodes, setEmpCodes] = useState({});
+  const [extendReasons, setExtendReasons] = useState({});
+  const [busyKey, setBusyKey] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [expandedClients, setExpandedClients] = useState(() =>
+    new Set((initialRows ?? []).map((r) => r.client_id))
+  );
+
+  useEffect(() => {
+    setRows(
+      (initialRows ?? []).map((r) => ({
+        ...r,
+        employees: Array.isArray(r.employees) ? r.employees : [],
+      }))
+    );
+    setExpandedClients(new Set((initialRows ?? []).map((r) => r.client_id)));
+  }, [initialRows]);
+
+  const removeEmployeeLocally = (clientId, employeeId) => {
+    setRows((prev) =>
+      prev
+        .map((clientRow) => {
+          if (clientRow.client_id !== clientId) return clientRow;
+          const employees = (clientRow.employees ?? []).filter((e) => e.id !== employeeId);
+          return {
+            ...clientRow,
+            employees,
+            employee_count: employees.length,
+          };
+        })
+        .filter((clientRow) => (clientRow.employees ?? []).length > 0)
+    );
+  };
+
+  const markPendingExtendLocally = (clientId, employeeId) => {
+    setRows((prev) =>
+      prev.map((clientRow) => {
+        if (clientRow.client_id !== clientId) return clientRow;
+        return {
+          ...clientRow,
+          employees: (clientRow.employees ?? []).map((e) =>
+            e.id === employeeId ? { ...e, doj_extend_request_pending: true } : e
+          ),
+        };
+      })
+    );
+  };
+
+  const runAction = async (key, fn) => {
+    if (busyKey) return;
+    setBusyKey(key);
+    setActionError('');
+    try {
+      await fn();
+      if (typeof onRefresh === 'function') onRefresh();
+    } catch (err) {
+      setActionError(err?.message || 'Action failed.');
+    } finally {
+      setBusyKey('');
+    }
+  };
+
+  const handleMarkJoined = (clientId, emp) => {
+    const empCode = String(empCodes[emp.id] ?? emp.emp_code ?? '').trim();
+    if (!empCode) {
+      setActionError(`Enter Emp Code for ${emp.name || 'employee'} before marking Joined.`);
+      return;
+    }
+    return runAction(`joined:${emp.id}`, async () => {
+      await api.setJoiningStatus({
+        clientId,
+        employeeId: emp.id,
+        joiningStatus: 'JOINED',
+        empCode,
+      });
+      removeEmployeeLocally(clientId, emp.id);
+    });
+  };
+
+  const handleMarkNotJoined = (clientId, emp) =>
+    runAction(`not-joined:${emp.id}`, async () => {
+      await api.setJoiningStatus({
+        clientId,
+        employeeId: emp.id,
+        joiningStatus: 'NOT_JOINED',
+      });
+      removeEmployeeLocally(clientId, emp.id);
+    });
+
+  const handleRequestExtend = (clientId, emp) =>
+    runAction(`extend:${emp.id}`, async () => {
+      await api.requestDojExtend({
+        clientId,
+        employeeId: emp.id,
+        reason: extendReasons[emp.id] || null,
+      });
+      markPendingExtendLocally(clientId, emp.id);
+    });
+
+  const handleExport = (clientId, clientName) =>
+    runAction(`export:${clientId}`, async () => {
+      const blob = await api.exportPmJoiningStatusReminder({ clientId, bucket });
+      const safe = String(clientName || 'client').replace(/[^\w-]+/g, '_').slice(0, 40);
+      downloadBlob(blob, `joining-reminder-${bucket}-${safe}.csv`);
+    });
+
+  const toggleExpanded = (clientId) => {
+    setExpandedClients((prev) => {
+      const next = new Set(prev);
+      if (next.has(clientId)) next.delete(clientId);
+      else next.add(clientId);
+      return next;
+    });
+  };
+
   return (
     <ModalOverlay onClose={onClose} backdropClassName="bg-slate-900/50">
-      <div className="w-full max-w-2xl rounded-xl bg-white p-5 shadow-2xl">
+      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-xl bg-white p-5 shadow-2xl">
         <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
-        <p className="mt-1 text-sm text-slate-600">Please update their status after confirmations.</p>
-        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-700">
-              <tr>
-                <th className="px-4 py-2 text-left font-medium">Client Name</th>
-                <th className="px-4 py-2 text-left font-medium">Expected Date of Joining</th>
-                <th className="px-4 py-2 text-left font-medium">Number of employees</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-              {rows.map((row) => (
-                <tr key={`${row.client_id}-${row.doj_label}`}>
-                  <td className="px-4 py-2 text-slate-800">{row.client_name}</td>
-                  <td className="px-4 py-2 text-slate-700">{row.doj_label}</td>
-                  <td className="px-4 py-2 text-slate-700">{row.employee_count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <p className="mt-1 text-sm text-slate-600">
+          Mark joining status or request Extend DOJ for each pending employee.
+        </p>
+        {actionError ? (
+          <p className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            {actionError}
+          </p>
+        ) : null}
+        <div className="mt-4 min-h-0 flex-1 overflow-y-auto rounded-lg border border-slate-200">
+          {rows.length === 0 ? (
+            <p className="px-4 py-6 text-center text-sm text-slate-500">No pending employees left in this reminder.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {rows.map((row) => {
+                const expanded = expandedClients.has(row.client_id);
+                const employees = row.employees ?? [];
+                return (
+                  <li key={`${row.client_id}-${row.doj_label}`} className="bg-white">
+                    <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(row.client_id)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <p className="font-medium text-slate-900">{row.client_name}</p>
+                        <p className="text-xs text-slate-500">
+                          {row.doj_label} · {employees.length} employee{employees.length === 1 ? '' : 's'}
+                        </p>
+                      </button>
+                      {employees.length > 1 ? (
+                        <button
+                          type="button"
+                          disabled={Boolean(busyKey)}
+                          onClick={() => handleExport(row.client_id, row.client_name)}
+                          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {busyKey === `export:${row.client_id}` ? 'Exporting…' : 'Export'}
+                        </button>
+                      ) : null}
+                    </div>
+                    {expanded ? (
+                      <div className="space-y-3 border-t border-slate-100 bg-slate-50/70 px-4 py-3">
+                        {employees.map((emp) => {
+                          const pendingExtend = Boolean(emp.doj_extend_request_pending);
+                          const unlocked = Boolean(emp.doj_extend_unlock);
+                          const empBusy =
+                            busyKey === `joined:${emp.id}` ||
+                            busyKey === `not-joined:${emp.id}` ||
+                            busyKey === `extend:${emp.id}`;
+                          return (
+                            <div
+                              key={emp.id}
+                              className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="font-medium text-slate-900">{emp.name || 'Employee'}</p>
+                                  <p className="text-xs text-slate-500">
+                                    DOJ {emp.date_of_joining || '—'}
+                                    {emp.mobile ? ` · ${emp.mobile}` : ''}
+                                    {emp.reference_id ? ` · ${emp.reference_id}` : ''}
+                                  </p>
+                                  {pendingExtend ? (
+                                    <p className="mt-1 text-xs font-medium text-amber-700">
+                                      Extend DOJ request pending
+                                    </p>
+                                  ) : null}
+                                  {unlocked ? (
+                                    <p className="mt-1 text-xs font-medium text-amber-700">
+                                      DOJ unlocked — set Extended DOJ on the client page
+                                    </p>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
+                                <div className="min-w-[160px] flex-1">
+                                  <label className="mb-1 block text-[11px] font-medium text-slate-600">
+                                    Emp Code (for Joined)
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={empCodes[emp.id] ?? emp.emp_code ?? ''}
+                                    onChange={(e) =>
+                                      setEmpCodes((prev) => ({ ...prev, [emp.id]: e.target.value }))
+                                    }
+                                    disabled={Boolean(busyKey)}
+                                    placeholder="StaffingGo Emp Code"
+                                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:opacity-60"
+                                  />
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={Boolean(busyKey)}
+                                    onClick={() => handleMarkJoined(row.client_id, emp)}
+                                    className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                                  >
+                                    {busyKey === `joined:${emp.id}` ? 'Saving…' : 'Mark Joined'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={Boolean(busyKey)}
+                                    onClick={() => handleMarkNotJoined(row.client_id, emp)}
+                                    className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                  >
+                                    {busyKey === `not-joined:${emp.id}` ? 'Saving…' : 'Not Joined'}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end">
+                                <div className="min-w-0 flex-1">
+                                  <label className="mb-1 block text-[11px] font-medium text-slate-600">
+                                    Extend DOJ reason (optional)
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={extendReasons[emp.id] ?? ''}
+                                    onChange={(e) =>
+                                      setExtendReasons((prev) => ({
+                                        ...prev,
+                                        [emp.id]: e.target.value,
+                                      }))
+                                    }
+                                    disabled={Boolean(busyKey) || pendingExtend || unlocked}
+                                    placeholder="Why extend DOJ?"
+                                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:opacity-60"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={Boolean(busyKey) || pendingExtend || unlocked}
+                                  onClick={() => handleRequestExtend(row.client_id, emp)}
+                                  className="rounded-md bg-amber-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {busyKey === `extend:${emp.id}`
+                                    ? 'Sending…'
+                                    : pendingExtend
+                                      ? 'Request pending'
+                                      : 'Request Extend DOJ'}
+                                </button>
+                              </div>
+                              {empBusy ? (
+                                <p className="mt-2 text-[11px] text-slate-500">Working…</p>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
         <div className="mt-5 flex items-center justify-end gap-2">
           <button
@@ -98,9 +383,12 @@ export default function PmLayout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [clients, setClients] = useState([]);
-  const [joiningReminderToday, setJoiningReminderToday] = useState([]);
+  const [joiningReminderWithin, setJoiningReminderWithin] = useState([]);
   const [joiningReminderOverdue, setJoiningReminderOverdue] = useState([]);
   const [joiningReminderStep, setJoiningReminderStep] = useState('');
+  const [dojDecisionUpdates, setDojDecisionUpdates] = useState([]);
+  const [dojDecisionAcking, setDojDecisionAcking] = useState(false);
+  const joiningReminderDismissedRef = useRef(false);
   const mainScrollRef = useRef(null);
 
   const pathname = location.pathname;
@@ -149,27 +437,87 @@ export default function PmLayout() {
     }
   }, [clientId]);
 
+  const joiningReminderLoadRef = useRef(null);
+
   useEffect(() => {
     let cancelled = false;
+
     const loadJoiningReminders = async () => {
       try {
         const payload = await api.getPmJoiningStatusReminders();
         if (cancelled) return;
-        const todayRows = Array.isArray(payload?.today) ? payload.today : [];
+        const withinRows = Array.isArray(payload?.within_2_days)
+          ? payload.within_2_days
+          : Array.isArray(payload?.today)
+            ? payload.today
+            : [];
         const overdueRows = Array.isArray(payload?.overdue) ? payload.overdue : [];
-        setJoiningReminderToday(todayRows);
+        setJoiningReminderWithin(withinRows);
         setJoiningReminderOverdue(overdueRows);
-        if (todayRows.length > 0) setJoiningReminderStep('today');
-        else if (overdueRows.length > 0) setJoiningReminderStep('overdue');
+        if (!joiningReminderDismissedRef.current) {
+          if (withinRows.length > 0) setJoiningReminderStep('within');
+          else if (overdueRows.length > 0) setJoiningReminderStep('overdue');
+          else setJoiningReminderStep('');
+        } else if (withinRows.length === 0 && overdueRows.length === 0) {
+          joiningReminderDismissedRef.current = false;
+          setJoiningReminderStep('');
+        }
       } catch {
         // Non-blocking: PM navigation should continue even if reminder fetch fails.
       }
     };
-    loadJoiningReminders();
+    joiningReminderLoadRef.current = loadJoiningReminders;
+
+    const loadDojDecisionUpdates = async () => {
+      try {
+        const payload = await api.getPmDojExtendRequestUpdates();
+        if (cancelled) return;
+        const updates = Array.isArray(payload?.updates) ? payload.updates : [];
+        setDojDecisionUpdates(updates);
+      } catch {
+        // Non-blocking
+      }
+    };
+
+    const refreshAll = () => {
+      loadJoiningReminders();
+      loadDojDecisionUpdates();
+    };
+
+    refreshAll();
+    const onFocus = () => refreshAll();
+    window.addEventListener('focus', onFocus);
+    const intervalId = window.setInterval(refreshAll, 90_000);
+
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(intervalId);
     };
+  }, [pathname]);
+
+  const refreshJoiningReminders = useCallback(() => {
+    joiningReminderLoadRef.current?.();
   }, []);
+
+  const dismissJoiningReminder = () => {
+    joiningReminderDismissedRef.current = true;
+    setJoiningReminderStep('');
+    refreshJoiningReminders();
+  };
+
+  const ackDojDecisions = async () => {
+    if (dojDecisionUpdates.length === 0) return;
+    setDojDecisionAcking(true);
+    try {
+      await api.ackPmDojExtendRequestUpdates(dojDecisionUpdates.map((u) => u.id));
+      setDojDecisionUpdates([]);
+    } catch {
+      // Keep modal open so PM can retry
+    } finally {
+      setDojDecisionAcking(false);
+    }
+  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -193,6 +541,14 @@ export default function PmLayout() {
       label: 'Clients',
       active: clientsRailActive,
       icon: <IconClients className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
+      id: 'bulk-alerts',
+      to: '/pm-dashboard/bulk-alerts',
+      label: 'Bulk Alerts',
+      active: pathname.startsWith('/pm-dashboard/bulk-alerts'),
+      icon: <IconBulkAlerts className="h-full w-full" />,
       onClick: () => setPanelOpenPersist(false)
     }
   ];
@@ -308,19 +664,61 @@ export default function PmLayout() {
         </div>
       </div>
 
-      {joiningReminderStep === 'today' && joiningReminderToday.length > 0 && (
+      {dojDecisionUpdates.length > 0 && (
+        <ModalOverlay onClose={ackDojDecisions} backdropClassName="bg-slate-900/50">
+          <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-900">Extend DOJ request update</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Super Admin responded to your Extend DOJ request(s).
+            </p>
+            <ul className="mt-4 max-h-64 space-y-3 overflow-y-auto">
+              {dojDecisionUpdates.map((u) => (
+                <li key={u.id} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                  <p className="font-medium text-slate-900">
+                    {u.employee_name} · {u.client_name}
+                  </p>
+                  <p className="mt-0.5 text-slate-700">
+                    {u.status === 'APPROVED'
+                      ? 'Approved — you can edit Extended DOJ once for this employee.'
+                      : 'Rejected — DOJ remains locked for this employee.'}
+                  </p>
+                  {u.review_note ? (
+                    <p className="mt-1 text-slate-500">Note: {u.review_note}</p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={ackDojDecisions}
+                disabled={dojDecisionAcking}
+                className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {dojDecisionAcking ? 'Saving…' : 'Got it'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {dojDecisionUpdates.length === 0 && joiningReminderStep === 'within' && joiningReminderWithin.length > 0 && (
         <JoiningStatusReminderModal
-          title="Joining Status Update Reminder (DOJ - Today)"
-          rows={joiningReminderToday}
-          onClose={() => setJoiningReminderStep('')}
+          title="Joining Status Update Reminder (Within 2 working days of DOJ)"
+          rows={joiningReminderWithin}
+          bucket="within_2_days"
+          onClose={dismissJoiningReminder}
+          onRefresh={refreshJoiningReminders}
           onNext={joiningReminderOverdue.length > 0 ? () => setJoiningReminderStep('overdue') : null}
         />
       )}
-      {joiningReminderStep === 'overdue' && joiningReminderOverdue.length > 0 && (
+      {dojDecisionUpdates.length === 0 && joiningReminderStep === 'overdue' && joiningReminderOverdue.length > 0 && (
         <JoiningStatusReminderModal
           title="Joining Status Update Reminder (DOJ - Overdue)"
           rows={joiningReminderOverdue}
-          onClose={() => setJoiningReminderStep('')}
+          bucket="overdue"
+          onClose={dismissJoiningReminder}
+          onRefresh={refreshJoiningReminders}
           onNext={null}
         />
       )}

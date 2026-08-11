@@ -23,7 +23,8 @@ import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 import {
   designationNameOf,
   normalizeSkillLevel,
-  normalizedDesignationRows
+  normalizedDesignationRows,
+  parseClientCushion
 } from '../utils/wageConfig.js';
 import { canAccessClientAsLead, isSuperAdminRole, loadUserRole } from '../utils/roleAccess.js';
 
@@ -172,6 +173,10 @@ function validateClientPayload(body) {
       && typeof body.zone_dependency !== 'boolean') {
     errors.zone_dependency = 'must be boolean';
   }
+  const cushionParsed = parseClientCushion(body);
+  if (cushionParsed.error) {
+    errors.cushion_value = cushionParsed.error;
+  }
   if (body.insurance_applicable === true) {
     if (!body.insurance_name || !String(body.insurance_name).trim()) {
       errors.insurance_name = 'required when insurance is applicable';
@@ -253,6 +258,11 @@ function buildClientCorePayload(body, { includeCreatedBy = false, createdBy } = 
     require_qualification_certificate_upload: body.require_qualification_certificate_upload,
     zone_dependency: body.zone_dependency === true
   };
+  const cushion = parseClientCushion(body);
+  if (!cushion.error) {
+    payload.cushion_type = cushion.cushion_type;
+    payload.cushion_value = cushion.cushion_value;
+  }
   if (includeCreatedBy) payload.created_by = createdBy;
   return payload;
 }
@@ -432,11 +442,29 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// GET /api/clients/dashboard-stats
+// Optional query: from, to (YYYY-MM-DD) — scopes to employees created in that inclusive range.
+// Optional query: client_id — restrict stats to a single accessible client.
 router.get('/dashboard-stats', async (req, res, next) => {
   try {
     const user = await loadUserRole(req.user.id);
     if (!user) return res.status(403).json({ error: 'User profile not found' });
     req.user.role = user.role;
+
+    const fromRaw = String(req.query.from ?? '').trim();
+    const toRaw = String(req.query.to ?? '').trim();
+    const filterClientId = String(req.query.client_id ?? '').trim() || null;
+    const isoDay = /^\d{4}-\d{2}-\d{2}$/;
+    if (fromRaw && !isoDay.test(fromRaw)) {
+      return res.status(400).json({ error: 'from must be YYYY-MM-DD.' });
+    }
+    if (toRaw && !isoDay.test(toRaw)) {
+      return res.status(400).json({ error: 'to must be YYYY-MM-DD.' });
+    }
+    if (fromRaw && toRaw && fromRaw > toRaw) {
+      return res.status(400).json({ error: 'from must be on or before to.' });
+    }
+    const dateFiltered = Boolean(fromRaw || toRaw);
 
     let clientsQuery = supabaseAdmin
       .from('clients')
@@ -444,6 +472,9 @@ router.get('/dashboard-stats', async (req, res, next) => {
       .order('client_name', { ascending: true });
     if (!isSuperAdminRole(user.role)) {
       clientsQuery = clientsQuery.eq('created_by', req.user.id);
+    }
+    if (filterClientId) {
+      clientsQuery = clientsQuery.eq('id', filterClientId);
     }
     const { data: clients, error: cErr } = await clientsQuery;
     if (cErr) throw cErr;
@@ -454,13 +485,23 @@ router.get('/dashboard-stats', async (req, res, next) => {
     }
 
     const clientIds = clientRows.map((c) => c.id);
-    const { data: employees, error: eErr } = await supabaseAdmin
+    const clientIdSet = new Set(clientIds);
+
+    let empQuery = supabaseAdmin
       .from('employees')
-      .select('id, client_id, onboarding_initiated')
-      .in('client_id', clientIds);
+      .select('id, client_id, onboarding_initiated, created_at');
+    if (dateFiltered) {
+      if (fromRaw) empQuery = empQuery.gte('created_at', `${fromRaw}T00:00:00.000Z`);
+      if (toRaw) empQuery = empQuery.lte('created_at', `${toRaw}T23:59:59.999Z`);
+      if (filterClientId) empQuery = empQuery.eq('client_id', filterClientId);
+    } else {
+      empQuery = empQuery.in('client_id', clientIds);
+    }
+
+    const { data: employees, error: eErr } = await empQuery;
     if (eErr) throw eErr;
 
-    const employeeRows = employees ?? [];
+    const employeeRows = (employees ?? []).filter((e) => clientIdSet.has(e.client_id));
     const employeeIds = employeeRows.map((e) => e.id);
     const formMap = new Map();
     if (employeeIds.length > 0) {
@@ -474,6 +515,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
       }
     }
 
+    const clientsWithEmployees = new Set();
     const byClient = new Map(
       clientRows.map((c) => [
         c.id,
@@ -489,14 +531,19 @@ router.get('/dashboard-stats', async (req, res, next) => {
     for (const employee of employeeRows) {
       const current = byClient.get(employee.client_id);
       if (!current) continue;
+      clientsWithEmployees.add(employee.client_id);
       const form = formMap.get(employee.id);
       applyDashboardCounts(current, employee, form);
       applyDashboardCounts(totals, employee, form);
     }
 
+    const resultClients = dateFiltered
+      ? clientRows.filter((c) => clientsWithEmployees.has(c.id)).map((c) => byClient.get(c.id))
+      : clientRows.map((c) => byClient.get(c.id));
+
     return res.json({
       totals,
-      clients: clientRows.map((c) => byClient.get(c.id))
+      clients: resultClients
     });
   } catch (err) {
     next(err);

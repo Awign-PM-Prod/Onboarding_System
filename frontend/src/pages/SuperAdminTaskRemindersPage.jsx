@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api';
 
 const SCOPES = [
@@ -14,14 +14,28 @@ function roleLabel(role) {
   return role || '—';
 }
 
+const INITIAL_FORM = {
+  scopeKey: 'all',
+  userId: '',
+  clientId: '',
+  remarks: ''
+};
+
 export default function SuperAdminTaskRemindersPage() {
   const [recipients, setRecipients] = useState([]);
+  const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  const [formError, setFormError] = useState('');
   const [result, setResult] = useState(null);
-  const [scopeKey, setScopeKey] = useState('all');
-  const [userId, setUserId] = useState('');
+  const [scopeKey, setScopeKey] = useState(INITIAL_FORM.scopeKey);
+  const [userId, setUserId] = useState(INITIAL_FORM.userId);
+  const [clientId, setClientId] = useState(INITIAL_FORM.clientId);
+  const [remarks, setRemarks] = useState(INITIAL_FORM.remarks);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRootRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,8 +43,13 @@ export default function SuperAdminTaskRemindersPage() {
       setLoading(true);
       setError('');
       try {
-        const data = await api.listDigestRecipients();
-        if (!cancelled) setRecipients(Array.isArray(data) ? data : []);
+        const [recipientRows, clientRows] = await Promise.all([
+          api.listDigestRecipients(),
+          api.listClients()
+        ]);
+        if (cancelled) return;
+        setRecipients(Array.isArray(recipientRows) ? recipientRows : []);
+        setClients(Array.isArray(clientRows) ? clientRows : []);
       } catch (err) {
         if (!cancelled) setError(err.message || 'Could not load recipients.');
       } finally {
@@ -42,45 +61,173 @@ export default function SuperAdminTaskRemindersPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!searchOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (searchRootRef.current && !searchRootRef.current.contains(event.target)) {
+        setSearchOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [searchOpen]);
+
+  const clientsWithPm = useMemo(
+    () =>
+      [...clients]
+        .filter((c) => c?.id)
+        .sort((a, b) =>
+          String(a.client_name || '').localeCompare(String(b.client_name || ''))
+        ),
+    [clients]
+  );
+
+  const selectedClient = useMemo(
+    () => clientsWithPm.find((c) => c.id === clientId) || null,
+    [clientsWithPm, clientId]
+  );
+
+  const selectedRecipient = useMemo(
+    () => recipients.find((r) => r.id === userId) || null,
+    [recipients, userId]
+  );
+
+  const searchOptions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const clientOpts = clientsWithPm
+      .filter((c) => {
+        if (!q) return true;
+        const hay = [
+          c.client_name,
+          c.contract_code,
+          c.program_manager_name,
+          c.program_manager?.name
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return hay.includes(q);
+      })
+      .slice(0, 20)
+      .map((c) => ({
+        key: `client:${c.id}`,
+        kind: 'client',
+        id: c.id,
+        title: c.client_name || 'Unnamed client',
+        subtitle: [
+          c.contract_code,
+          c.program_manager_name || c.program_manager?.name
+            ? `PM: ${c.program_manager_name || c.program_manager?.name}`
+            : 'No PM'
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      }));
+
+    const recipientOpts = recipients
+      .filter((r) => {
+        if (!q) return true;
+        const hay = [r.name, r.email, roleLabel(r.role)].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      })
+      .slice(0, 20)
+      .map((r) => ({
+        key: `user:${r.id}`,
+        kind: 'user',
+        id: r.id,
+        title: r.name || r.email || 'Unnamed user',
+        subtitle: [r.email, roleLabel(r.role)].filter(Boolean).join(' · ')
+      }));
+
+    return [...clientOpts, ...recipientOpts];
+  }, [clientsWithPm, recipients, searchQuery]);
+
+  const selectionLabel = useMemo(() => {
+    if (selectedClient) {
+      const pmName =
+        selectedClient.program_manager_name ||
+        selectedClient.program_manager?.name ||
+        selectedRecipient?.name ||
+        null;
+      return pmName
+        ? `${selectedClient.client_name} → ${pmName}`
+        : selectedClient.client_name;
+    }
+    if (selectedRecipient) {
+      return `${selectedRecipient.name} — ${selectedRecipient.email} (${roleLabel(selectedRecipient.role)})`;
+    }
+    if (userId) {
+      return 'Assigned Program Manager (not in digest list)';
+    }
+    return '';
+  }, [selectedClient, selectedRecipient, userId]);
+
+  const resetForm = () => {
+    setScopeKey(INITIAL_FORM.scopeKey);
+    setUserId(INITIAL_FORM.userId);
+    setClientId(INITIAL_FORM.clientId);
+    setRemarks(INITIAL_FORM.remarks);
+    setSearchQuery('');
+    setSearchOpen(false);
+    setFormError('');
+  };
+
+  const clearSelection = () => {
+    setUserId('');
+    setClientId('');
+    setSearchQuery('');
+    setFormError('');
+  };
+
+  const applySearchOption = (opt) => {
+    setFormError('');
+    setSearchOpen(false);
+    setSearchQuery('');
+
+    if (opt.kind === 'client') {
+      setClientId(opt.id);
+      const client = clientsWithPm.find((c) => c.id === opt.id);
+      const pmId = client?.program_manager_id || client?.program_manager?.id || '';
+      if (!pmId) {
+        setUserId('');
+        setFormError('Selected client has no Program Manager assigned.');
+        return;
+      }
+      setUserId(pmId);
+      return;
+    }
+
+    setClientId('');
+    setUserId(opt.id);
+  };
+
   const buildPayload = () => {
     if (scopeKey === 'all') return { scope: 'all' };
     if (scopeKey === 'role_pm') return { scope: 'role', role: 'PROGRAM_MANAGER' };
     if (scopeKey === 'role_pl') return { scope: 'role', role: 'PAYROLL_LEAD' };
-    return { scope: 'user', userId };
-  };
-
-  const confirmMessage = () => {
-    if (scopeKey === 'all') {
-      return 'Send remaining-task digests to all Program Managers and Payroll Leads who have pending work?';
-    }
-    if (scopeKey === 'role_pm') {
-      return 'Send remaining-task digests to all Program Managers who have pending work?';
-    }
-    if (scopeKey === 'role_pl') {
-      return 'Send remaining-task digests to all Payroll Leads who have pending work?';
-    }
-    const user = recipients.find((r) => r.id === userId);
-    const label = user ? `${user.name} (${user.email})` : 'the selected user';
-    return `Send a remaining-task digest to ${label} if they have pending work?`;
+    const payload = { scope: 'user', userId };
+    const trimmed = remarks.trim();
+    if (trimmed) payload.remarks = trimmed;
+    return payload;
   };
 
   const handleSend = async () => {
+    setFormError('');
     setError('');
     setResult(null);
 
     if (scopeKey === 'user' && !userId) {
-      setError('Select a Program Manager or Payroll Lead.');
+      setFormError('Select a Program Manager or Payroll Lead.');
       return;
     }
-
-    if (!window.confirm(confirmMessage())) return;
 
     setSending(true);
     try {
       const data = await api.triggerRemainingTaskDigest(buildPayload());
       setResult(data);
+      resetForm();
     } catch (err) {
-      setError(err.message || 'Could not send digests.');
+      setFormError(err.message || 'Could not send digests.');
     } finally {
       setSending(false);
     }
@@ -100,79 +247,171 @@ export default function SuperAdminTaskRemindersPage() {
         </p>
       </div>
 
-      {loading && (
-        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-500 shadow-sm">
-          Loading recipients…
-        </div>
-      )}
-
       {error && (
         <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
           {error}
         </div>
       )}
 
+      {loading && (
+        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-500 shadow-sm">
+          Loading recipients…
+        </div>
+      )}
+
       {!loading && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <fieldset className="space-y-3">
-            <legend className="text-sm font-medium text-slate-900">Who should receive digests?</legend>
-            {SCOPES.map((opt) => (
-              <label
-                key={opt.value}
-                className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 px-3 py-2.5 hover:bg-slate-50"
-              >
-                <input
-                  type="radio"
-                  name="digest-scope"
-                  className="mt-1"
-                  checked={scopeKey === opt.value}
-                  onChange={() => {
-                    setScopeKey(opt.value);
-                    setResult(null);
-                    setError('');
-                  }}
-                />
-                <span className="text-sm text-slate-800">{opt.label}</span>
-              </label>
-            ))}
+          <h2 className="text-base font-semibold text-slate-900">Who should receive digests?</h2>
+
+          <fieldset className="mt-4 space-y-3">
+            <legend className="sr-only">Digest recipients</legend>
+            {SCOPES.map((opt) => {
+              const selected = scopeKey === opt.value;
+              return (
+                <label
+                  key={opt.value}
+                  className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 ${
+                    selected
+                      ? 'border-blue-600 bg-blue-50/40'
+                      : 'border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="digest-scope"
+                    className="mt-1 accent-blue-600"
+                    checked={selected}
+                    onChange={() => {
+                      setScopeKey(opt.value);
+                      setFormError('');
+                      if (opt.value !== 'user') {
+                        setUserId('');
+                        setClientId('');
+                        setRemarks('');
+                        setSearchQuery('');
+                        setSearchOpen(false);
+                      }
+                    }}
+                  />
+                  <span className="text-sm text-slate-800">{opt.label}</span>
+                </label>
+              );
+            })}
           </fieldset>
 
           {scopeKey === 'user' && (
-            <div className="mt-5 space-y-3 border-t border-slate-100 pt-5">
-              <label className="block text-sm font-medium text-slate-900" htmlFor="user-select">
-                Recipient
-              </label>
-              <select
-                id="user-select"
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-              >
-                <option value="">Select a user…</option>
-                {recipients.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} — {r.email} ({roleLabel(r.role)})
-                  </option>
-                ))}
-              </select>
-              {recipients.length === 0 && (
-                <p className="text-sm text-slate-500">No Program Managers or Payroll Leads available.</p>
-              )}
+            <div className="mt-5 space-y-4">
+              <div ref={searchRootRef} className="relative">
+                <label className="block text-sm font-medium text-slate-700" htmlFor="user-search">
+                  Search client or recipient
+                </label>
+                <input
+                  id="user-search"
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setSearchOpen(true);
+                  }}
+                  onFocus={() => setSearchOpen(true)}
+                  placeholder="Search by client, PM, or Payroll Lead…"
+                  autoComplete="off"
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+                {searchOpen && (
+                  <div className="absolute z-20 mt-1 max-h-72 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                    {searchOptions.length === 0 ? (
+                      <p className="px-3 py-2.5 text-sm text-slate-500">No matches found.</p>
+                    ) : (
+                      <ul className="py-1">
+                        {searchOptions.map((opt) => (
+                          <li key={opt.key}>
+                            <button
+                              type="button"
+                              onClick={() => applySearchOption(opt)}
+                              className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-slate-50"
+                            >
+                              <span className="mt-0.5 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                {opt.kind === 'client' ? 'Client' : 'Recipient'}
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block text-sm font-medium text-slate-800">
+                                  {opt.title}
+                                </span>
+                                {opt.subtitle && (
+                                  <span className="block text-xs text-slate-500">{opt.subtitle}</span>
+                                )}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                <p className="mt-1 text-xs text-slate-500">
+                  Pick a client to target their Program Manager, or pick a recipient directly.
+                </p>
+                {selectionLabel && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    <span>
+                      Selected: <span className="font-medium">{selectionLabel}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearSelection}
+                      className="text-xs font-medium text-blue-600 hover:text-blue-700"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+                {recipients.length === 0 && clientsWithPm.length === 0 && (
+                  <p className="mt-1 text-sm text-slate-500">
+                    No clients or digest recipients available.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor="remarks">
+                  Remarks
+                </label>
+                <textarea
+                  id="remarks"
+                  rows={4}
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  placeholder="Add remarks..."
+                  maxLength={2000}
+                  className="mt-1.5 w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
             </div>
           )}
 
-          <div className="mt-6 flex flex-wrap items-center gap-3">
+          {formError && (
+            <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              {formError}
+            </div>
+          )}
+
+          <div className="mt-6 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={resetForm}
+              disabled={sending}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
             <button
               type="button"
               onClick={handleSend}
               disabled={sending || (scopeKey === 'user' && !userId)}
-              className="inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {sending ? 'Sending…' : 'Send digests'}
+              {sending ? 'Sending…' : 'Send'}
             </button>
-            <p className="text-xs text-slate-500">
-              {recipients.length} recipient{recipients.length === 1 ? '' : 's'} available
-            </p>
           </div>
         </div>
       )}

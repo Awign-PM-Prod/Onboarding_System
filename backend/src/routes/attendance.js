@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { supabaseAdmin } from '../supabase.js';
-import { parseAmsAttendanceCsv } from '../utils/amsAttendanceParser.js';
+import { parseAmsAttendanceCsv, normalizeEmployeeStatus } from '../utils/amsAttendanceParser.js';
 import { parseIncentiveBulkCsv } from '../utils/incentiveBulkParser.js';
 import {
   isValidAttendanceCode,
@@ -99,6 +99,11 @@ function buildDayMarkChangeMessage(empCode, changes, maxLen = 500) {
 
 function buildRowFieldChangeMessage(empCode, beforeFields, rowUpdate) {
   const parts = [];
+  if (beforeFields.status_label !== rowUpdate.status_label) {
+    parts.push(
+      `status ${formatMarkLabel(beforeFields.status_label)}→${formatMarkLabel(rowUpdate.status_label)}`
+    );
+  }
   if (beforeFields.addon_incentive !== rowUpdate.addon_incentive) {
     parts.push(`addon incentive ${formatMarkLabel(beforeFields.addon_incentive)}→${formatMarkLabel(rowUpdate.addon_incentive)}`);
   }
@@ -1075,6 +1080,7 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
       if (!row) continue;
 
       const beforeFields = {
+        status_label: row.status_label,
         incentive: row.incentive,
         addon_incentive: row.addon_incentive,
         arrear_days: row.arrear_days,
@@ -1117,6 +1123,15 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
       }
 
       const rowUpdate = { updated_at: new Date().toISOString() };
+      if (change.status_label !== undefined) {
+        const raw = change.status_label;
+        if (raw === null || raw === '') {
+          rowUpdate.status_label = null;
+        } else {
+          const normalized = normalizeEmployeeStatus(raw);
+          if (normalized) rowUpdate.status_label = normalized;
+        }
+      }
       if (change.addon_incentive !== undefined) {
         const n = change.addon_incentive === null || change.addon_incentive === ''
           ? null
@@ -1175,7 +1190,8 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
       if (totErr) throw totErr;
 
       const fieldChanged =
-        (change.addon_incentive !== undefined && beforeFields.addon_incentive !== rowUpdate.addon_incentive)
+        ('status_label' in rowUpdate && beforeFields.status_label !== rowUpdate.status_label)
+        || (change.addon_incentive !== undefined && beforeFields.addon_incentive !== rowUpdate.addon_incentive)
         || (change.arrear_days !== undefined && beforeFields.arrear_days !== rowUpdate.arrear_days)
         || (change.remarks !== undefined && beforeFields.remarks !== rowUpdate.remarks);
 
@@ -1200,6 +1216,9 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
           actorRole: access.user.role,
           beforeJson: beforeFields,
           afterJson: {
+            status_label: 'status_label' in rowUpdate
+              ? rowUpdate.status_label
+              : beforeFields.status_label,
             addon_incentive: rowUpdate.addon_incentive !== undefined
               ? rowUpdate.addon_incentive
               : beforeFields.addon_incentive,
@@ -1209,6 +1228,9 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
             remarks: rowUpdate.remarks !== undefined ? rowUpdate.remarks : beforeFields.remarks
           },
           message: buildRowFieldChangeMessage(row.emp_code, beforeFields, {
+            status_label: 'status_label' in rowUpdate
+              ? rowUpdate.status_label
+              : beforeFields.status_label,
             addon_incentive: rowUpdate.addon_incentive !== undefined
               ? rowUpdate.addon_incentive
               : beforeFields.addon_incentive,

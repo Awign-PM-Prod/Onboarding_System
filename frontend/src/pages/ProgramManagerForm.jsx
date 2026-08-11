@@ -1,51 +1,33 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 
-const emptyForm = {
-  name: '',
-  email: '',
-  password: '',
-  confirmPassword: ''
-};
+const STAFF_ACCOUNTS_LIST = '/super-admin/staff-accounts';
 
 export default function ProgramManagerForm() {
   const navigate = useNavigate();
+  const location = useLocation();
   const paths = useWorkspacePaths();
-  const [form, setForm] = useState(emptyForm);
+  const fromStaffAccounts = location.pathname.startsWith(STAFF_ACCOUNTS_LIST);
+  const listPath = fromStaffAccounts ? STAFF_ACCOUNTS_LIST : paths.programManagers;
+  const backLabel = fromStaffAccounts ? '← Back to Staff Accounts' : '← Back to Program Managers';
+  const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [fieldErrors, setFieldErrors] = useState({});
-
-  const setField = (key, value) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
-    setFieldErrors((prev) => {
-      if (!prev[key]) return prev;
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-  };
+  const [fieldError, setFieldError] = useState('');
 
   const validate = () => {
-    const errs = {};
-    if (!form.name.trim()) errs.name = 'Name is required';
-    if (!form.email.trim()) {
-      errs.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
-      errs.email = 'Enter a valid email';
+    if (!email.trim()) {
+      setFieldError('Email is required');
+      return false;
     }
-    if (!form.password) {
-      errs.password = 'Password is required';
-    } else if (form.password.length < 6) {
-      errs.password = 'Password must be at least 6 characters';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setFieldError('Enter a valid email');
+      return false;
     }
-    if (form.password !== form.confirmPassword) {
-      errs.confirmPassword = 'Passwords do not match';
-    }
-    setFieldErrors(errs);
-    return Object.keys(errs).length === 0;
+    setFieldError('');
+    return true;
   };
 
   const onSubmit = async (e) => {
@@ -56,13 +38,11 @@ export default function ProgramManagerForm() {
     setSubmitting(true);
     try {
       await api.createProgramManager({
-        name: form.name.trim(),
-        email: form.email.trim().toLowerCase(),
-        password: form.password
+        email: email.trim().toLowerCase()
       });
-      navigate(paths.programManagers, { replace: true });
+      navigate(listPath, { replace: true, state: { inviteSent: true, inviteEmail: email.trim().toLowerCase() } });
     } catch (err) {
-      setError(err.message || 'Could not create program manager.');
+      setError(err.message || 'Could not send invite.');
     } finally {
       setSubmitting(false);
     }
@@ -74,18 +54,14 @@ export default function ProgramManagerForm() {
   return (
     <main className="mx-auto max-w-xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6">
-        <Link
-          to={paths.programManagers}
-          className="text-sm font-medium text-indigo-700 hover:underline"
-        >
-          ← Back to Program Managers
+        <Link to={listPath} className="text-sm font-medium text-indigo-700 hover:underline">
+          {backLabel}
         </Link>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-          Add Program Manager
+          Invite Program Manager
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Create a login account. Share the email and password with the Program Manager so they can
-          sign in.
+          Enter their email. They will receive a link to set their name and password.
         </p>
       </div>
 
@@ -100,23 +76,6 @@ export default function ProgramManagerForm() {
         className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"
       >
         <div>
-          <label htmlFor="pm-name" className="block text-sm font-medium text-slate-700">
-            Name
-          </label>
-          <input
-            id="pm-name"
-            type="text"
-            autoComplete="name"
-            value={form.name}
-            onChange={(e) => setField('name', e.target.value)}
-            className={inputClass}
-          />
-          {fieldErrors.name && (
-            <p className="mt-1 text-xs text-rose-600">{fieldErrors.name}</p>
-          )}
-        </div>
-
-        <div>
           <label htmlFor="pm-email" className="block text-sm font-medium text-slate-700">
             Email
           </label>
@@ -124,52 +83,19 @@ export default function ProgramManagerForm() {
             id="pm-email"
             type="email"
             autoComplete="email"
-            value={form.email}
-            onChange={(e) => setField('email', e.target.value)}
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (fieldError) setFieldError('');
+            }}
             className={inputClass}
           />
-          {fieldErrors.email && (
-            <p className="mt-1 text-xs text-rose-600">{fieldErrors.email}</p>
-          )}
-        </div>
-
-        <div>
-          <label htmlFor="pm-password" className="block text-sm font-medium text-slate-700">
-            Password
-          </label>
-          <input
-            id="pm-password"
-            type="password"
-            autoComplete="new-password"
-            value={form.password}
-            onChange={(e) => setField('password', e.target.value)}
-            className={inputClass}
-          />
-          {fieldErrors.password && (
-            <p className="mt-1 text-xs text-rose-600">{fieldErrors.password}</p>
-          )}
-        </div>
-
-        <div>
-          <label htmlFor="pm-confirm" className="block text-sm font-medium text-slate-700">
-            Confirm password
-          </label>
-          <input
-            id="pm-confirm"
-            type="password"
-            autoComplete="new-password"
-            value={form.confirmPassword}
-            onChange={(e) => setField('confirmPassword', e.target.value)}
-            className={inputClass}
-          />
-          {fieldErrors.confirmPassword && (
-            <p className="mt-1 text-xs text-rose-600">{fieldErrors.confirmPassword}</p>
-          )}
+          {fieldError && <p className="mt-1 text-xs text-rose-600">{fieldError}</p>}
         </div>
 
         <div className="flex items-center justify-end gap-3 pt-2">
           <Link
-            to={paths.programManagers}
+            to={listPath}
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
           >
             Cancel
@@ -179,7 +105,7 @@ export default function ProgramManagerForm() {
             disabled={submitting}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60"
           >
-            {submitting ? 'Creating…' : 'Create Program Manager'}
+            {submitting ? 'Sending…' : 'Send invite'}
           </button>
         </div>
       </form>

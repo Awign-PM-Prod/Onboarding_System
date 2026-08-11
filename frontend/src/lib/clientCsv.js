@@ -3,7 +3,11 @@ import {
   DEFAULT_ATTENDANCE_POLICY,
   normalizeAttendancePolicyForForm
 } from './clientPolicy';
-import { designationNameOf, normalizeSkillLevel } from './wageConfig';
+import {
+  designationNameOf,
+  normalizeCushionType,
+  normalizeSkillLevel
+} from './wageConfig';
 
 export const CLIENT_CSV_HEADERS = [
   'client_name',
@@ -19,6 +23,8 @@ export const CLIENT_CSV_HEADERS = [
   'insurance_amount',
   'designations',
   'zone_dependency',
+  'cushion_type',
+  'cushion_value',
   'require_license_upload',
   'require_qualification_certificate_upload',
   'payroll_cycle_start_day',
@@ -276,6 +282,19 @@ export function csvRowToClientForm(row, programManagers = []) {
       true
     ),
     zone_dependency: parseBool(cell(row, 'zone_dependency'), false),
+    ...(() => {
+      const typeRaw = cell(row, 'cushion_type');
+      const valueRaw = cell(row, 'cushion_value');
+      if (!typeRaw && !valueRaw) {
+        return { cushion_enabled: false, cushion_type: 'ABSOLUTE', cushion_value: '' };
+      }
+      const cushion_type = normalizeCushionType(typeRaw) || 'ABSOLUTE';
+      return {
+        cushion_enabled: true,
+        cushion_type,
+        cushion_value: valueRaw
+      };
+    })(),
     designations,
     attendance_policy,
     leave_allowances: buildLeaveAllowances(designations, row),
@@ -298,6 +317,8 @@ export function buildClientTemplateCsv() {
     insurance_amount: '',
     designations: 'Technician:SKILLED;Supervisor:SEMI_SKILLED',
     zone_dependency: 'false',
+    cushion_type: '',
+    cushion_value: '',
     require_license_upload: 'true',
     require_qualification_certificate_upload: 'true',
     payroll_cycle_start_day: '25',
@@ -361,6 +382,14 @@ export function clientToExportRow(client, programManagerEmail = '') {
     insurance_amount: client?.insurance_amount ?? '',
     designations: encodeDesignations(client?.designations),
     zone_dependency: boolStr(Boolean(client?.zone_dependency)),
+    cushion_type:
+      client?.cushion_enabled === false
+        ? ''
+        : (client?.cushion_type ?? ''),
+    cushion_value:
+      client?.cushion_enabled === false
+        ? ''
+        : (client?.cushion_value ?? ''),
     require_license_upload: boolStr(client?.require_license_upload !== false),
     require_qualification_certificate_upload:
       boolStr(client?.require_qualification_certificate_upload !== false),

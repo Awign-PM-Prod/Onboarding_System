@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWorkspacePaths } from '../context/WorkspaceBasePath';
+import { ACTION_BTN_PRIMARY } from '../lib/actionButtonStyles';
 
 export default function PayrollLeadProgramManagersPage() {
   const paths = useWorkspacePaths();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [pms, setPms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [search, setSearch] = useState('');
 
   const load = async () => {
@@ -27,6 +31,14 @@ export default function PayrollLeadProgramManagersPage() {
     load();
   }, []);
 
+  useEffect(() => {
+    if (location.state?.inviteSent) {
+      const email = location.state.inviteEmail || 'the Program Manager';
+      setSuccess(`Invite sent to ${email}. They can set their name and password from the email link.`);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location, navigate]);
+
   const filtered = pms.filter((pm) => {
     const q = search.trim().toLowerCase();
     if (!q) return true;
@@ -44,7 +56,8 @@ export default function PayrollLeadProgramManagersPage() {
             Program Managers
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Create Program Manager accounts so they can sign in and be assigned to clients.
+            Invite Program Managers by email so they can set their own password and be assigned to
+            clients.
           </p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
@@ -59,12 +72,18 @@ export default function PayrollLeadProgramManagersPage() {
           </div>
           <Link
             to={paths.programManagerNew}
-            className="inline-flex shrink-0 items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-700"
+            className={ACTION_BTN_PRIMARY}
           >
-            Add Program Manager
+            Invite Program Manager
           </Link>
         </div>
       </div>
+
+      {success && !loading && (
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+          {success}
+        </div>
+      )}
 
       {loading && (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-500 shadow-sm">
@@ -91,7 +110,7 @@ export default function PayrollLeadProgramManagersPage() {
               to={paths.programManagerNew}
               className="mt-3 inline-flex text-sm font-medium text-indigo-700 hover:underline"
             >
-              Add your first Program Manager
+              Invite your first Program Manager
             </Link>
           )}
         </div>

@@ -6,7 +6,7 @@ import { supabaseAdmin } from '../supabase.js';
 import { buildJobAppFormExportCsv } from '../jobAppFormExport.js';
 import { normalizeIndianState } from '../utils/indianStates.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
-import { normalizeWageZone } from '../utils/wageConfig.js';
+import { applyCushion, normalizeWageZone } from '../utils/wageConfig.js';
 import { listAccessibleClientIds } from '../utils/roleAccess.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
 
@@ -339,14 +339,18 @@ async function fetchClientDesignations(clientId) {
   return new Set(map.keys());
 }
 
-async function fetchClientZoneDependency(clientId) {
+async function fetchClientWageSettings(clientId) {
   const { data, error } = await supabaseAdmin
     .from('clients')
-    .select('zone_dependency')
+    .select('zone_dependency, cushion_type, cushion_value')
     .eq('id', clientId)
     .maybeSingle();
   if (error) throw error;
-  return Boolean(data?.zone_dependency);
+  return {
+    zoneDependency: Boolean(data?.zone_dependency),
+    cushionType: data?.cushion_type ?? null,
+    cushionValue: data?.cushion_value ?? null
+  };
 }
 
 function validateRoleDetails(raw, designationMap, { zoneDependency = false } = {}) {
@@ -402,8 +406,8 @@ function validateRoleDetails(raw, designationMap, { zoneDependency = false } = {
   };
 }
 
-/** Monthly CTC floor from Super Admin state_wage_minimums. Net Pay is not checked. */
-async function assertCtcMeetsWageMinimum(roleDetails, skillLevel) {
+/** Monthly CTC floor from Super Admin state_wage_minimums + optional client cushion. Net Pay is not checked. */
+async function assertCtcMeetsWageMinimum(roleDetails, skillLevel, { cushionType = null, cushionValue = null } = {}) {
   if (!roleDetails || roleDetails.pay_type !== 'CTC') return null;
   const state = roleDetails.state;
   if (!state) return null;
@@ -421,17 +425,19 @@ async function assertCtcMeetsWageMinimum(roleDetails, skillLevel) {
   if (error) throw error;
   if (!data || data.min_monthly_ctc == null) return null;
 
-  const min = Number(data.min_monthly_ctc);
-  if (!Number.isFinite(min)) return null;
+  const baseMin = Number(data.min_monthly_ctc);
+  if (!Number.isFinite(baseMin)) return null;
+  const floor = applyCushion(baseMin, cushionType, cushionValue);
+  if (floor == null || !Number.isFinite(floor)) return null;
 
   let monthly = Number(roleDetails.ctc_value);
   if (!Number.isFinite(monthly)) {
-    return `ctc_value must meet minimum monthly CTC of ${min} for ${state}`;
+    return `ctc_value must meet minimum monthly CTC of ${floor} for ${state}`;
   }
   if (String(roleDetails.ctc_type).toUpperCase() === 'ANNUAL') monthly = monthly / 12;
 
-  if (monthly < min) {
-    return `Monthly CTC must be at least ${min} for ${state} / ${zone} / ${skill_level} (got effective monthly ${monthly})`;
+  if (monthly < floor) {
+    return `Monthly CTC must be at least ${floor} for ${state} / ${zone} / ${skill_level} (got effective monthly ${monthly})`;
   }
   return null;
 }
@@ -940,6 +946,32 @@ router.get('/', async (req, res, next) => {
         form_bp_esic_number: f?.bp_esic_number ?? null
       };
     });
+
+    if (employeeIds.length > 0) {
+      try {
+        const { data: pendingReqs, error: pendingErr } = await supabaseAdmin
+          .from('doj_extend_requests')
+          .select('id, employee_id, status, reason, created_at')
+          .in('employee_id', employeeIds)
+          .eq('status', 'PENDING');
+        if (pendingErr) throw pendingErr;
+        const pendingByEmployee = new Map((pendingReqs ?? []).map((r) => [r.employee_id, r]));
+        for (const row of out) {
+          const pending = pendingByEmployee.get(row.id);
+          row.doj_extend_request_pending = Boolean(pending);
+          row.doj_extend_request_id = pending?.id ?? null;
+          row.doj_extend_request_reason = pending?.reason ?? null;
+        }
+      } catch (pendingLoadErr) {
+        console.warn('[employees] doj_extend_requests enrich skipped:', pendingLoadErr?.message || pendingLoadErr);
+        for (const row of out) {
+          row.doj_extend_request_pending = false;
+          row.doj_extend_request_id = null;
+          row.doj_extend_request_reason = null;
+        }
+      }
+    }
+
     res.json(out);
   } catch (err) {
     next(err);
@@ -1507,6 +1539,7 @@ router.post('/:id/transfer-project', async (req, res, next) => {
         joining_status_set_by: null,
         joining_status_updated_at: null,
         joining_status_updated_by: null,
+        doj_extend_unlock: false,
         payroll_pf_uan_number: null,
         payroll_esic_number: null,
         payroll_numbers_updated_at: null,
@@ -1583,17 +1616,21 @@ router.post('/role-details', async (req, res, next) => {
     }
 
     const designationMap = await fetchClientDesignationMap(clientId);
-    const zoneDependency = await fetchClientZoneDependency(clientId);
+    const wageSettings = await fetchClientWageSettings(clientId);
     const validation = validateRoleDetails(
       { designation, date_of_joining, pay_type, ctc_type, ctc_value, state, zone: req.body?.zone },
       designationMap,
-      { zoneDependency }
+      { zoneDependency: wageSettings.zoneDependency }
     );
     if (validation.errors) {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
 
-    const minErr = await assertCtcMeetsWageMinimum(validation.roleDetails, validation.skill_level);
+    const minErr = await assertCtcMeetsWageMinimum(
+      validation.roleDetails,
+      validation.skill_level,
+      { cushionType: wageSettings.cushionType, cushionValue: wageSettings.cushionValue }
+    );
     if (minErr) {
       return res.status(400).json({ error: minErr, details: [minErr] });
     }
@@ -1832,6 +1869,302 @@ router.post('/:id/joining-status', async (req, res, next) => {
       clientId,
       summary: `Joining status set to ${joiningStatus} for employee ${updated?.name || row.id}`,
       metadata: { joining_status: joiningStatus }
+    });
+
+    return res.json({ employee: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/doj-extend-request/bulk', async (req, res, next) => {
+  try {
+    const clientId = String(req.body?.client_id ?? '').trim();
+    const ids = Array.isArray(req.body?.employee_ids)
+      ? [...new Set(req.body.employee_ids.map((id) => String(id ?? '').trim()).filter(Boolean))]
+      : [];
+    const reason = String(req.body?.reason ?? '').trim() || null;
+
+    if (!clientId) return res.status(400).json({ error: 'client_id is required.' });
+    if (ids.length === 0) return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
+
+    const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
+    if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const { data: employees, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, date_of_joining, doj_extend_unlock')
+      .in('id', ids)
+      .eq('client_id', clientId);
+    if (empErr) throw empErr;
+    if (!employees?.length) {
+      return res.status(404).json({ error: 'No matching employees found for this client' });
+    }
+
+    const employeeIds = employees.map((e) => e.id);
+    const [{ data: forms, error: formsErr }, { data: pendingReqs, error: pendingErr }] = await Promise.all([
+      supabaseAdmin
+        .from('job_app_form')
+        .select('employee_id, review_status, payroll_review_status')
+        .in('employee_id', employeeIds),
+      supabaseAdmin
+        .from('doj_extend_requests')
+        .select('id, employee_id')
+        .in('employee_id', employeeIds)
+        .eq('status', 'PENDING'),
+    ]);
+    if (formsErr) throw formsErr;
+    if (pendingErr) throw pendingErr;
+
+    const formByEmployeeId = new Map((forms ?? []).map((f) => [f.employee_id, f]));
+    const pendingByEmployeeId = new Set((pendingReqs ?? []).map((r) => r.employee_id));
+
+    const failed = [];
+    const updatedIds = [];
+    const now = new Date().toISOString();
+
+    for (const row of employees) {
+      const form = formByEmployeeId.get(row.id);
+      if (!form || form.review_status !== 'APPROVED' || form.payroll_review_status !== 'PAYROLL_APPROVED') {
+        failed.push({
+          employee_id: row.id,
+          error: 'Extend DOJ can only be requested for employees approved by Payroll Lead.'
+        });
+        continue;
+      }
+      if (!row.date_of_joining) {
+        failed.push({
+          employee_id: row.id,
+          error: 'Employee has no expected date of joining to extend.'
+        });
+        continue;
+      }
+      if (row.doj_extend_unlock) {
+        failed.push({
+          employee_id: row.id,
+          error: 'DOJ is already unlocked for this employee. Set the new Extended DOJ first.'
+        });
+        continue;
+      }
+      if (pendingByEmployeeId.has(row.id)) {
+        failed.push({
+          employee_id: row.id,
+          error: 'An Extend DOJ request is already pending for this employee.'
+        });
+        continue;
+      }
+
+      const { data: created, error: insErr } = await supabaseAdmin
+        .from('doj_extend_requests')
+        .insert({
+          employee_id: row.id,
+          client_id: clientId,
+          requested_by: req.user.id,
+          reason,
+          status: 'PENDING',
+          created_at: now,
+          updated_at: now,
+        })
+        .select('id')
+        .maybeSingle();
+      if (insErr) {
+        failed.push({
+          employee_id: row.id,
+          error:
+            insErr.code === '23505'
+              ? 'An Extend DOJ request is already pending for this employee.'
+              : insErr.message || 'Could not create Extend DOJ request.'
+        });
+        continue;
+      }
+
+      updatedIds.push(row.id);
+      pendingByEmployeeId.add(row.id);
+
+      await logOrgActivityFromReq(req, {
+        action: 'DOJ_EXTEND_REQUESTED',
+        entityType: 'employee',
+        entityId: row.id,
+        clientId,
+        summary: `Requested Extend DOJ for ${row.name || row.id}`,
+        metadata: {
+          request_id: created?.id,
+          current_date_of_joining: row.date_of_joining,
+          reason,
+          bulk: true
+        }
+      });
+    }
+
+    return res.json({
+      updated: updatedIds.length,
+      employee_ids: updatedIds,
+      failed
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/doj-extend-request', async (req, res, next) => {
+  try {
+    const employeeId = req.params.id;
+    const clientId = String(req.body?.client_id ?? '').trim();
+    const reason = String(req.body?.reason ?? '').trim() || null;
+
+    if (!clientId) return res.status(400).json({ error: 'client_id is required.' });
+
+    const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
+    if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const { data: row, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, date_of_joining, doj_extend_unlock')
+      .eq('id', employeeId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (empErr) throw empErr;
+    if (!row) return res.status(404).json({ error: 'Employee not found for this client' });
+    if (!row.date_of_joining) {
+      return res.status(400).json({ error: 'Employee has no expected date of joining to extend.' });
+    }
+    if (row.doj_extend_unlock) {
+      return res.status(400).json({
+        error: 'DOJ is already unlocked for this employee. Set the new Extended DOJ first.'
+      });
+    }
+
+    const { data: form, error: formErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('review_status, payroll_review_status')
+      .eq('employee_id', employeeId)
+      .maybeSingle();
+    if (formErr) throw formErr;
+    if (!form || form.review_status !== 'APPROVED' || form.payroll_review_status !== 'PAYROLL_APPROVED') {
+      return res.status(400).json({
+        error: 'Extend DOJ can only be requested for employees approved by Payroll Lead.'
+      });
+    }
+
+    const { data: existingPending, error: pendingErr } = await supabaseAdmin
+      .from('doj_extend_requests')
+      .select('id')
+      .eq('employee_id', employeeId)
+      .eq('status', 'PENDING')
+      .maybeSingle();
+    if (pendingErr) throw pendingErr;
+    if (existingPending) {
+      return res.status(409).json({ error: 'An Extend DOJ request is already pending for this employee.' });
+    }
+
+    const now = new Date().toISOString();
+    const { data: created, error: insErr } = await supabaseAdmin
+      .from('doj_extend_requests')
+      .insert({
+        employee_id: employeeId,
+        client_id: clientId,
+        requested_by: req.user.id,
+        reason,
+        status: 'PENDING',
+        created_at: now,
+        updated_at: now,
+      })
+      .select('*')
+      .maybeSingle();
+    if (insErr) {
+      if (insErr.code === '23505') {
+        return res.status(409).json({ error: 'An Extend DOJ request is already pending for this employee.' });
+      }
+      throw insErr;
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'DOJ_EXTEND_REQUESTED',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId,
+      summary: `Requested Extend DOJ for ${row.name || employeeId}`,
+      metadata: {
+        request_id: created?.id,
+        current_date_of_joining: row.date_of_joining,
+        reason
+      }
+    });
+
+    return res.status(201).json({ request: created });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/:id/extended-doj', async (req, res, next) => {
+  try {
+    const employeeId = req.params.id;
+    const clientId = String(req.body?.client_id ?? '').trim();
+    const nextDoj = normalizeJoiningDate(req.body?.date_of_joining);
+
+    if (!clientId) return res.status(400).json({ error: 'client_id is required.' });
+    if (!nextDoj) {
+      return res.status(400).json({ error: 'date_of_joining is required (YYYY-MM-DD).' });
+    }
+
+    const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
+    if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const { data: row, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, date_of_joining, doj_extend_unlock, onboarding_status')
+      .eq('id', employeeId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (empErr) throw empErr;
+    if (!row) return res.status(404).json({ error: 'Employee not found for this client' });
+    if (!row.doj_extend_unlock) {
+      return res.status(400).json({
+        error: 'Extended DOJ is locked for this employee. Request Super Admin approval first.'
+      });
+    }
+    if (row.onboarding_status === 'AVAILABLE') {
+      return res.status(400).json({ error: 'Cannot extend DOJ for AVAILABLE employees via this path.' });
+    }
+    if (nextDoj === String(row.date_of_joining ?? '').trim()) {
+      return res.status(400).json({ error: 'New date of joining must be different from the current date.' });
+    }
+
+    const now = new Date().toISOString();
+    const { data: updated, error: upErr } = await supabaseAdmin
+      .from('employees')
+      .update({
+        date_of_joining: nextDoj,
+        doj_extend_unlock: false,
+        joining_status: null,
+        joining_actual_date: null,
+        joining_status_change_count: 0,
+        joining_status_set_at: null,
+        joining_status_set_by: null,
+        joining_status_updated_at: null,
+        joining_status_updated_by: null,
+      })
+      .eq('id', employeeId)
+      .eq('client_id', clientId)
+      .eq('doj_extend_unlock', true)
+      .select('*')
+      .maybeSingle();
+    if (upErr) throw upErr;
+    if (!updated) {
+      return res.status(409).json({ error: 'Could not update Extended DOJ (unlock may have expired).' });
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'DOJ_EXTENDED',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId,
+      summary: `Extended DOJ for ${row.name || employeeId} from ${row.date_of_joining} to ${nextDoj}`,
+      metadata: {
+        old_date_of_joining: row.date_of_joining,
+        new_date_of_joining: nextDoj
+      }
     });
 
     return res.json({ employee: updated });
@@ -2704,13 +3037,19 @@ router.put('/:id/role-details', async (req, res, next) => {
     }
 
     const designationMap = await fetchClientDesignationMap(row.client_id);
-    const zoneDependency = await fetchClientZoneDependency(row.client_id);
-    const validation = validateRoleDetails(req.body || {}, designationMap, { zoneDependency });
+    const wageSettings = await fetchClientWageSettings(row.client_id);
+    const validation = validateRoleDetails(req.body || {}, designationMap, {
+      zoneDependency: wageSettings.zoneDependency
+    });
     if (validation.errors) {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
 
-    const minErr = await assertCtcMeetsWageMinimum(validation.roleDetails, validation.skill_level);
+    const minErr = await assertCtcMeetsWageMinimum(
+      validation.roleDetails,
+      validation.skill_level,
+      { cushionType: wageSettings.cushionType, cushionValue: wageSettings.cushionValue }
+    );
     if (minErr) {
       return res.status(400).json({ error: minErr, details: [minErr] });
     }

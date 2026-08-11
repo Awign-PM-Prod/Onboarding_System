@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import ModalOverlay from '../components/ModalOverlay';
+import SuperAdminDateRangeFilters, {
+  FilterSelect
+} from '../components/SuperAdminDateRangeFilters';
+import { resolveDateRange } from '../lib/superAdminDateRange';
 
 const ACTOR_ROLES = [
   { value: '', label: 'All roles' },
@@ -20,6 +24,10 @@ const ACTION_OPTIONS = [
   { value: 'ROLE_DETAILS_SET', label: 'Role details set' },
   { value: 'ONBOARDING_INITIATED', label: 'Onboarding initiated' },
   { value: 'JOINING_STATUS_UPDATED', label: 'Joining status updated' },
+  { value: 'DOJ_EXTEND_REQUESTED', label: 'DOJ extend requested' },
+  { value: 'DOJ_EXTEND_APPROVED', label: 'DOJ extend approved' },
+  { value: 'DOJ_EXTEND_REJECTED', label: 'DOJ extend rejected' },
+  { value: 'DOJ_EXTENDED', label: 'DOJ extended' },
   { value: 'PM_REVIEW', label: 'PM review' },
   { value: 'PL_REVIEW', label: 'PL review' },
   { value: 'ATTENDANCE_UPLOAD', label: 'Attendance upload' },
@@ -46,13 +54,21 @@ const META_SKIP_KEYS = new Set(['changes', 'policy_change_count']);
 function formatWhen(iso) {
   if (!iso) return '—';
   try {
-    return new Date(iso).toLocaleString('en-IN', {
-      day: '2-digit',
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    const datePart = d.toLocaleDateString('en-GB', {
+      day: 'numeric',
       month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
+      year: 'numeric'
     });
+    const timePart = d
+      .toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      })
+      .toLowerCase();
+    return `${datePart}, ${timePart}`;
   } catch {
     return iso;
   }
@@ -142,12 +158,29 @@ export default function SuperAdminActivityPage() {
   const [error, setError] = useState('');
   const [action, setAction] = useState('');
   const [actorRole, setActorRole] = useState('');
+  const [month, setMonth] = useState('');
+  const [year, setYear] = useState('');
+  const [week, setWeek] = useState('');
+  const [appliedCustomFrom, setAppliedCustomFrom] = useState('');
+  const [appliedCustomTo, setAppliedCustomTo] = useState('');
 
   const [selected, setSelected] = useState(null);
   const [detailChanges, setDetailChanges] = useState([]);
   const [detailMessage, setDetailMessage] = useState('');
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
+
+  const dateRange = useMemo(
+    () =>
+      resolveDateRange({
+        month,
+        year,
+        week,
+        customFrom: appliedCustomFrom,
+        customTo: appliedCustomTo
+      }),
+    [appliedCustomFrom, appliedCustomTo, month, year, week]
+  );
 
   const load = useCallback(
     async ({ append = false, cursor = null } = {}) => {
@@ -161,7 +194,9 @@ export default function SuperAdminActivityPage() {
           limit: 50,
           cursor: cursor || undefined,
           action: action || undefined,
-          actor_role: actorRole || undefined
+          actor_role: actorRole || undefined,
+          from: dateRange.from,
+          to: dateRange.to
         });
         const rows = Array.isArray(data?.items) ? data.items : [];
         setItems((prev) => (append ? [...prev, ...rows] : rows));
@@ -174,7 +209,7 @@ export default function SuperAdminActivityPage() {
         setLoadingMore(false);
       }
     },
-    [action, actorRole]
+    [action, actorRole, dateRange.from, dateRange.to]
   );
 
   useEffect(() => {
@@ -236,37 +271,68 @@ export default function SuperAdminActivityPage() {
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Activity Logs</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Org-wide activity from Program Managers, Payroll Leads, and Super Admin. Click a row for
-            details.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <select
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Activity Logs</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Org-wide activity from Program Managers, Payroll Leads, and Super Admin. Click a row for
+          details.
+        </p>
+      </div>
+
+      <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <SuperAdminDateRangeFilters
+          idPrefix="activity"
+          month={month}
+          year={year}
+          week={week}
+          appliedCustomFrom={appliedCustomFrom}
+          appliedCustomTo={appliedCustomTo}
+          onMonthChange={(value) => {
+            setMonth(value);
+            if (value && !year) setYear(String(new Date().getFullYear()));
+            if (value) setWeek('');
+          }}
+          onYearChange={(value) => {
+            setYear(value);
+            if (value) setWeek('');
+          }}
+          onWeekChange={(value) => {
+            setWeek(value);
+            if (value) {
+              setMonth('');
+              setYear('');
+            }
+          }}
+          onCustomClear={() => {
+            setAppliedCustomFrom('');
+            setAppliedCustomTo('');
+          }}
+          onCustomApply={(from, to) => {
+            setError('');
+            setAppliedCustomFrom(from);
+            setAppliedCustomTo(to);
+            setMonth('');
+            setYear('');
+            setWeek('');
+          }}
+          onCustomError={(message) => setError(message)}
+        />
+
+        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+          <FilterSelect
+            id="activity-role"
             value={actorRole}
             onChange={(e) => setActorRole(e.target.value)}
-          >
-            {ACTOR_ROLES.map((o) => (
-              <option key={o.value || 'all-roles'} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            options={ACTOR_ROLES}
+            className="w-[10rem]"
+          />
+          <FilterSelect
+            id="activity-action"
             value={action}
             onChange={(e) => setAction(e.target.value)}
-          >
-            {ACTION_OPTIONS.map((o) => (
-              <option key={o.value || 'all-actions'} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            options={ACTION_OPTIONS}
+            className="w-[12rem]"
+          />
         </div>
       </div>
 
@@ -277,7 +343,9 @@ export default function SuperAdminActivityPage() {
       )}
 
       {error && !loading && (
-        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+          {error}
+        </div>
       )}
 
       {!loading && !error && items.length === 0 && (
@@ -294,26 +362,23 @@ export default function SuperAdminActivityPage() {
                 <button
                   type="button"
                   onClick={() => openDetail(row)}
-                  className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-slate-50 focus:bg-slate-50 focus:outline-none"
+                  className="flex w-full items-center gap-4 px-5 py-5 text-left hover:bg-slate-50 focus:bg-slate-50 focus:outline-none sm:px-6"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <p className="text-sm font-medium text-slate-900">{row.summary}</p>
-                      <time className="text-xs text-slate-500">{formatWhen(row.created_at)}</time>
-                    </div>
+                    <p className="text-sm font-semibold text-slate-900">{row.summary}</p>
                     <p className="mt-1 text-xs text-slate-500">
-                      {[
-                        row.actor_name || 'Unknown',
-                        roleLabel(row.actor_role),
-                        actionLabel(row.action),
-                        row.client_name
-                      ]
+                      {[row.actor_name || 'Unknown', roleLabel(row.actor_role), actionLabel(row.action)]
                         .filter(Boolean)
                         .join(' · ')}
                     </p>
-                    <p className="mt-1 text-xs font-medium text-indigo-700">View details</p>
+                    <time className="mt-1 block text-xs text-slate-500">
+                      {formatWhen(row.created_at)}
+                    </time>
                   </div>
-                  <ChevronIcon className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
+                  <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-blue-600">
+                    View details
+                    <ChevronIcon className="h-4 w-4" />
+                  </span>
                 </button>
               </li>
             ))}
@@ -324,7 +389,7 @@ export default function SuperAdminActivityPage() {
                 type="button"
                 disabled={loadingMore}
                 onClick={() => load({ append: true, cursor: nextCursor })}
-                className="text-sm font-medium text-indigo-700 hover:underline disabled:opacity-60"
+                className="text-sm font-medium text-blue-600 hover:underline disabled:opacity-60"
               >
                 {loadingMore ? 'Loading…' : 'Load more'}
               </button>
@@ -408,7 +473,7 @@ export default function SuperAdminActivityPage() {
                   {metadataEntries.map(([key, value]) => (
                     <div key={key} className="grid grid-cols-1 gap-0.5 sm:grid-cols-3 sm:gap-2">
                       <dt className="text-slate-500">{metaLabel(key)}</dt>
-                      <dd className="text-slate-800 sm:col-span-2 break-words">
+                      <dd className="break-words text-slate-800 sm:col-span-2">
                         {formatMetaValue(value)}
                       </dd>
                     </div>

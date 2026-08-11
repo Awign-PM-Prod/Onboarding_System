@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
 
 export default function PayrollClientIdentityNumbersPage() {
   const { id } = useParams();
@@ -226,7 +227,7 @@ export default function PayrollClientIdentityNumbersPage() {
           <button
             type="button"
             onClick={handleExportCsv}
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            className={ACTION_BTN_SECONDARY}
           >
             Export CSV
           </button>
@@ -234,7 +235,7 @@ export default function PayrollClientIdentityNumbersPage() {
             type="button"
             onClick={openImportPicker}
             disabled={importing}
-            className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className={ACTION_BTN_SECONDARY}
           >
             {importing ? 'Importing...' : 'Import CSV'}
           </button>

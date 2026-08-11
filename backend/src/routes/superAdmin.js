@@ -5,6 +5,8 @@ import { INDIAN_STATES, normalizeIndianState } from '../utils/indianStates.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 import { SKILL_LEVELS, WAGE_ZONES, normalizeSkillLevel, normalizeWageZone } from '../utils/wageConfig.js';
 import { runRemainingTaskDigest } from '../jobs/remainingTaskDigest.js';
+import { invokeResendEmail } from '../utils/sendEmail.js';
+import { buildLoginLink, buildPasswordResetEmail } from '../utils/staffInvite.js';
 
 const router = Router();
 
@@ -77,12 +79,33 @@ function toCsv(headers, rows) {
 }
 
 // GET /api/super-admin/dashboard-stats
+// Optional query: from, to (YYYY-MM-DD) — scopes to employees created in that inclusive range.
+// Optional query: client_id — restrict stats to a single client.
 router.get('/dashboard-stats', async (req, res, next) => {
   try {
-    const { data: clients, error: cErr } = await supabaseAdmin
+    const fromRaw = String(req.query.from ?? '').trim();
+    const toRaw = String(req.query.to ?? '').trim();
+    const filterClientId = String(req.query.client_id ?? '').trim() || null;
+    const isoDay = /^\d{4}-\d{2}-\d{2}$/;
+    if (fromRaw && !isoDay.test(fromRaw)) {
+      return res.status(400).json({ error: 'from must be YYYY-MM-DD.' });
+    }
+    if (toRaw && !isoDay.test(toRaw)) {
+      return res.status(400).json({ error: 'to must be YYYY-MM-DD.' });
+    }
+    if (fromRaw && toRaw && fromRaw > toRaw) {
+      return res.status(400).json({ error: 'from must be on or before to.' });
+    }
+    const dateFiltered = Boolean(fromRaw || toRaw);
+
+    let clientsQuery = supabaseAdmin
       .from('clients')
       .select('id, client_name, contract_code')
       .order('client_name', { ascending: true });
+    if (filterClientId) {
+      clientsQuery = clientsQuery.eq('id', filterClientId);
+    }
+    const { data: clients, error: cErr } = await clientsQuery;
     if (cErr) throw cErr;
 
     const clientRows = clients ?? [];
@@ -108,15 +131,27 @@ router.get('/dashboard-stats', async (req, res, next) => {
     }
 
     const clientIds = clientRows.map((c) => c.id);
-    const { data: employees, error: eErr } = await supabaseAdmin
+    const clientIdSet = new Set(clientIds);
+
+    // When a date range is set, filter by created_at first (cohort of employees added
+    // in that period). Avoid chaining a huge .in(client_id) with date bounds.
+    let empQuery = supabaseAdmin
       .from('employees')
       .select(
-        'id, client_id, onboarding_initiated, joining_status, ctc_type, ctc_value, payroll_pf_uan_number, payroll_esic_number'
-      )
-      .in('client_id', clientIds);
+        'id, client_id, onboarding_initiated, joining_status, ctc_type, ctc_value, payroll_pf_uan_number, payroll_esic_number, created_at'
+      );
+    if (dateFiltered) {
+      if (fromRaw) empQuery = empQuery.gte('created_at', `${fromRaw}T00:00:00.000Z`);
+      if (toRaw) empQuery = empQuery.lte('created_at', `${toRaw}T23:59:59.999Z`);
+      if (filterClientId) empQuery = empQuery.eq('client_id', filterClientId);
+    } else {
+      empQuery = empQuery.in('client_id', clientIds);
+    }
+
+    const { data: employees, error: eErr } = await empQuery;
     if (eErr) throw eErr;
 
-    const employeeRows = employees ?? [];
+    const employeeRows = (employees ?? []).filter((e) => clientIdSet.has(e.client_id));
     totalEmployees = employeeRows.length;
     const employeeIds = employeeRows.map((e) => e.id);
     const formMap = new Map();
@@ -131,6 +166,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
       }
     }
 
+    const clientsWithEmployees = new Set();
     const byClient = new Map(
       clientRows.map((c) => [
         c.id,
@@ -150,6 +186,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
     for (const employee of employeeRows) {
       const current = byClient.get(employee.client_id);
       if (!current) continue;
+      clientsWithEmployees.add(employee.client_id);
       current.employee_count += 1;
       const form = formMap.get(employee.id);
       applyPipelineCounts(current, employee, form);
@@ -188,17 +225,21 @@ router.get('/dashboard-stats', async (req, res, next) => {
       current.active_employees = current.total_onboarded - current.total_dropout;
     }
 
+    const resultClients = dateFiltered
+      ? clientRows.filter((c) => clientsWithEmployees.has(c.id)).map((c) => byClient.get(c.id))
+      : clientRows.map((c) => byClient.get(c.id));
+
     return res.json({
       totals: {
         ...totals,
-        clients: clientRows.length,
+        clients: dateFiltered ? clientsWithEmployees.size : clientRows.length,
         employees: totalEmployees,
         total_onboarded: totalOnboarded,
         total_dropout: totalDropout,
         active_employees: totalOnboarded - totalDropout
       },
       compliance,
-      clients: clientRows.map((c) => byClient.get(c.id))
+      clients: resultClients
     });
   } catch (err) {
     next(err);
@@ -432,6 +473,19 @@ router.get('/activity', async (req, res, next) => {
     const clientId = String(req.query.client_id ?? '').trim() || null;
     const action = String(req.query.action ?? '').trim() || null;
     const actorRole = String(req.query.actor_role ?? '').trim() || null;
+    const fromRaw = String(req.query.from ?? '').trim();
+    const toRaw = String(req.query.to ?? '').trim();
+
+    const isoDay = /^\d{4}-\d{2}-\d{2}$/;
+    if (fromRaw && !isoDay.test(fromRaw)) {
+      return res.status(400).json({ error: 'from must be YYYY-MM-DD.' });
+    }
+    if (toRaw && !isoDay.test(toRaw)) {
+      return res.status(400).json({ error: 'to must be YYYY-MM-DD.' });
+    }
+    if (fromRaw && toRaw && fromRaw > toRaw) {
+      return res.status(400).json({ error: 'from must be on or before to.' });
+    }
 
     let query = supabaseAdmin
       .from('org_activity_logs')
@@ -445,6 +499,9 @@ router.get('/activity', async (req, res, next) => {
     if (clientId) query = query.eq('client_id', clientId);
     if (action) query = query.eq('action', action);
     if (actorRole) query = query.eq('actor_role', actorRole);
+    // Inclusive calendar-day bounds in UTC date strings (matches FE YYYY-MM-DD filters).
+    if (fromRaw) query = query.gte('created_at', `${fromRaw}T00:00:00.000Z`);
+    if (toRaw) query = query.lte('created_at', `${toRaw}T23:59:59.999Z`);
 
     const { data, error } = await query;
     if (error) throw error;
@@ -616,6 +673,50 @@ router.get('/digest-recipients', async (_req, res, next) => {
   }
 });
 
+// GET /api/super-admin/password-reset-requests
+router.get('/password-reset-requests', async (req, res, next) => {
+  try {
+    const status = String(req.query?.status ?? 'PENDING').trim().toUpperCase() || 'PENDING';
+    if (!['PENDING', 'FULFILLED', 'CANCELLED'].includes(status)) {
+      return res.status(400).json({ error: 'status must be PENDING, FULFILLED, or CANCELLED.' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('password_reset_requests')
+      .select(
+        `
+        id,
+        user_id,
+        status,
+        requested_at,
+        fulfilled_at,
+        users:user_id ( id, name, email, role )
+      `
+      )
+      .eq('status', status)
+      .order('requested_at', { ascending: false });
+    if (error) throw error;
+
+    const rows = (data ?? []).map((row) => {
+      const u = row.users || {};
+      return {
+        id: row.id,
+        user_id: row.user_id,
+        status: row.status,
+        requested_at: row.requested_at,
+        fulfilled_at: row.fulfilled_at,
+        name: u.name || '',
+        email: u.email || '',
+        role: u.role || ''
+      };
+    });
+
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/super-admin/users/:userId/password
 router.post('/users/:userId/password', async (req, res, next) => {
   try {
@@ -623,6 +724,7 @@ router.post('/users/:userId/password', async (req, res, next) => {
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     const confirmPassword =
       typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : null;
+    const sendEmail = Boolean(req.body?.sendEmail);
 
     if (!userId) {
       return res.status(400).json({ error: 'userId is required.' });
@@ -656,6 +758,38 @@ router.post('/users/:userId/password', async (req, res, next) => {
       return res.status(400).json({ error: authErr.message || 'Could not update password.' });
     }
 
+    let emailed = false;
+    if (sendEmail) {
+      const mail = buildPasswordResetEmail({
+        name: profile.name,
+        password,
+        loginLink: buildLoginLink()
+      });
+      const sendResult = await invokeResendEmail({
+        toEmail: profile.email,
+        toName: profile.name,
+        subject: mail.subject,
+        html: mail.html,
+        text: mail.text,
+        logLabel: 'staff-password-reset-email'
+      });
+      emailed = Boolean(sendResult?.ok);
+      if (!emailed && !sendResult?.skipped) {
+        console.warn('[super-admin] password reset email failed', sendResult?.error);
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    await supabaseAdmin
+      .from('password_reset_requests')
+      .update({
+        status: 'FULFILLED',
+        fulfilled_by: req.user?.id ?? null,
+        fulfilled_at: nowIso
+      })
+      .eq('user_id', userId)
+      .eq('status', 'PENDING');
+
     await logOrgActivityFromReq(req, {
       action: 'PASSWORD_RESET',
       entityType: 'users',
@@ -664,11 +798,12 @@ router.post('/users/:userId/password', async (req, res, next) => {
       metadata: {
         target_user_id: userId,
         target_email: profile.email,
-        target_role: profile.role
+        target_role: profile.role,
+        emailed
       }
     });
 
-    res.json({ ok: true });
+    res.json({ ok: true, emailed });
   } catch (err) {
     next(err);
   }
@@ -680,6 +815,9 @@ router.post('/remaining-task-digest', async (req, res, next) => {
     const scope = String(req.body?.scope ?? '').trim().toLowerCase();
     const role = String(req.body?.role ?? '').trim().toUpperCase();
     const userId = String(req.body?.userId ?? '').trim();
+    const remarksRaw = req.body?.remarks;
+    const remarks =
+      remarksRaw == null ? '' : String(remarksRaw).trim();
 
     if (!['all', 'role', 'user'].includes(scope)) {
       return res.status(400).json({ error: 'scope must be all, role, or user.' });
@@ -690,9 +828,15 @@ router.post('/remaining-task-digest', async (req, res, next) => {
     if (scope === 'user' && !userId) {
       return res.status(400).json({ error: 'userId is required when scope is user.' });
     }
+    if (remarks.length > 2000) {
+      return res.status(400).json({ error: 'remarks must be at most 2000 characters.' });
+    }
 
     const roleLabel = (r) =>
       r === 'PROGRAM_MANAGER' ? 'Program Manager' : r === 'PAYROLL_LEAD' ? 'Payroll Lead' : r;
+
+    // Remarks are only applied for specific-user sends (matches Super Admin UI).
+    const appliedRemarks = scope === 'user' && remarks ? remarks : undefined;
 
     let userIds;
     let targetUser = null;
@@ -720,7 +864,9 @@ router.post('/remaining-task-digest', async (req, res, next) => {
     }
 
     const summary = await runRemainingTaskDigest(
-      userIds === undefined ? {} : { userIds }
+      userIds === undefined
+        ? {}
+        : { userIds, ...(appliedRemarks ? { remarks: appliedRemarks } : {}) }
     );
 
     const counts = `sent ${summary.sent}, skipped ${summary.skipped}, failed ${summary.failed}`;
@@ -746,6 +892,7 @@ router.post('/remaining-task-digest', async (req, res, next) => {
         target_name: targetUser?.name ?? null,
         target_email: targetUser?.email ?? null,
         target_role: targetUser?.role ?? null,
+        remarks: appliedRemarks ?? null,
         sent: summary.sent,
         skipped: summary.skipped,
         failed: summary.failed
@@ -753,6 +900,152 @@ router.post('/remaining-task-digest', async (req, res, next) => {
     });
 
     res.json({ ok: true, ...summary });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/super-admin/doj-extend-requests?status=PENDING
+router.get('/doj-extend-requests', async (req, res, next) => {
+  try {
+    const statusFilter = String(req.query.status ?? 'PENDING').trim().toUpperCase() || 'PENDING';
+    if (!['PENDING', 'APPROVED', 'REJECTED', 'ALL'].includes(statusFilter)) {
+      return res.status(400).json({ error: 'status must be PENDING, APPROVED, REJECTED, or ALL.' });
+    }
+
+    let query = supabaseAdmin
+      .from('doj_extend_requests')
+      .select('id, employee_id, client_id, requested_by, reason, status, reviewed_by, reviewed_at, review_note, created_at')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (statusFilter !== 'ALL') {
+      query = query.eq('status', statusFilter);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    const rows = data ?? [];
+    if (rows.length === 0) return res.json({ requests: [] });
+
+    const employeeIds = [...new Set(rows.map((r) => r.employee_id))];
+    const clientIds = [...new Set(rows.map((r) => r.client_id))];
+    const userIds = [...new Set(rows.flatMap((r) => [r.requested_by, r.reviewed_by].filter(Boolean)))];
+
+    const [{ data: employees }, { data: clients }, { data: users }] = await Promise.all([
+      supabaseAdmin.from('employees').select('id, name, date_of_joining, mobile').in('id', employeeIds),
+      supabaseAdmin.from('clients').select('id, client_name').in('id', clientIds),
+      supabaseAdmin.from('users').select('id, name, email').in('id', userIds),
+    ]);
+
+    const empMap = new Map((employees ?? []).map((e) => [e.id, e]));
+    const clientMap = new Map((clients ?? []).map((c) => [c.id, c]));
+    const userMap = new Map((users ?? []).map((u) => [u.id, u]));
+
+    return res.json({
+      requests: rows.map((r) => {
+        const emp = empMap.get(r.employee_id);
+        const client = clientMap.get(r.client_id);
+        const pm = userMap.get(r.requested_by);
+        const reviewer = r.reviewed_by ? userMap.get(r.reviewed_by) : null;
+        return {
+          id: r.id,
+          employee_id: r.employee_id,
+          employee_name: emp?.name ?? 'Employee',
+          employee_mobile: emp?.mobile ?? null,
+          date_of_joining: emp?.date_of_joining ?? null,
+          client_id: r.client_id,
+          client_name: client?.client_name ?? 'Client',
+          requested_by: r.requested_by,
+          requested_by_name: pm?.name ?? pm?.email ?? 'Program Manager',
+          reason: r.reason,
+          status: r.status,
+          reviewed_by: r.reviewed_by,
+          reviewed_by_name: reviewer?.name ?? null,
+          reviewed_at: r.reviewed_at,
+          review_note: r.review_note,
+          created_at: r.created_at,
+        };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/doj-extend-requests/:id/review
+router.post('/doj-extend-requests/:id/review', async (req, res, next) => {
+  try {
+    const requestId = String(req.params.id ?? '').trim();
+    const decision = String(req.body?.decision ?? '').trim().toUpperCase();
+    const reviewNote = String(req.body?.note ?? req.body?.review_note ?? '').trim() || null;
+
+    if (!['APPROVED', 'REJECTED'].includes(decision)) {
+      return res.status(400).json({ error: 'decision must be APPROVED or REJECTED.' });
+    }
+
+    const { data: requestRow, error: reqErr } = await supabaseAdmin
+      .from('doj_extend_requests')
+      .select('*')
+      .eq('id', requestId)
+      .maybeSingle();
+    if (reqErr) throw reqErr;
+    if (!requestRow) return res.status(404).json({ error: 'Request not found.' });
+    if (requestRow.status !== 'PENDING') {
+      return res.status(400).json({ error: 'Only PENDING requests can be reviewed.' });
+    }
+
+    const now = new Date().toISOString();
+    const { data: updatedReq, error: upReqErr } = await supabaseAdmin
+      .from('doj_extend_requests')
+      .update({
+        status: decision,
+        reviewed_by: req.user.id,
+        reviewed_at: now,
+        review_note: reviewNote,
+        pm_acked_at: null,
+        updated_at: now,
+      })
+      .eq('id', requestId)
+      .eq('status', 'PENDING')
+      .select('*')
+      .maybeSingle();
+    if (upReqErr) throw upReqErr;
+    if (!updatedReq) {
+      return res.status(409).json({ error: 'Request was already reviewed.' });
+    }
+
+    if (decision === 'APPROVED') {
+      const { error: unlockErr } = await supabaseAdmin
+        .from('employees')
+        .update({ doj_extend_unlock: true })
+        .eq('id', requestRow.employee_id);
+      if (unlockErr) throw unlockErr;
+    }
+
+    const { data: emp } = await supabaseAdmin
+      .from('employees')
+      .select('name, date_of_joining')
+      .eq('id', requestRow.employee_id)
+      .maybeSingle();
+
+    await logOrgActivityFromReq(req, {
+      action: decision === 'APPROVED' ? 'DOJ_EXTEND_APPROVED' : 'DOJ_EXTEND_REJECTED',
+      entityType: 'employee',
+      entityId: requestRow.employee_id,
+      clientId: requestRow.client_id,
+      summary:
+        decision === 'APPROVED'
+          ? `Approved Extend DOJ for ${emp?.name || requestRow.employee_id}`
+          : `Rejected Extend DOJ for ${emp?.name || requestRow.employee_id}`,
+      metadata: {
+        request_id: requestId,
+        decision,
+        review_note: reviewNote,
+        date_of_joining: emp?.date_of_joining ?? null
+      }
+    });
+
+    return res.json({ request: updatedReq });
   } catch (err) {
     next(err);
   }

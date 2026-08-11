@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
+import { ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
 import ModalOverlay from './ModalOverlay';
 import {
   LEGEND_LABELS,
@@ -16,6 +17,11 @@ import { isWeekOffDate, findLeaveAllowanceForDesignation } from '../lib/clientPo
 import { previewRowSummary } from '../lib/attendanceRowSummary';
 import { CLIENT_POLICY_UPDATED_EVENT } from '../lib/clientPolicyEvents';
 import { createDebouncedRowSaver } from '../lib/attendanceAutoSave';
+import {
+  EMPLOYEE_STATUS_LABELS,
+  employeeStatusCellClass,
+  employeeStatusOptionStyle
+} from '../lib/attendanceEmployeeStatus';
 
 const EDITABLE_CODES = [
   'P', 'W', 'NH', 'FH', 'P-NH', 'P-FH', 'HD',
@@ -156,6 +162,10 @@ function buildRowChanges(draftRows, serverRows) {
     }
     if ((draft.remarks ?? '') !== (server.remarks ?? '')) {
       patch.remarks = draft.remarks ?? '';
+      hasChange = true;
+    }
+    if ((draft.status_label ?? '') !== (server.status_label ?? '')) {
+      patch.status_label = draft.status_label ?? '';
       hasChange = true;
     }
     if (hasChange) changes.push(patch);
@@ -1022,6 +1032,14 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     queueRowAutoSave(rowId);
   };
 
+  const onChangeStatusLabel = (rowId, value) => {
+    if (!canEdit) return;
+    setDraftRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, status_label: value || null } : r))
+    );
+    queueRowAutoSave(rowId);
+  };
+
   const onExportMissingWarningLocal = () => {
     if (!uploadSkipWarning) return;
     const ym = String(sheet?.attendance_month ?? month).slice(0, 7);
@@ -1522,7 +1540,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                     type="button"
                     disabled={busy}
                     onClick={() => setExportMenuOpen((v) => !v)}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-[#1e293b] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#0f172a] disabled:opacity-60"
+                    className={`${ACTION_BTN_SECONDARY} gap-1.5`}
                   >
                     <DownloadIcon className="h-4 w-4" />
                     Export CSV
@@ -1580,7 +1598,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                   type="button"
                   disabled={busy}
                   onClick={() => onExport('template')}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#1e293b] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#0f172a] disabled:opacity-60"
+                  className={`${ACTION_BTN_SECONDARY} gap-1.5`}
                 >
                   <DownloadIcon className="h-4 w-4" />
                   Export Template
@@ -1591,7 +1609,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                   type="button"
                   disabled={busy || (sheet && !canEdit)}
                   onClick={() => setImportMenuOpen((v) => !v)}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#3B82F6] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
+                  className={`${ACTION_BTN_SECONDARY} gap-1.5`}
                 >
                   <UploadIcon className="h-4 w-4" />
                   Import CSV
@@ -1814,7 +1832,32 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                       <td className="max-w-[120px] truncate border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.designation || '—'}</td>
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.doj || '—'}</td>
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.lwd || '—'}</td>
-                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.status_label || '—'}</td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">
+                        {canEdit ? (
+                          <select
+                            value={row.status_label || ''}
+                            onChange={(e) => onChangeStatusLabel(row.id, e.target.value)}
+                            className={`w-full min-w-[7.5rem] rounded border border-slate-200 px-1.5 py-1 text-xs ${
+                              employeeStatusCellClass(row.status_label) || 'bg-white text-slate-800'
+                            }`}
+                          >
+                            <option value="">—</option>
+                            {EMPLOYEE_STATUS_LABELS.map((label) => (
+                              <option key={label} value={label} style={employeeStatusOptionStyle(label)}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span
+                            className={`inline-flex rounded px-1.5 py-0.5 ${
+                              employeeStatusCellClass(row.status_label) || ''
+                            }`}
+                          >
+                            {row.status_label || '—'}
+                          </span>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.amt_type || '—'}</td>
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 font-mono text-slate-700">
                         {sheet?.contract_code || '—'}
@@ -1968,14 +2011,12 @@ export default function AttendancePanel({ clientId, role, projectName }) {
               </tbody>
               {sheet && filteredRows.length > 0 && (
                 <tfoot>
-                  <tr className="text-slate-800">
-                    <td className="sticky bottom-0 left-0 z-50 w-10 min-w-[2.5rem] border-t border-slate-300 bg-slate-100 px-2 py-2 text-left font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
-                      {footerTotals.employees}
-                    </td>
-                    <td className="sticky bottom-0 left-10 z-50 w-[5.5rem] min-w-[5.5rem] border-t border-slate-300 bg-slate-100 px-2 py-2 font-semibold shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                  <tr className="font-bold text-slate-900">
+                    <td className="sticky bottom-0 left-0 z-50 w-10 min-w-[2.5rem] border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
+                    <td className="sticky bottom-0 left-10 z-50 w-[5.5rem] min-w-[5.5rem] border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
                       —
                     </td>
-                    <td className="sticky bottom-0 left-[7.5rem] z-50 min-w-[9rem] max-w-[11rem] border-t border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold shadow-[2px_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                    <td className="sticky bottom-0 left-[7.5rem] z-50 min-w-[9rem] max-w-[11rem] border-t border-r border-slate-300 bg-slate-100 px-3 py-2 shadow-[2px_-2px_6px_-2px_rgba(0,0,0,0.12)]">
                       Total
                     </td>
                     <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />
@@ -1996,36 +2037,36 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                     {LEGEND_TOTAL_COLUMNS.map((col) => (
                       <td
                         key={`total-legend-${col.code}`}
-                        className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]"
+                        className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]"
                       >
                         {footerTotals.legend[col.code]}
                       </td>
                     ))}
-                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
                       {footerTotals.paidDays}
                     </td>
-                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums text-red-700 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center tabular-nums text-red-700 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
                       {footerTotals.lop}
                     </td>
-                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
                       {footerTotals.notConsidered}
                     </td>
                     {LEAVE_SUMMARY_COLUMNS.map((colKey) => (
                       <td
                         key={`total-leave-${colKey}`}
-                        className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]"
+                        className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]"
                         title={`Total ${colKey} taken`}
                       >
                         {footerTotals.leaveTaken[colKey]}
                       </td>
                     ))}
-                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
                       {footerTotals.incentive}
                     </td>
-                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
                       {footerTotals.addonIncentive}
                     </td>
-                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center font-semibold tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
+                    <td className="sticky bottom-0 z-40 border-t border-slate-300 bg-slate-100 px-2 py-2 text-center tabular-nums shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]">
                       {footerTotals.arrearDays}
                     </td>
                     <td className="sticky bottom-0 z-40 min-w-[8rem] border-t border-slate-300 bg-slate-100 px-2 py-2 shadow-[0_-2px_6px_-2px_rgba(0,0,0,0.12)]" />

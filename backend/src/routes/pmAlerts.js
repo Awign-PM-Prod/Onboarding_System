@@ -1,0 +1,231 @@
+import { Router } from 'express';
+import { supabaseAdmin } from '../supabase.js';
+import { requireRole } from '../middleware/requireRole.js';
+import { invokeResendEmailBatch } from '../utils/sendEmail.js';
+
+const router = Router();
+
+router.use(requireRole('PROGRAM_MANAGER'));
+
+const DEFAULT_SUBJECT = 'Update from Awign';
+const MAX_MESSAGE_CHARS = 5000;
+const MAX_BULK_RECIPIENTS = 200;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function normalizeEmail(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function isValidEmail(email) {
+  return Boolean(email) && EMAIL_RE.test(email);
+}
+
+function buildAlertBodies({ name, message }) {
+  const displayName = String(name || '').trim() || 'there';
+  const safeName = escapeHtml(displayName);
+  const safeMessageHtml = escapeHtml(message).replace(/\r\n|\r|\n/g, '<br/>');
+  const html = `<p>Hi ${safeName},</p><p>${safeMessageHtml}</p>`;
+  const text = `Hi ${displayName},\n\n${message}`;
+  return { html, text };
+}
+
+function normalizeBulkRecipients(rawList) {
+  const details = [];
+  const recipients = [];
+  const seen = new Set();
+
+  for (const raw of Array.isArray(rawList) ? rawList : []) {
+    const name = String(raw?.name ?? '').trim();
+    const email = normalizeEmail(raw?.email);
+    if (!email) {
+      details.push({ email: '', name, status: 'skipped', reason: 'missing_email' });
+      continue;
+    }
+    if (!isValidEmail(email)) {
+      details.push({ email, name, status: 'skipped', reason: 'invalid_email' });
+      continue;
+    }
+    if (seen.has(email)) {
+      details.push({ email, name, status: 'skipped', reason: 'duplicate_email' });
+      continue;
+    }
+    seen.add(email);
+    recipients.push({ name, email });
+  }
+
+  return { recipients, details };
+}
+
+router.post('/send', async (req, res, next) => {
+  try {
+    const mode = String(req.body?.mode ?? '').trim().toLowerCase();
+    const message = String(req.body?.message ?? '').trim();
+    const subject =
+      String(req.body?.subject ?? '').trim() || DEFAULT_SUBJECT;
+
+    if (mode !== 'single' && mode !== 'bulk') {
+      return res.status(400).json({ error: 'mode must be "single" or "bulk"' });
+    }
+    if (!message) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+    if (message.length > MAX_MESSAGE_CHARS) {
+      return res
+        .status(400)
+        .json({ error: `message must be at most ${MAX_MESSAGE_CHARS} characters` });
+    }
+
+    let toSend = [];
+    const preDetails = [];
+
+    if (mode === 'single') {
+      const employeeId = String(req.body?.employee_id ?? '').trim();
+      if (!employeeId) {
+        return res.status(400).json({ error: 'employee_id is required for single mode' });
+      }
+
+      const { data: employee, error: empErr } = await supabaseAdmin
+        .from('employees')
+        .select('id, name, email, client_id')
+        .eq('id', employeeId)
+        .maybeSingle();
+      if (empErr) throw empErr;
+      if (!employee) {
+        return res.status(404).json({ error: 'Employee not found' });
+      }
+
+      const { data: client, error: clientErr } = await supabaseAdmin
+        .from('clients')
+        .select('id, program_manager_id')
+        .eq('id', employee.client_id)
+        .maybeSingle();
+      if (clientErr) throw clientErr;
+      if (!client || client.program_manager_id !== req.user.id) {
+        return res.status(403).json({ error: 'Not authorized for this employee' });
+      }
+
+      const email = normalizeEmail(employee.email);
+      if (!email || !isValidEmail(email)) {
+        return res.status(400).json({
+          error: 'Selected employee has no valid email',
+          sent: 0,
+          failed: 0,
+          skipped: 1,
+          details: [
+            {
+              email: email || '',
+              name: employee.name || '',
+              status: 'skipped',
+              reason: 'no_email'
+            }
+          ]
+        });
+      }
+
+      toSend = [{ name: String(employee.name ?? '').trim(), email }];
+    } else {
+      const { recipients, details } = normalizeBulkRecipients(req.body?.recipients);
+      preDetails.push(...details);
+
+      if (recipients.length === 0) {
+        return res.status(400).json({
+          error: 'No valid recipients to send',
+          sent: 0,
+          failed: 0,
+          skipped: details.length,
+          details
+        });
+      }
+      if (recipients.length > MAX_BULK_RECIPIENTS) {
+        return res.status(400).json({
+          error: `Bulk send supports at most ${MAX_BULK_RECIPIENTS} recipients`
+        });
+      }
+      toSend = recipients;
+    }
+
+    const edgeRecipients = toSend.map((r) => {
+      const bodies = buildAlertBodies({ name: r.name, message });
+      return {
+        name: r.name,
+        email: r.email,
+        html: bodies.html,
+        text: bodies.text
+      };
+    });
+
+    const result = await invokeResendEmailBatch({
+      subject,
+      recipients: edgeRecipients,
+      logLabel: 'pm-bulk-alert'
+    });
+
+    const details = [...preDetails];
+    const sentEmails = new Set(
+      (result?.sent || []).map((item) => normalizeEmail(item.email)).filter(Boolean)
+    );
+    const failedByEmail = new Map();
+    for (const item of result?.failed || []) {
+      const email = normalizeEmail(item.email);
+      if (email) failedByEmail.set(email, item.error || 'failed');
+    }
+
+    if (result?.skipped && sentEmails.size === 0 && failedByEmail.size === 0) {
+      for (const r of toSend) {
+        details.push({
+          email: r.email,
+          name: r.name,
+          status: 'skipped',
+          reason: result.reason || 'skipped'
+        });
+      }
+      return res.json({
+        sent: 0,
+        failed: 0,
+        skipped: details.filter((d) => d.status === 'skipped').length,
+        details
+      });
+    }
+
+    for (const r of toSend) {
+      if (sentEmails.has(r.email)) {
+        details.push({ email: r.email, name: r.name, status: 'sent' });
+      } else if (failedByEmail.has(r.email)) {
+        details.push({
+          email: r.email,
+          name: r.name,
+          status: 'failed',
+          error: failedByEmail.get(r.email)
+        });
+      } else if (result?.ok) {
+        details.push({ email: r.email, name: r.name, status: 'sent' });
+      } else {
+        details.push({
+          email: r.email,
+          name: r.name,
+          status: 'failed',
+          error: 'unknown'
+        });
+      }
+    }
+
+    const sent = details.filter((d) => d.status === 'sent').length;
+    const failed = details.filter((d) => d.status === 'failed').length;
+    const skipped = details.filter((d) => d.status === 'skipped').length;
+
+    return res.json({ sent, failed, skipped, details });
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default router;

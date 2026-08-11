@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../lib/api';
 import ModalOverlay from './ModalOverlay';
+import { ACTION_BTN_PRIMARY, ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
 import {
   buildClientTemplateCsv,
   parseClientCsvText,
@@ -118,11 +119,11 @@ export default function ClientCsvImportModal({ onClose, onDone }) {
             <button
               type="button"
               onClick={onDownloadTemplate}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              className={ACTION_BTN_SECONDARY}
             >
               Download CSV Template
             </button>
-            <label className="inline-flex cursor-pointer items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            <label className={`cursor-pointer ${ACTION_BTN_SECONDARY}`}>
               Choose CSV
               <input
                 id="client-csv-import-input"
@@ -204,14 +205,14 @@ export default function ClientCsvImportModal({ onClose, onDone }) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              className={ACTION_BTN_SECONDARY}
             >
               {result ? 'Done' : 'Cancel'}
             </button>
             <button
               type="submit"
               disabled={submitting || !rows.length || Boolean(parseError)}
-              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+              className={ACTION_BTN_PRIMARY}
             >
               {submitting ? 'Importing…' : 'Import Clients'}
             </button>

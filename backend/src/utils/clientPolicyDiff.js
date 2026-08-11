@@ -127,6 +127,17 @@ export function diffClientCoreFields(before, after) {
     changes.push(`Zone dependency: ${formatBool(bZoneDep)} → ${formatBool(aZoneDep)}`);
   }
 
+  const fmtCushion = (type, value) => {
+    if (!type || value == null || value === '') return 'none';
+    if (String(type).toUpperCase() === 'PERCENTAGE') return `${value}% of min CTC`;
+    return `₹${value} absolute`;
+  };
+  const bCushion = fmtCushion(before?.cushion_type, before?.cushion_value);
+  const aCushion = fmtCushion(after?.cushion_type, after?.cushion_value);
+  if (bCushion !== aCushion) {
+    changes.push(`CTC cushion: ${bCushion} → ${aCushion}`);
+  }
+
   const designationLabel = (d) => {
     if (d && typeof d === 'object') {
       const name = String(d.name ?? '').trim();

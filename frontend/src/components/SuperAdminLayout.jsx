@@ -13,6 +13,7 @@ import TwoPaneSidebar, {
   SidebarModulesPanel,
   writeSidebarPanelOpen
 } from './TwoPaneSidebar';
+import ModalOverlay from './ModalOverlay';
 
 function IconMenu({ className }) {
   return (
@@ -138,13 +139,16 @@ function SuperAdminLayoutInner() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [clients, setClients] = useState([]);
+  const [dojExtendRequests, setDojExtendRequests] = useState([]);
+  const [dojExtendReviewingId, setDojExtendReviewingId] = useState(null);
+  const [showDojExtendPopup, setShowDojExtendPopup] = useState(false);
+  const dojExtendDismissedRef = useRef(false);
   const mainScrollRef = useRef(null);
 
   const pathname = location.pathname;
   const clientId = paths.matchClientId(pathname);
   const isClientsListPage = pathname === paths.clients;
   const isClientFormPage = paths.isClientFormPath(pathname);
-  const isProgramManagersPage = pathname.startsWith(paths.programManagers);
   const isActivityPage = pathname.startsWith('/super-admin/activity');
   const isSalaryPage = pathname.startsWith('/super-admin/salary-config');
   const isTaskRemindersPage = pathname.startsWith('/super-admin/task-reminders');
@@ -190,6 +194,50 @@ function SuperAdminLayoutInner() {
     }
   }, [clientId]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadDojExtendRequests = async () => {
+      try {
+        const payload = await api.listSuperAdminDojExtendRequests('PENDING');
+        if (cancelled) return;
+        const rows = Array.isArray(payload?.requests) ? payload.requests : [];
+        setDojExtendRequests(rows);
+        if (rows.length > 0 && !dojExtendDismissedRef.current) {
+          setShowDojExtendPopup(true);
+        } else if (rows.length === 0) {
+          dojExtendDismissedRef.current = false;
+          setShowDojExtendPopup(false);
+        }
+      } catch {
+        // Non-blocking
+      }
+    };
+
+    loadDojExtendRequests();
+    const onFocus = () => loadDojExtendRequests();
+    window.addEventListener('focus', onFocus);
+    const intervalId = window.setInterval(loadDojExtendRequests, 90_000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(intervalId);
+    };
+  }, [pathname]);
+
+  const reviewDojExtendRequest = async (requestId, decision) => {
+    if (dojExtendReviewingId) return;
+    setDojExtendReviewingId(requestId);
+    try {
+      await api.reviewSuperAdminDojExtendRequest(requestId, { decision });
+      setDojExtendRequests((prev) => prev.filter((r) => r.id !== requestId));
+    } catch (err) {
+      window.alert(err?.message || `Could not ${decision === 'APPROVED' ? 'approve' : 'reject'} request.`);
+    } finally {
+      setDojExtendReviewingId(null);
+    }
+  };
+
   const handleSignOut = async () => {
     await signOut();
     navigate('/login', { replace: true });
@@ -216,14 +264,6 @@ function SuperAdminLayoutInner() {
       label: 'Clients',
       active: clientsRailActive,
       icon: <IconClients className="h-full w-full" />,
-      onClick: () => setPanelOpenPersist(false)
-    },
-    {
-      id: 'program-managers',
-      to: paths.programManagers,
-      label: 'Program Managers',
-      active: isProgramManagersPage,
-      icon: <IconOnboarding className="h-full w-full" />,
       onClick: () => setPanelOpenPersist(false)
     },
     {
@@ -412,6 +452,88 @@ function SuperAdminLayoutInner() {
           <Outlet />
         </div>
       </div>
+
+      {showDojExtendPopup && dojExtendRequests.length > 0 && (
+        <ModalOverlay
+          onClose={() => {
+            dojExtendDismissedRef.current = true;
+            setShowDojExtendPopup(false);
+          }}
+          backdropClassName="bg-slate-900/50"
+        >
+          <div className="w-full max-w-3xl rounded-xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-900">Extend DOJ requests</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Program Managers requested to unlock expected DOJ for specific employees. Approve to allow a
+              one-time edit for that employee only.
+            </p>
+            <div className="mt-4 max-h-80 overflow-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-700">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Employee</th>
+                    <th className="px-3 py-2 text-left font-medium">Client</th>
+                    <th className="px-3 py-2 text-left font-medium">Current DOJ</th>
+                    <th className="px-3 py-2 text-left font-medium">Requested by</th>
+                    <th className="px-3 py-2 text-left font-medium">Reason</th>
+                    <th className="px-3 py-2 text-right font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {dojExtendRequests.map((row) => (
+                    <tr key={row.id}>
+                      <td className="px-3 py-2 text-slate-800">
+                        <div className="font-medium">{row.employee_name}</div>
+                        {row.employee_mobile ? (
+                          <div className="text-xs text-slate-500">{row.employee_mobile}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700">{row.client_name}</td>
+                      <td className="px-3 py-2 text-slate-700">{row.date_of_joining || '—'}</td>
+                      <td className="px-3 py-2 text-slate-700">{row.requested_by_name}</td>
+                      <td className="max-w-[10rem] truncate px-3 py-2 text-slate-600" title={row.reason || ''}>
+                        {row.reason || '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="inline-flex gap-1.5">
+                          <button
+                            type="button"
+                            disabled={dojExtendReviewingId === row.id}
+                            onClick={() => reviewDojExtendRequest(row.id, 'APPROVED')}
+                            className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={dojExtendReviewingId === row.id}
+                            onClick={() => reviewDojExtendRequest(row.id, 'REJECTED')}
+                            className="rounded-md bg-rose-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-60"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  dojExtendDismissedRef.current = true;
+                  setShowDojExtendPopup(false);
+                }}
+                className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
     </div>
   );
 }

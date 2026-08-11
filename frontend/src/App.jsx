@@ -27,7 +27,9 @@ import SuperAdminActivityPage from './pages/SuperAdminActivityPage';
 import SuperAdminSalaryConfigPage from './pages/SuperAdminSalaryConfigPage';
 import SuperAdminTaskRemindersPage from './pages/SuperAdminTaskRemindersPage';
 import SuperAdminStaffAccountsPage from './pages/SuperAdminStaffAccountsPage';
+import SetPasswordPage from './pages/SetPasswordPage';
 import PmClientsPage from './pages/PmClientsPage';
+import PmBulkAlertsPage from './pages/PmBulkAlertsPage';
 import OnboardingForm from './pages/OnboardingForm';
 import OnboardingStatusPage from './pages/OnboardingStatusPage';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -95,6 +97,7 @@ export default function App() {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<PmDashboardHome />} />
         <Route path="clients" element={<PmClientsPage />} />
+        <Route path="bulk-alerts" element={<PmBulkAlertsPage />} />
         <Route path="client/:id" element={<PmClientDefaultRedirect />} />
         <Route path="client/:id/:tab" element={<PmClientDetail />} />
       </Route>
@@ -125,8 +128,11 @@ export default function App() {
         <Route path="clients/new" element={<ClientForm />} />
         <Route path="clients/:id/edit" element={<ClientForm />} />
         <Route path="clients/:id" element={<SuperAdminClientLegacyRedirect />} />
-        <Route path="program-managers" element={<PayrollLeadProgramManagersPage />} />
-        <Route path="program-managers/new" element={<ProgramManagerForm />} />
+        <Route path="program-managers" element={<Navigate to="/super-admin/staff-accounts" replace />} />
+        <Route
+          path="program-managers/new"
+          element={<Navigate to="/super-admin/staff-accounts/new" replace />}
+        />
         <Route path="client/:id">
           <Route index element={<SuperAdminClientDefaultRedirect />} />
           <Route path="dashboard" element={<PayrollClientDashboardHome />} />
@@ -142,10 +148,12 @@ export default function App() {
         <Route path="salary-config" element={<SuperAdminSalaryConfigPage />} />
         <Route path="task-reminders" element={<SuperAdminTaskRemindersPage />} />
         <Route path="staff-accounts" element={<SuperAdminStaffAccountsPage />} />
+        <Route path="staff-accounts/new" element={<ProgramManagerForm />} />
       </Route>
 
       <Route path="/onboardingform" element={<OnboardingForm />} />
       <Route path="/onboarding-status" element={<OnboardingStatusPage />} />
+      <Route path="/set-password" element={<SetPasswordPage />} />
 
       <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="*" element={<Navigate to="/login" replace />} />
