@@ -17,8 +17,9 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      # Repo root so Vite can resolve `@obs/backend` → backend/src during `npm run build`.
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         # Interpolated from repo-root `.env` or your shell — NOT from `frontend/.env`.
         # Empty = same-origin `/api/...` (nginx proxy).

@@ -1,0 +1,13 @@
+# Used when frontend image build context is the repo root (see docker-compose.yml).
+.git
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+backend/scripts
+docs
+supabase
+*.md
+.DS_Store
+npm-debug.log

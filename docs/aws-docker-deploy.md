@@ -5,6 +5,8 @@ This project is containerized with:
 - `frontend` exposed on `8088`
 - `backend` exposed on `8089`
 
+The frontend image build uses the **repo root** as Docker context (`dockerfile: frontend/Dockerfile`) so Vite can resolve shared backend utils (`@obs/backend` → `backend/src`), e.g. the attendance calculator. Always run `docker compose` from the project root.
+
 ## 1) Prepare environment variables
 
 Create or update:
