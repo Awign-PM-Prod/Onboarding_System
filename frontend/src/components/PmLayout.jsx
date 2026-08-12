@@ -388,7 +388,8 @@ export default function PmLayout() {
   const [joiningReminderStep, setJoiningReminderStep] = useState('');
   const [dojDecisionUpdates, setDojDecisionUpdates] = useState([]);
   const [dojDecisionAcking, setDojDecisionAcking] = useState(false);
-  const joiningReminderDismissedRef = useRef(false);
+  /** Client IDs for which the PM dismissed the joining reminder this session. */
+  const joiningReminderDismissedRef = useRef(new Set());
   const mainScrollRef = useRef(null);
 
   const pathname = location.pathname;
@@ -443,8 +444,14 @@ export default function PmLayout() {
     let cancelled = false;
 
     const loadJoiningReminders = async () => {
+      if (!clientId) {
+        setJoiningReminderWithin([]);
+        setJoiningReminderOverdue([]);
+        setJoiningReminderStep('');
+        return;
+      }
       try {
-        const payload = await api.getPmJoiningStatusReminders();
+        const payload = await api.getPmJoiningStatusReminders(clientId);
         if (cancelled) return;
         const withinRows = Array.isArray(payload?.within_2_days)
           ? payload.within_2_days
@@ -454,12 +461,13 @@ export default function PmLayout() {
         const overdueRows = Array.isArray(payload?.overdue) ? payload.overdue : [];
         setJoiningReminderWithin(withinRows);
         setJoiningReminderOverdue(overdueRows);
-        if (!joiningReminderDismissedRef.current) {
+        const dismissed = joiningReminderDismissedRef.current.has(clientId);
+        if (!dismissed) {
           if (withinRows.length > 0) setJoiningReminderStep('within');
           else if (overdueRows.length > 0) setJoiningReminderStep('overdue');
           else setJoiningReminderStep('');
         } else if (withinRows.length === 0 && overdueRows.length === 0) {
-          joiningReminderDismissedRef.current = false;
+          joiningReminderDismissedRef.current.delete(clientId);
           setJoiningReminderStep('');
         }
       } catch {
@@ -487,21 +495,22 @@ export default function PmLayout() {
     refreshAll();
     const onFocus = () => refreshAll();
     window.addEventListener('focus', onFocus);
-    const intervalId = window.setInterval(refreshAll, 90_000);
+    // Poll joining reminders only while inside a client workspace.
+    const intervalId = clientId ? window.setInterval(refreshAll, 90_000) : null;
 
     return () => {
       cancelled = true;
       window.removeEventListener('focus', onFocus);
-      window.clearInterval(intervalId);
+      if (intervalId != null) window.clearInterval(intervalId);
     };
-  }, [pathname]);
+  }, [pathname, clientId]);
 
   const refreshJoiningReminders = useCallback(() => {
     joiningReminderLoadRef.current?.();
   }, []);
 
   const dismissJoiningReminder = () => {
-    joiningReminderDismissedRef.current = true;
+    if (clientId) joiningReminderDismissedRef.current.add(clientId);
     setJoiningReminderStep('');
     refreshJoiningReminders();
   };
@@ -702,7 +711,10 @@ export default function PmLayout() {
         </ModalOverlay>
       )}
 
-      {dojDecisionUpdates.length === 0 && joiningReminderStep === 'within' && joiningReminderWithin.length > 0 && (
+      {clientId &&
+        dojDecisionUpdates.length === 0 &&
+        joiningReminderStep === 'within' &&
+        joiningReminderWithin.length > 0 && (
         <JoiningStatusReminderModal
           title="Joining Status Update Reminder (Within 2 working days of DOJ)"
           rows={joiningReminderWithin}
@@ -712,7 +724,10 @@ export default function PmLayout() {
           onNext={joiningReminderOverdue.length > 0 ? () => setJoiningReminderStep('overdue') : null}
         />
       )}
-      {dojDecisionUpdates.length === 0 && joiningReminderStep === 'overdue' && joiningReminderOverdue.length > 0 && (
+      {clientId &&
+        dojDecisionUpdates.length === 0 &&
+        joiningReminderStep === 'overdue' &&
+        joiningReminderOverdue.length > 0 && (
         <JoiningStatusReminderModal
           title="Joining Status Update Reminder (DOJ - Overdue)"
           rows={joiningReminderOverdue}

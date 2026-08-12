@@ -17,6 +17,70 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+function compareByName(a, b) {
+  return String(a.client_name || '').localeCompare(String(b.client_name || ''));
+}
+
+/** Sort by contract start, then end (open-ended last when ascending). */
+function compareContractPeriod(a, b, dir) {
+  const mult = dir === 'asc' ? 1 : -1;
+  const aStart = String(a.contract_start_date || '');
+  const bStart = String(b.contract_start_date || '');
+  if (aStart !== bStart) {
+    if (!aStart) return 1;
+    if (!bStart) return -1;
+    return aStart.localeCompare(bStart) * mult;
+  }
+  const aOpen = Boolean(a.open_ended_contract) || !a.contract_end_date;
+  const bOpen = Boolean(b.open_ended_contract) || !b.contract_end_date;
+  if (aOpen !== bOpen) return (aOpen ? 1 : -1) * mult;
+  const aEnd = String(a.contract_end_date || '');
+  const bEnd = String(b.contract_end_date || '');
+  if (aEnd !== bEnd) {
+    if (!aEnd) return 1;
+    if (!bEnd) return -1;
+    return aEnd.localeCompare(bEnd) * mult;
+  }
+  return compareByName(a, b);
+}
+
+/** Sort by applicable, then amount, then insurer name. */
+function compareInsurance(a, b, dir) {
+  const mult = dir === 'asc' ? 1 : -1;
+  const aApp = a.insurance_applicable ? 1 : 0;
+  const bApp = b.insurance_applicable ? 1 : 0;
+  if (aApp !== bApp) return (aApp - bApp) * mult;
+  const aAmt = Number(a.insurance_amount);
+  const bAmt = Number(b.insurance_amount);
+  const aAmtN = Number.isFinite(aAmt) ? aAmt : 0;
+  const bAmtN = Number.isFinite(bAmt) ? bAmt : 0;
+  if (aAmtN !== bAmtN) return (aAmtN - bAmtN) * mult;
+  const nameCmp = String(a.insurance_name || '').localeCompare(String(b.insurance_name || ''), undefined, {
+    sensitivity: 'base',
+  });
+  if (nameCmp) return nameCmp * mult;
+  return compareByName(a, b);
+}
+
+function SortableColumnHeader({ label, active, sortDir, onClick, ariaLabel }) {
+  return (
+    <th className="px-4 py-2.5 text-left font-medium">
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900"
+        aria-label={ariaLabel}
+      >
+        {label}
+        <span className="inline-flex flex-col text-[10px] leading-none text-slate-400" aria-hidden>
+          <span className={active && sortDir === 'asc' ? 'text-slate-700' : ''}>▲</span>
+          <span className={active && sortDir === 'desc' ? 'text-slate-700' : ''}>▼</span>
+        </span>
+      </button>
+    </th>
+  );
+}
+
 export default function PayrollLeadClientsPage() {
   const paths = useWorkspacePaths();
   const [clients, setClients] = useState([]);
@@ -24,6 +88,8 @@ export default function PayrollLeadClientsPage() {
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState('');
+  const [sortDir, setSortDir] = useState('asc');
   const [exportingId, setExportingId] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [downloadingMaster, setDownloadingMaster] = useState(false);
@@ -76,17 +142,33 @@ export default function PayrollLeadClientsPage() {
     }
   };
 
-  const filtered = clients.filter((c) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      c.client_name?.toLowerCase().includes(q) ||
-      c.contract_code?.toLowerCase().includes(q) ||
-      c.program_manager_name?.toLowerCase().includes(q) ||
-      c.entity?.toLowerCase().includes(q) ||
-      c.state?.toLowerCase().includes(q)
-    );
-  });
+  const toggleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const filtered = clients
+    .filter((c) => {
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      return (
+        c.client_name?.toLowerCase().includes(q) ||
+        c.contract_code?.toLowerCase().includes(q) ||
+        c.program_manager_name?.toLowerCase().includes(q) ||
+        c.entity?.toLowerCase().includes(q) ||
+        c.state?.toLowerCase().includes(q)
+      );
+    })
+    .slice()
+    .sort((a, b) => {
+      if (sortKey === 'contract_period') return compareContractPeriod(a, b, sortDir);
+      if (sortKey === 'insurance') return compareInsurance(a, b, sortDir);
+      return 0;
+    });
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
@@ -192,8 +274,32 @@ export default function PayrollLeadClientsPage() {
                   <th className="px-4 py-2.5 text-left font-medium">State</th>
                   <th className="px-4 py-2.5 text-left font-medium">Contract Code</th>
                   <th className="px-4 py-2.5 text-left font-medium">Program Manager</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Contract Period</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Insurance</th>
+                  <SortableColumnHeader
+                    label="Contract Period"
+                    active={sortKey === 'contract_period'}
+                    sortDir={sortDir}
+                    onClick={() => toggleSort('contract_period')}
+                    ariaLabel={`Sort by contract period, currently ${
+                      sortKey === 'contract_period'
+                        ? sortDir === 'asc'
+                          ? 'earliest first'
+                          : 'latest first'
+                        : 'unsorted'
+                    }`}
+                  />
+                  <SortableColumnHeader
+                    label="Insurance"
+                    active={sortKey === 'insurance'}
+                    sortDir={sortDir}
+                    onClick={() => toggleSort('insurance')}
+                    ariaLabel={`Sort by insurance, currently ${
+                      sortKey === 'insurance'
+                        ? sortDir === 'asc'
+                          ? 'none then lowest amount'
+                          : 'highest amount then none'
+                        : 'unsorted'
+                    }`}
+                  />
                   <th className="px-4 py-2.5 text-right font-medium">Actions</th>
                 </tr>
               </thead>

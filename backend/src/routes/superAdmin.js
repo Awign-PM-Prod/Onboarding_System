@@ -3,7 +3,13 @@ import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { INDIAN_STATES, normalizeIndianState } from '../utils/indianStates.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
-import { SKILL_LEVELS, WAGE_ZONES, normalizeSkillLevel, normalizeWageZone } from '../utils/wageConfig.js';
+import {
+  SKILL_LEVELS,
+  WAGE_ZONES,
+  normalizeRegionName,
+  normalizeSkillLevel,
+  normalizeWageZone
+} from '../utils/wageConfig.js';
 import { runRemainingTaskDigest } from '../jobs/remainingTaskDigest.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
 import { buildLoginLink, buildPasswordResetEmail } from '../utils/staffInvite.js';
@@ -635,6 +641,114 @@ router.put('/salary-minimums', async (req, res, next) => {
     });
 
     res.json(data ?? []);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/super-admin/region-zones — optional ?state=
+router.get('/region-zones', async (req, res, next) => {
+  try {
+    let query = supabaseAdmin
+      .from('state_region_zones')
+      .select('id, state, region, zone, updated_by, updated_at')
+      .order('state', { ascending: true })
+      .order('region', { ascending: true });
+
+    const stateRaw = req.query.state;
+    if (stateRaw !== undefined && stateRaw !== null && String(stateRaw).trim() !== '') {
+      const state = normalizeIndianState(String(stateRaw));
+      if (!state) {
+        return res.status(400).json({ error: 'Invalid Indian state/UT' });
+      }
+      query = query.eq('state', state);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data ?? []);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/super-admin/region-zones — replace all regions for one state
+// body: { state, items: [{ region, zone }] }
+router.put('/region-zones', async (req, res, next) => {
+  try {
+    const state = normalizeIndianState(req.body?.state);
+    if (!state) {
+      return res.status(400).json({ error: 'Valid state is required' });
+    }
+
+    const items = Array.isArray(req.body?.items) ? req.body.items : null;
+    if (!items) {
+      return res.status(400).json({ error: 'items array is required' });
+    }
+
+    const upserts = [];
+    const errors = [];
+    const seenRegions = new Set();
+
+    for (const item of items) {
+      const region = normalizeRegionName(item?.region);
+      if (!region) {
+        errors.push('region is required and must be non-empty');
+        continue;
+      }
+      const regionKey = region.toLowerCase();
+      if (seenRegions.has(regionKey)) {
+        errors.push(`Duplicate region "${region}" for ${state}`);
+        continue;
+      }
+      seenRegions.add(regionKey);
+
+      const zone = normalizeWageZone(item?.zone);
+      if (!zone) {
+        errors.push(`Invalid zone for region "${region}" (expected zone1, zone2, or zone3)`);
+        continue;
+      }
+
+      upserts.push({
+        state,
+        region,
+        zone,
+        updated_by: req.user.id,
+        updated_at: new Date().toISOString()
+      });
+    }
+
+    if (errors.length) {
+      return res.status(400).json({ error: errors.join('; ') });
+    }
+
+    const { error: delError } = await supabaseAdmin
+      .from('state_region_zones')
+      .delete()
+      .eq('state', state);
+    if (delError) throw delError;
+
+    let data = [];
+    if (upserts.length) {
+      const { data: inserted, error: insError } = await supabaseAdmin
+        .from('state_region_zones')
+        .insert(upserts)
+        .select('id, state, region, zone, updated_by, updated_at');
+      if (insError) throw insError;
+      data = inserted ?? [];
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'REGION_ZONES_UPDATED',
+      entityType: 'state_region_zones',
+      summary: `Updated region→zone mapping for ${state} (${upserts.length} region(s))`,
+      metadata: {
+        state,
+        items: upserts.map((u) => ({ region: u.region, zone: u.zone }))
+      }
+    });
+
+    res.json(data);
   } catch (err) {
     next(err);
   }

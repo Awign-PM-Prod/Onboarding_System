@@ -26,6 +26,8 @@ import {
   normalizeCushionType,
   normalizeDesignationList
 } from '../lib/wageConfig';
+import ConfigureRegionZonesModal from '../components/ConfigureRegionZonesModal';
+import { countConfiguredStates } from '../components/RegionZonesEditor';
 
 const emptyForm = {
   client_name: '',
@@ -79,6 +81,8 @@ export default function ClientForm() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [createdClient, setCreatedClient] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const [zoneConfigOpen, setZoneConfigOpen] = useState(false);
+  const [configuredStateCount, setConfiguredStateCount] = useState(null);
 
   useEffect(() => {
     api.listProgramManagers()
@@ -86,6 +90,22 @@ export default function ClientForm() {
       .catch(err => setError(err.message))
       .finally(() => setPmsLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!form.zone_dependency) return undefined;
+    let cancelled = false;
+    api
+      .listRegionZones()
+      .then((rows) => {
+        if (!cancelled) setConfiguredStateCount(countConfiguredStates(rows));
+      })
+      .catch(() => {
+        if (!cancelled) setConfiguredStateCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [form.zone_dependency]);
 
   useEffect(() => {
     if (!isEdit) return;
@@ -395,6 +415,7 @@ export default function ClientForm() {
   }
 
   return (
+    <>
     <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -634,13 +655,39 @@ export default function ClientForm() {
                   />
                 </button>
                 <span className="text-sm text-slate-700">
-                  {form.zone_dependency ? 'On — PM selects zone1–zone3' : 'Off — wage floors use zone1'}
+                  {form.zone_dependency
+                    ? 'On — wage floors use configured zones'
+                    : 'Off — wage floors use zone1'}
                 </span>
               </label>
               <p className="mt-1 text-xs text-slate-500">
                 Some clients need zone-based wages; others do not. When off, CTC floors use zone1 for
                 the designation skill level.
               </p>
+              {form.zone_dependency && (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-100 bg-indigo-50/80 px-3 py-2.5">
+                  <div className="flex items-center gap-2 text-sm text-indigo-900">
+                    <span
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-indigo-300 text-[11px] font-semibold text-indigo-700"
+                      aria-hidden
+                    >
+                      i
+                    </span>
+                    <span>
+                      {configuredStateCount == null
+                        ? 'Loading zone config…'
+                        : `${configuredStateCount} state${configuredStateCount === 1 ? '' : 's'} configured`}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setZoneConfigOpen(true)}
+                    className="inline-flex shrink-0 items-center rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 shadow-sm hover:bg-indigo-50"
+                  >
+                    Configure Zones
+                  </button>
+                </div>
+              )}
             </Field>
 
             <Field label="CTC cushion" error={fieldErrors.cushion_type || fieldErrors.cushion_value}>
@@ -795,6 +842,16 @@ export default function ClientForm() {
           </div>
         </form>
     </main>
+    {zoneConfigOpen && (
+      <ConfigureRegionZonesModal
+        initialState={form.state || ''}
+        onClose={() => setZoneConfigOpen(false)}
+        onSaved={(rows) => {
+          setConfiguredStateCount(countConfiguredStates(rows));
+        }}
+      />
+    )}
+    </>
   );
 }
 

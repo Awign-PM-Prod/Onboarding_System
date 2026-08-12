@@ -131,6 +131,18 @@ function IconWage({ className }) {
   );
 }
 
+function IconMap({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 6.75V15m0-8.25L15.75 4.5 21 6.75v11.25L15.75 15.75 9 18 3 15.75V4.5L9 6.75zm6.75-2.25V15"
+      />
+    </svg>
+  );
+}
+
 function SuperAdminLayoutInner() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -151,6 +163,7 @@ function SuperAdminLayoutInner() {
   const isClientFormPage = paths.isClientFormPath(pathname);
   const isActivityPage = pathname.startsWith('/super-admin/activity');
   const isSalaryPage = pathname.startsWith('/super-admin/salary-config');
+  const isRegionZonesPage = pathname.startsWith('/super-admin/region-zones');
   const isTaskRemindersPage = pathname.startsWith('/super-admin/task-reminders');
   const isStaffAccountsPage = pathname.startsWith('/super-admin/staff-accounts');
 
@@ -280,6 +293,14 @@ function SuperAdminLayoutInner() {
       label: 'Salary Config',
       active: isSalaryPage,
       icon: <IconWage className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
+      id: 'region-zones',
+      to: '/super-admin/region-zones',
+      label: 'Region Zones',
+      active: isRegionZonesPage,
+      icon: <IconMap className="h-full w-full" />,
       onClick: () => setPanelOpenPersist(false)
     },
     {

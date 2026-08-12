@@ -7,7 +7,6 @@ import ModalOverlay from './ModalOverlay';
 import {
   CUSHION_TYPE_LABELS,
   SKILL_LEVEL_LABELS,
-  WAGE_ZONES,
   ZONE_LABELS,
   applyCushion,
   designationNameOf,
@@ -23,7 +22,7 @@ const empty = {
   ctc_type: 'MONTHLY',
   ctc_value: '',
   state: '',
-  zone: 'zone1'
+  region: ''
 };
 
 function effectiveMonthlyCtc(payType, ctcType, ctcValue) {
@@ -55,12 +54,15 @@ export default function RoleDetailsModal({
     ...empty,
     designation: designationNameOf(designationRows[0]) || '',
     state: defaultState && INDIAN_STATES.includes(defaultState) ? defaultState : '',
-    zone: 'zone1'
+    region: ''
   }));
   const [fieldErrors, setFieldErrors] = useState({});
   const [sendOnboardingNow, setSendOnboardingNow] = useState(false);
   const [baseMinMonthlyCtc, setBaseMinMonthlyCtc] = useState(null);
   const [minLoading, setMinLoading] = useState(false);
+  const [regionOptions, setRegionOptions] = useState([]);
+  const [regionsLoading, setRegionsLoading] = useState(false);
+  const [regionsError, setRegionsError] = useState('');
 
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
 
@@ -73,17 +75,74 @@ export default function RoleDetailsModal({
     return normalizeSkillLevel(match?.skill_level, 'UNSKILLED');
   }, [designationRows, form.designation]);
 
-  const lookupZone = zoneDependency ? form.zone || 'zone1' : 'zone1';
+  const derivedZone = useMemo(() => {
+    if (!zoneDependency || !form.region) return zoneDependency ? null : 'zone1';
+    const match = regionOptions.find(
+      (r) => String(r.region).toLowerCase() === String(form.region).toLowerCase()
+    );
+    return match?.zone || null;
+  }, [zoneDependency, form.region, regionOptions]);
 
-  const effectiveFloor = useMemo(
-    () => applyCushion(baseMinMonthlyCtc, resolvedCushionType, cushionValue),
-    [baseMinMonthlyCtc, resolvedCushionType, cushionValue]
-  );
+  const lookupZone = zoneDependency ? derivedZone || null : 'zone1';
+
+  // Load regions for selected state when zone dependency is on.
+  useEffect(() => {
+    if (!zoneDependency) {
+      setRegionOptions([]);
+      setRegionsError('');
+      setRegionsLoading(false);
+      return undefined;
+    }
+    const state = form.state;
+    if (!state || !INDIAN_STATES.includes(state)) {
+      setRegionOptions([]);
+      setRegionsError('');
+      setRegionsLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setRegionsLoading(true);
+    setRegionsError('');
+    api
+      .listRegionZonesForState(state)
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data) ? data : [];
+        setRegionOptions(list);
+        if (!list.length) {
+          setRegionsError('No regions configured for this state. Ask Super Admin to add Region Zones.');
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setRegionOptions([]);
+        setRegionsError(err.message || 'Could not load regions for this state.');
+      })
+      .finally(() => {
+        if (!cancelled) setRegionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [zoneDependency, form.state]);
+
+  // Clear region when state changes or current region is no longer valid.
+  useEffect(() => {
+    if (!zoneDependency) return;
+    setForm((f) => {
+      if (!f.region) return f;
+      const stillValid = regionOptions.some(
+        (r) => String(r.region).toLowerCase() === String(f.region).toLowerCase()
+      );
+      if (stillValid) return f;
+      return { ...f, region: '' };
+    });
+  }, [zoneDependency, regionOptions, form.state]);
 
   // Fetch wage CTC minimum; cushion is applied client-side for the effective floor.
   useEffect(() => {
     const state = form.state;
-    if (!state || !INDIAN_STATES.includes(state) || !form.designation) {
+    if (!state || !INDIAN_STATES.includes(state) || !form.designation || !lookupZone) {
       setBaseMinMonthlyCtc(null);
       return undefined;
     }
@@ -114,6 +173,11 @@ export default function RoleDetailsModal({
   }, [form.state, form.designation, lookupZone, selectedSkill]);
 
   // When effective floor changes (zone / state / skill / cushion) or switching to CTC, set amount.
+  const effectiveFloor = useMemo(
+    () => applyCushion(baseMinMonthlyCtc, resolvedCushionType, cushionValue),
+    [baseMinMonthlyCtc, resolvedCushionType, cushionValue]
+  );
+
   useEffect(() => {
     if (form.pay_type !== 'CTC' || effectiveFloor == null) return;
     setForm((f) => {
@@ -144,8 +208,9 @@ export default function RoleDetailsModal({
     const ctc = Number(form.ctc_value);
     if (!Number.isFinite(ctc) || ctc < 0) errors.ctc_value = 'Must be a non-negative number';
     if (!form.state) errors.state = 'Required';
-    if (zoneDependency && !WAGE_ZONES.includes(form.zone)) {
-      errors.zone = 'Required';
+    if (zoneDependency) {
+      if (!form.region) errors.region = 'Required';
+      else if (!derivedZone) errors.region = 'Select a configured region';
     }
     if (belowMin) {
       errors.ctc_value = `Must be at least ₹${Number(effectiveFloor).toLocaleString('en-IN')} monthly CTC for ${form.state}`;
@@ -166,13 +231,18 @@ export default function RoleDetailsModal({
       ctc_value: Number(form.ctc_value),
       state: form.state
     };
-    if (zoneDependency) payload.zone = form.zone;
+    if (zoneDependency) payload.region = form.region;
     await onSubmit(payload, { sendOnboardingNow });
   };
 
   const amountLabel = isNetPay ? 'Net Pay Amount' : 'CTC Amount';
+  const zoneLabel = lookupZone ? ZONE_LABELS[lookupZone] || lookupZone : null;
   const submitDisabled =
-    submitting || designationRows.length === 0 || belowMin || minLoading;
+    submitting ||
+    designationRows.length === 0 ||
+    belowMin ||
+    minLoading ||
+    (zoneDependency && (regionsLoading || !form.region || !derivedZone));
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -212,7 +282,7 @@ export default function RoleDetailsModal({
               <select
                 className="input"
                 value={form.state}
-                onChange={(e) => set({ state: e.target.value })}
+                onChange={(e) => set({ state: e.target.value, region: '' })}
               >
                 <option value="">Select state</option>
                 {INDIAN_STATES.map((s) => (
@@ -223,17 +293,39 @@ export default function RoleDetailsModal({
           </div>
 
           {zoneDependency && (
-            <Field label="Zone" error={fieldErrors.zone}>
-              <select
-                className="input"
-                value={form.zone}
-                onChange={(e) => set({ zone: e.target.value })}
-              >
-                {WAGE_ZONES.map((z) => (
-                  <option key={z} value={z}>{ZONE_LABELS[z]}</option>
-                ))}
-              </select>
-            </Field>
+            <>
+              <Field label="Region" error={fieldErrors.region}>
+                <select
+                  className="input"
+                  value={form.region}
+                  disabled={!form.state || regionsLoading}
+                  onChange={(e) => set({ region: e.target.value })}
+                >
+                  <option value="">
+                    {!form.state
+                      ? 'Select state first'
+                      : regionsLoading
+                        ? 'Loading regions…'
+                        : regionOptions.length === 0
+                          ? 'No regions configured'
+                          : 'Select region'}
+                  </option>
+                  {regionOptions.map((r) => (
+                    <option key={r.id || r.region} value={r.region}>
+                      {r.region}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {regionsError && (
+                <p className="text-xs text-amber-700 -mt-2">{regionsError}</p>
+              )}
+              {derivedZone && (
+                <p className="text-xs text-slate-500 -mt-2">
+                  Wage zone: <span className="font-medium text-slate-700">{ZONE_LABELS[derivedZone]}</span>
+                </p>
+              )}
+            </>
           )}
 
           <Field label="Pay Type" error={fieldErrors.pay_type}>
@@ -315,17 +407,17 @@ export default function RoleDetailsModal({
             </div>
           )}
 
-          {!isNetPay && form.state && form.designation && (
+          {!isNetPay && form.state && form.designation && (!zoneDependency || lookupZone) && (
             <p className={`text-xs ${belowMin ? 'text-rose-600' : 'text-slate-500'}`}>
               {minLoading
                 ? 'Loading minimum CTC…'
                 : baseMinMonthlyCtc != null && effectiveFloor != null
                   ? hasCushion
-                    ? `Min ₹${baseMinMonthlyCtc.toLocaleString('en-IN')} + cushion (${CUSHION_TYPE_LABELS[resolvedCushionType] || resolvedCushionType}: ${cushionValue}${resolvedCushionType === 'PERCENTAGE' ? '%' : ''}) → ₹${Number(effectiveFloor).toLocaleString('en-IN')} for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}${belowMin ? ' — increase amount to enable Save' : ''}`
-                    : `Minimum monthly CTC for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}: ₹${Number(effectiveFloor).toLocaleString('en-IN')}${
+                    ? `Min ₹${baseMinMonthlyCtc.toLocaleString('en-IN')} + cushion (${CUSHION_TYPE_LABELS[resolvedCushionType] || resolvedCushionType}: ${cushionValue}${resolvedCushionType === 'PERCENTAGE' ? '%' : ''}) → ₹${Number(effectiveFloor).toLocaleString('en-IN')} for ${form.state}${zoneLabel ? ` / ${zoneLabel}` : ''}${form.region ? ` (${form.region})` : ''} / ${SKILL_LEVEL_LABELS[selectedSkill]}${belowMin ? ' — increase amount to enable Save' : ''}`
+                    : `Minimum monthly CTC for ${form.state}${zoneLabel ? ` / ${zoneLabel}` : ''}${form.region ? ` (${form.region})` : ''} / ${SKILL_LEVEL_LABELS[selectedSkill]}: ₹${Number(effectiveFloor).toLocaleString('en-IN')}${
                         belowMin ? ' — increase amount to enable Save' : ''
                       }`
-                  : `No Super Admin minimum set for ${form.state} / ${ZONE_LABELS[lookupZone] || lookupZone} / ${SKILL_LEVEL_LABELS[selectedSkill]}.`}
+                  : `No Super Admin minimum set for ${form.state}${zoneLabel ? ` / ${zoneLabel}` : ''} / ${SKILL_LEVEL_LABELS[selectedSkill]}.`}
             </p>
           )}
 

@@ -191,7 +191,12 @@ export const api = {
     const qs = q.toString();
     return request(`/api/pm/clients/dashboard-stats${qs ? `?${qs}` : ''}`);
   },
-  getPmJoiningStatusReminders: () => request('/api/pm/clients/joining-status-reminders'),
+  getPmJoiningStatusReminders: (clientId) => {
+    const q = new URLSearchParams();
+    if (clientId) q.set('client_id', clientId);
+    const qs = q.toString();
+    return request(`/api/pm/clients/joining-status-reminders${qs ? `?${qs}` : ''}`);
+  },
   exportPmJoiningStatusReminder: ({ clientId, bucket = 'within_2_days' }) => {
     const q = new URLSearchParams();
     q.set('client_id', clientId);
@@ -512,6 +517,35 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ items })
     }),
+  listRegionZones: (state) => {
+    const q = new URLSearchParams();
+    if (state) q.set('state', state);
+    const qs = q.toString();
+    return request(`/api/region-zones${qs ? `?${qs}` : ''}`);
+  },
+  saveRegionZones: (state, items) =>
+    request('/api/region-zones', {
+      method: 'PUT',
+      body: JSON.stringify({ state, items })
+    }),
+  /** @deprecated Prefer listRegionZones — kept for Super Admin page compatibility */
+  listSuperAdminRegionZones: (state) => {
+    const q = new URLSearchParams();
+    if (state) q.set('state', state);
+    const qs = q.toString();
+    return request(`/api/region-zones${qs ? `?${qs}` : ''}`);
+  },
+  /** @deprecated Prefer saveRegionZones — kept for Super Admin page compatibility */
+  saveSuperAdminRegionZones: (state, items) =>
+    request('/api/region-zones', {
+      method: 'PUT',
+      body: JSON.stringify({ state, items })
+    }),
+  listRegionZonesForState: (state) => {
+    const q = new URLSearchParams();
+    q.set('state', state);
+    return request(`/api/region-zones?${q.toString()}`);
+  },
   listDigestRecipients: () => request('/api/super-admin/digest-recipients'),
   triggerRemainingTaskDigest: (body) =>
     request('/api/super-admin/remaining-task-digest', {

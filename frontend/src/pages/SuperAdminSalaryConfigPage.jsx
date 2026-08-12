@@ -404,7 +404,7 @@ export default function SuperAdminSalaryConfigPage() {
             disabled={loading}
             className={ACTION_BTN_PRIMARY}
           >
-            + Add State
+            Add State
           </button>
         </div>
       </div>
@@ -467,7 +467,7 @@ export default function SuperAdminSalaryConfigPage() {
             {filteredStates.length === 0 && (
               <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
                 {listedStates.length === 0
-                  ? 'No states in the list. Use + Add State or Import CSV to begin.'
+                  ? 'No states in the list. Use Add State or Import CSV to begin.'
                   : 'No states match your search.'}
               </div>
             )}

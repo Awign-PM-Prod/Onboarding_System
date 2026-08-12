@@ -11,6 +11,13 @@ export function normalizeWageZone(raw) {
   return undefined;
 }
 
+/** Trim and collapse whitespace; null if empty. */
+export function normalizeRegionName(raw) {
+  if (raw === undefined || raw === null) return null;
+  const r = String(raw).trim().replace(/\s+/g, ' ');
+  return r || null;
+}
+
 export function normalizeSkillLevel(raw, { defaultValue = null } = {}) {
   if (raw === undefined || raw === null || raw === '') return defaultValue;
   const s = String(raw).trim().toUpperCase().replace(/[-\s]+/g, '_');

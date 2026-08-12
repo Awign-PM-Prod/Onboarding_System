@@ -304,7 +304,19 @@ router.get('/dashboard-stats', async (req, res, next) => {
 
 router.get('/joining-status-reminders', async (req, res, next) => {
   try {
-    const payload = await buildJoiningStatusReminderPayload(req.user.id);
+    const clientId = String(req.query.client_id ?? '').trim() || null;
+    if (clientId) {
+      const { data: client, error: cErr } = await supabaseAdmin
+        .from('clients')
+        .select('id, program_manager_id')
+        .eq('id', clientId)
+        .maybeSingle();
+      if (cErr) throw cErr;
+      if (!client || client.program_manager_id !== req.user.id) {
+        return res.status(403).json({ error: 'Not authorized for this client' });
+      }
+    }
+    const payload = await buildJoiningStatusReminderPayload(req.user.id, { clientId });
     return res.json(payload);
   } catch (err) {
     next(err);

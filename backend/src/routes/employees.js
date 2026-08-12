@@ -6,7 +6,7 @@ import { supabaseAdmin } from '../supabase.js';
 import { buildJobAppFormExportCsv } from '../jobAppFormExport.js';
 import { normalizeIndianState } from '../utils/indianStates.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
-import { applyCushion, normalizeWageZone } from '../utils/wageConfig.js';
+import { applyCushion, normalizeRegionName, normalizeWageZone } from '../utils/wageConfig.js';
 import { listAccessibleClientIds } from '../utils/roleAccess.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
 
@@ -384,11 +384,10 @@ function validateRoleDetails(raw, designationMap, { zoneDependency = false } = {
     errors.push(`designation "${designation}" is not defined on this client`);
   }
 
-  let zone = null;
+  let region = null;
   if (zoneDependency) {
-    const z = normalizeWageZone(raw.zone);
-    if (!z) errors.push('zone is required (zone1, zone2, or zone3)');
-    else zone = z;
+    region = normalizeRegionName(raw.region);
+    if (!region) errors.push('region is required');
   }
 
   if (errors.length) return { errors };
@@ -400,10 +399,47 @@ function validateRoleDetails(raw, designationMap, { zoneDependency = false } = {
       ctc_type: ctcType,
       ctc_value: ctcValue,
       state,
-      zone
+      region,
+      zone: null
     },
-    skill_level: desigMeta?.skill_level || 'UNSKILLED'
+    skill_level: desigMeta?.skill_level || 'UNSKILLED',
+    zoneDependency
   };
+}
+
+/** Resolve zone from state_region_zones when zone dependency is on. Mutates roleDetails.zone. */
+async function resolveRoleDetailsZone(validation) {
+  if (!validation?.roleDetails) return validation;
+  if (!validation.zoneDependency) {
+    validation.roleDetails.zone = null;
+    validation.roleDetails.region = null;
+    return validation;
+  }
+
+  const { state, region } = validation.roleDetails;
+  const { data, error } = await supabaseAdmin
+    .from('state_region_zones')
+    .select('region, zone')
+    .eq('state', state);
+  if (error) throw error;
+
+  const regionKey = String(region).toLowerCase();
+  const match = (data ?? []).find((r) => String(r.region).toLowerCase() === regionKey);
+  if (!match) {
+    return {
+      errors: [`region "${region}" is not configured for ${state}`]
+    };
+  }
+
+  const zone = normalizeWageZone(match.zone);
+  if (!zone) {
+    return { errors: [`Configured zone for region "${region}" is invalid`] };
+  }
+
+  // Persist the canonical region name from config.
+  validation.roleDetails.region = match.region;
+  validation.roleDetails.zone = zone;
+  return validation;
 }
 
 /** Monthly CTC floor from Super Admin state_wage_minimums + optional client cushion. Net Pay is not checked. */
@@ -1008,6 +1044,7 @@ router.post('/', async (req, res, next) => {
           ctc_value: null,
           state: null,
           zone: null,
+          region: null,
           emp_code: null
         };
         validated.push({
@@ -1145,6 +1182,7 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
           ctc_value: null,
           state: null,
           zone: null,
+          region: null,
           emp_code: null
         };
         validated.push({
@@ -1617,11 +1655,15 @@ router.post('/role-details', async (req, res, next) => {
 
     const designationMap = await fetchClientDesignationMap(clientId);
     const wageSettings = await fetchClientWageSettings(clientId);
-    const validation = validateRoleDetails(
-      { designation, date_of_joining, pay_type, ctc_type, ctc_value, state, zone: req.body?.zone },
+    let validation = validateRoleDetails(
+      { designation, date_of_joining, pay_type, ctc_type, ctc_value, state, region: req.body?.region },
       designationMap,
       { zoneDependency: wageSettings.zoneDependency }
     );
+    if (validation.errors) {
+      return res.status(400).json({ error: 'Validation failed', details: validation.errors });
+    }
+    validation = await resolveRoleDetailsZone(validation);
     if (validation.errors) {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
@@ -1652,6 +1694,7 @@ router.post('/role-details', async (req, res, next) => {
         employee_ids: updated.map((r) => r.id),
         designation: validation.roleDetails.designation,
         state: validation.roleDetails.state,
+        region: validation.roleDetails.region,
         zone: validation.roleDetails.zone,
         skill_level: validation.skill_level,
         pay_type: validation.roleDetails.pay_type
@@ -3038,9 +3081,13 @@ router.put('/:id/role-details', async (req, res, next) => {
 
     const designationMap = await fetchClientDesignationMap(row.client_id);
     const wageSettings = await fetchClientWageSettings(row.client_id);
-    const validation = validateRoleDetails(req.body || {}, designationMap, {
+    let validation = validateRoleDetails(req.body || {}, designationMap, {
       zoneDependency: wageSettings.zoneDependency
     });
+    if (validation.errors) {
+      return res.status(400).json({ error: 'Validation failed', details: validation.errors });
+    }
+    validation = await resolveRoleDetailsZone(validation);
     if (validation.errors) {
       return res.status(400).json({ error: 'Validation failed', details: validation.errors });
     }
@@ -3071,6 +3118,7 @@ router.put('/:id/role-details', async (req, res, next) => {
       metadata: {
         designation: validation.roleDetails.designation,
         state: validation.roleDetails.state,
+        region: validation.roleDetails.region,
         zone: validation.roleDetails.zone,
         skill_level: validation.skill_level,
         pay_type: validation.roleDetails.pay_type
