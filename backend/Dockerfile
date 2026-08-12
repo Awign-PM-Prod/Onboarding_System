@@ -9,4 +9,5 @@ COPY src ./src
 
 EXPOSE 8089
 
-CMD ["npm", "start"]
+# Explicit entrypoint (avoid npm script flags that break on Node 20, e.g. --use-system-ca)
+CMD ["node", "src/index.js"]

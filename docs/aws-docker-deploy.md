@@ -43,6 +43,7 @@ Common causes:
 
 1. Missing / empty `backend/.env` → process exits (`SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set`)
 2. Old healthcheck used `wget` (not in `node:20-alpine`) → fixed to use Node `fetch`
+3. `npm start` used `node --use-system-ca`, which **Node 20 does not support** → process exits immediately (`bad option: --use-system-ca`). Production CMD is now `node src/index.js`. Domain / CORS does **not** affect the localhost healthcheck.
 
 ## 2) Build and start on the EC2 host
 
