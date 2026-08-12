@@ -29,14 +29,18 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         # Interpolated from repo-root `.env` or your shell — NOT from `frontend/.env`.
-        # Empty API base = same-origin `/api/...` (nginx proxy).
-        # For split hosts, set only the backend origin (no trailing `/api`).
+        # Empty API base = same-origin `/api/...` (nginx → backend on Docker network).
+        # Production domain: https://staffing-portal.awignhub.in (ALB → :8088).
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
-        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
     depends_on:
       backend:
         condition: service_healthy
     ports:
       - "8088:8088"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8088/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s

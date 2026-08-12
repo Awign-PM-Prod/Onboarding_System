@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 
 import { requireAuth } from './middleware/requireAuth.js';
+import authRouter from './routes/auth.js';
 import programManagersRouter from './routes/programManagers.js';
 import clientsRouter from './routes/clients.js';
 import meRouter from './routes/me.js';
@@ -42,6 +43,7 @@ app.get('/', (_req, res) =>
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+app.use('/api/auth', authRouter);
 app.use('/api/me', requireAuth, meRouter);
 app.use('/api/program-managers', requireAuth, programManagersRouter);
 app.use('/api/clients/:clientId/attendance', requireAuth, attendanceRouter);

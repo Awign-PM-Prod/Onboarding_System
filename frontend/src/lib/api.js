@@ -1,4 +1,9 @@
-import { supabase } from './supabase';
+import {
+  clearStoredSession,
+  getAccessToken,
+  getRefreshToken,
+  writeStoredSession,
+} from './session';
 
 /** Base URL for the Express API (no trailing slash). Empty = same-origin, paths like `/api/me`. */
 const rawBase = import.meta.env.VITE_API_BASE_URL;
@@ -45,26 +50,61 @@ async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
 }
 
 async function authHeader() {
-  try {
-    const sessionPromise = supabase.auth.getSession();
-    const timeoutPromise = new Promise((resolve) =>
-      setTimeout(() => resolve({ data: { session: null } }), 5000)
-    );
-    const { data } = await Promise.race([sessionPromise, timeoutPromise]);
-    const token = data?.session?.access_token;
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  } catch {
-    return {};
-  }
+  const token = getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+let refreshInFlight = null;
+
+async function refreshAccessToken() {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) return null;
+    try {
+      const res = await fetchWithTimeout(
+        apiUrl('/api/auth/refresh'),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        },
+        REQUEST_TIMEOUT_MS,
+      );
+      const text = await res.text();
+      const body = text ? JSON.parse(text) : null;
+      if (!res.ok || !body?.session?.access_token) {
+        clearStoredSession();
+        return null;
+      }
+      writeStoredSession(body.session);
+      return body.session.access_token;
+    } catch {
+      clearStoredSession();
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 }
 
 async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
   const headers = {
     'Content-Type': 'application/json',
     ...(await authHeader()),
-    ...(options.headers || {})
+    ...(options.headers || {}),
   };
-  const res = await fetchWithTimeout(apiUrl(path), { ...options, headers }, timeoutMs);
+  let res = await fetchWithTimeout(apiUrl(path), { ...options, headers }, timeoutMs);
+
+  if (res.status === 401 && !String(path).startsWith('/api/auth/')) {
+    const nextToken = await refreshAccessToken();
+    if (nextToken) {
+      headers.Authorization = `Bearer ${nextToken}`;
+      res = await fetchWithTimeout(apiUrl(path), { ...options, headers }, timeoutMs);
+    }
+  }
+
   const text = await res.text();
   let body = null;
   if (text) {
@@ -73,9 +113,7 @@ async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
     } catch {
       const isHtml = /^\s*</.test(text);
       const wrongDevPort =
-        import.meta.env.DEV &&
-        BASE_URL.includes('localhost:8088') &&
-        isHtml;
+        import.meta.env.DEV && BASE_URL.includes('localhost:8088') && isHtml;
       const hint = wrongDevPort
         ? 'VITE_API_BASE_URL points at the Vite dev server (8088). Use http://localhost:8089 or leave it empty to use the dev proxy.'
         : isHtml
@@ -128,6 +166,21 @@ async function fileRequest(path, options = {}) {
 }
 
 export const api = {
+  login: async ({ email, password }) => {
+    const body = await request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    if (!body?.session?.access_token) {
+      throw new Error('Login failed: no session returned');
+    }
+    return body.session;
+  },
+  logout: () =>
+    request('/api/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   me: () => request('/api/me'),
   listProgramManagers: () => request('/api/program-managers'),
   createProgramManager: (payload) =>

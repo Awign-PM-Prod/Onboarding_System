@@ -52,9 +52,8 @@ export default function Login() {
     setSubmitting(true);
     try {
       await signIn(email, password);
-      // AuthContext picks up the new session, loads the profile in a
-      // separate effect (outside the auth lock), and the useEffect above
-      // navigates to the right dashboard once both are set.
+      // AuthContext loads profile after session is stored; the effect above
+      // navigates once session + profile are ready.
     } catch (err) {
       setSubmitting(false);
       setError(err.message || 'Sign in failed');

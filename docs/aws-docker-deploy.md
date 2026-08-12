@@ -2,8 +2,9 @@
 
 This project is containerized with:
 
-- `frontend` exposed on `8088`
-- `backend` exposed on `8089`
+- `frontend` exposed on `8088` (ALB target: `awign-onboarding-system-frontend`)
+- `backend` exposed on `8089` (Docker network / optional direct access)
+- Public domain: `https://staffing-portal.awignhub.in`
 
 The frontend image build uses the **repo root** as Docker context (`dockerfile: frontend/Dockerfile`) so Vite can resolve shared backend utils (`@obs/backend` → `backend/src`), e.g. the attendance calculator. Always run `docker compose` from the project root.
 
@@ -12,17 +13,16 @@ The frontend image build uses the **repo root** as Docker context (`dockerfile: 
 Create or update:
 
 - `backend/.env` (required for backend runtime secrets — this is what Docker Compose loads)
-- repo-root `.env` (required for frontend **build** args: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, optional `VITE_API_BASE_URL`)
+- repo-root `.env` (optional build arg: `VITE_API_BASE_URL`; leave empty for same-origin `/api`)
 - `frontend/.env` (local Vite only; **ignored** by Docker image build)
 
-Vite embeds `VITE_*` into the static JS at image build time. If Supabase vars are missing during `docker compose build`, the deployed site shows “Supabase configuration missing”.
+The browser talks only to the Express API. Supabase URL/keys live in `backend/.env` only — do **not** put `VITE_SUPABASE_*` in frontend or root `.env`.
 
 Example repo-root `.env` on the server:
 
 ```bash
-VITE_SUPABASE_URL=https://noitppmdzhgwuaviqkvo.supabase.co
-VITE_SUPABASE_ANON_KEY=<your-anon-key>
-VITE_API_BASE_URL=http://13.204.206.236:8089
+# Same-origin under https://staffing-portal.awignhub.in (nginx proxies /api → backend)
+VITE_API_BASE_URL=
 ```
 
 Then rebuild the frontend (build-args only apply on build):
@@ -32,7 +32,7 @@ docker compose build --no-cache frontend
 docker compose up -d frontend
 ```
 
-If you keep a copy under `deployed env/`, copy backend secrets into place on the server:
+If you keep a copy under `deployed env/`, copy secrets into place on the server:
 
 ```bash
 # on your Mac:
@@ -84,10 +84,10 @@ docker compose logs -f frontend
 
 In your EC2 Security Group, allow inbound TCP:
 
-- `8088` (frontend)
-- `8089` (backend, only if you want direct access)
+- `8088` from the ALB security group (required for target health + traffic)
+- `8089` only if you want direct backend access (not required when using nginx `/api` proxy)
 
-If you only want users to use frontend, you can keep backend access restricted and let frontend proxy API traffic through `/api`.
+If ALB target health is **Unhealthy** while `curl http://127.0.0.1:8088/health` works on the instance, the usual cause is missing SG inbound on `8088` from the ALB.
 
 ## 4) Update deployment
 
@@ -101,13 +101,8 @@ docker compose up -d
 
 ## 5) Frontend API base URL
 
-By default, the frontend build leaves `VITE_API_BASE_URL` empty. That makes browser requests use same-origin paths like `/api/me`, and the frontend container's Nginx proxy sends them to the backend service.
+By default, leave `VITE_API_BASE_URL` empty. Browser requests use same-origin paths like `/api/me`, and the frontend container's Nginx proxy sends them to the backend service on the Docker network.
 
-For the split production domains, build the frontend with the backend origin only. Do not include `/api`; the application already prefixes every endpoint with `/api`.
-
-```bash
-VITE_API_BASE_URL=https://awign-onboarding-system-api.awignhub.in docker compose build frontend
-docker compose up -d frontend
-```
+Auth also goes through the API (`POST /api/auth/login`, `/api/auth/refresh`, `/api/auth/logout`).
 
 Avoid setting `VITE_API_BASE_URL` to `/api` or `https://.../api`; older builds with that value generated requests like `/api/api/me`.
