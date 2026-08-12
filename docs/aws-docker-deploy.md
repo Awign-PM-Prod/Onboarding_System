@@ -12,14 +12,32 @@ The frontend image build uses the **repo root** as Docker context (`dockerfile: 
 Create or update:
 
 - `backend/.env` (required for backend runtime secrets — this is what Docker Compose loads)
-- repo-root `.env` (optional; used only for the frontend build arg `VITE_API_BASE_URL`)
+- repo-root `.env` (required for frontend **build** args: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, optional `VITE_API_BASE_URL`)
 - `frontend/.env` (local Vite only; **ignored** by Docker image build)
 
-If you keep a copy under `deployed env/`, copy it into place on the server:
+Vite embeds `VITE_*` into the static JS at image build time. If Supabase vars are missing during `docker compose build`, the deployed site shows “Supabase configuration missing”.
+
+Example repo-root `.env` on the server:
 
 ```bash
-cp "deployed env/backend" backend/.env
-echo 'VITE_API_BASE_URL=http://<your-aws-host>:8089' > .env   # or leave empty to use nginx /api proxy
+VITE_SUPABASE_URL=https://noitppmdzhgwuaviqkvo.supabase.co
+VITE_SUPABASE_ANON_KEY=<your-anon-key>
+VITE_API_BASE_URL=http://13.204.206.236:8089
+```
+
+Then rebuild the frontend (build-args only apply on build):
+
+```bash
+docker compose build --no-cache frontend
+docker compose up -d frontend
+```
+
+If you keep a copy under `deployed env/`, copy backend secrets into place on the server:
+
+```bash
+# on your Mac:
+# scp "deployed env/backend" ubuntu@HOST:~/Onboarding_System/backend/.env
+# scp "deployed env/frontend" ubuntu@HOST:~/Onboarding_System/.env
 ```
 
 At minimum, backend needs:

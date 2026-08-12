@@ -29,10 +29,11 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         # Interpolated from repo-root `.env` or your shell — NOT from `frontend/.env`.
-        # Empty = same-origin `/api/...` (nginx proxy).
-        # For split hosts, set only the backend origin, e.g.
-        # https://awign-onboarding-system-api.awignhub.in (no trailing `/api`).
+        # Empty API base = same-origin `/api/...` (nginx proxy).
+        # For split hosts, set only the backend origin (no trailing `/api`).
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
     depends_on:
       backend:
         condition: service_healthy
