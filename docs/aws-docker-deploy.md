@@ -11,19 +11,38 @@ The frontend image build uses the **repo root** as Docker context (`dockerfile: 
 
 Create or update:
 
-- `backend/.env` (required for backend runtime secrets)
-- repo-root `.env` (optional; copied from `.env.example` when you want Docker Compose to pass a frontend API base URL)
-- `frontend/.env` (only needed for local dev; Docker uses the `VITE_API_BASE_URL` build arg from the repo-root `.env` or shell)
+- `backend/.env` (required for backend runtime secrets — this is what Docker Compose loads)
+- repo-root `.env` (optional; used only for the frontend build arg `VITE_API_BASE_URL`)
+- `frontend/.env` (local Vite only; **ignored** by Docker image build)
+
+If you keep a copy under `deployed env/`, copy it into place on the server:
+
+```bash
+cp "deployed env/backend" backend/.env
+echo 'VITE_API_BASE_URL=http://<your-aws-host>:8089' > .env   # or leave empty to use nginx /api proxy
+```
 
 At minimum, backend needs:
 
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (full JWT — must not be truncated)
 - `PORT=8089`
-- `CORS_ORIGIN=https://awign-onboarding-system.awignhub.in,http://<your-aws-host>:8088`
-- `FRONTEND_URL=https://awign-onboarding-system.awignhub.in`
+- `CORS_ORIGIN=https://staffing-portal.awignhub.in,http://<your-aws-host>:8088`
+- `FRONTEND_URL=https://staffing-portal.awignhub.in`
 
 `CORS_ORIGIN` may contain a comma-separated list when both the public domain and raw port URL need to work.
+
+If the backend container is **unhealthy**, check logs first:
+
+```bash
+docker compose logs backend --tail=100
+docker compose ps
+```
+
+Common causes:
+
+1. Missing / empty `backend/.env` → process exits (`SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set`)
+2. Old healthcheck used `wget` (not in `node:20-alpine`) → fixed to use Node `fetch`
 
 ## 2) Build and start on the EC2 host
 
