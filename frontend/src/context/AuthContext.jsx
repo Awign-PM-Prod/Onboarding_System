@@ -42,7 +42,17 @@ export function AuthProvider({ children }) {
   const signIn = async (email, password) => {
     const next = await api.login({ email, password });
     writeStoredSession(next);
-    setSession(next);
+    try {
+      const me = await api.me();
+      setProfile(me);
+      setSession(next);
+      return me;
+    } catch (err) {
+      clearStoredSession();
+      setProfile(null);
+      setSession(null);
+      throw err;
+    }
   };
 
   const signOut = async () => {

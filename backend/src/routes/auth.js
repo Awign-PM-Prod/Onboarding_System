@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { supabaseAdmin } from '../supabase.js';
+import { createAuthClient, supabaseAdmin } from '../supabase.js';
 
 const router = Router();
 
@@ -26,7 +26,9 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    const { data, error } = await supabaseAdmin.auth.signInWithPassword({ email, password });
+    // Isolated client so the user session never sticks on supabaseAdmin.
+    const auth = createAuthClient();
+    const { data, error } = await auth.auth.signInWithPassword({ email, password });
     if (error || !data?.session || !data?.user) {
       return res.status(401).json({ error: error?.message || 'Invalid email or password.' });
     }
@@ -46,7 +48,8 @@ router.post('/refresh', async (req, res, next) => {
       return res.status(400).json({ error: 'refresh_token is required.' });
     }
 
-    const { data, error } = await supabaseAdmin.auth.refreshSession({
+    const auth = createAuthClient();
+    const { data, error } = await auth.auth.refreshSession({
       refresh_token: refreshToken,
     });
     if (error || !data?.session || !data?.user) {
