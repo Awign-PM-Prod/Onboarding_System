@@ -99,8 +99,48 @@ export function resolveDateRange({
 }
 
 export function customRangeLabel(customFrom, customTo) {
-  if (customFrom && customTo) return `${customFrom} – ${customTo}`;
-  if (customFrom) return `From ${customFrom}`;
-  if (customTo) return `Until ${customTo}`;
+  const format = (ymd) => {
+    const [y, m, d] = String(ymd).split('-').map(Number);
+    if (!y || !m || !d) return ymd;
+    const date = new Date(y, m - 1, d);
+    if (Number.isNaN(date.getTime())) return ymd;
+    return date.toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+
+  if (customFrom && customTo) return `${format(customFrom)} – ${format(customTo)}`;
+  if (customFrom) return `From ${format(customFrom)}`;
+  if (customTo) return `Until ${format(customTo)}`;
   return 'Custom Date Range';
+}
+
+/** Inclusive past-N-days range ending today (e.g. 7 → last 7 calendar days). */
+export function rangeForPastDays(days, today = new Date()) {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const start = new Date(end);
+  start.setDate(end.getDate() - (n - 1));
+  return { from: toYmd(start), to: toYmd(end) };
+}
+
+/** Dashboard filters: custom → past-day preset → month/year/week. */
+export function resolveDashboardDateRange({
+  preset = '',
+  customFrom = '',
+  customTo = '',
+  month = '',
+  year = '',
+  week = ''
+} = {}) {
+  if (customFrom || customTo) {
+    return resolveDateRange({ customFrom, customTo });
+  }
+  if (preset) {
+    return rangeForPastDays(preset) || { from: undefined, to: undefined };
+  }
+  return resolveDateRange({ month, year, week });
 }

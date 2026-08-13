@@ -3,6 +3,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Legend,
   Pie,
   PieChart,
@@ -13,35 +14,122 @@ import {
 } from 'recharts';
 
 const FUNNEL_COLORS = ['#4f46e5', '#6366f1', '#059669', '#047857'];
+// Match Super Admin client-wise palette (indigo → violet → amber → emerald).
 const STATUS_COLORS = {
-  activations: '#4f46e5',
-  submitted: '#6366f1',
-  pending: '#d97706',
-  pm_approved: '#059669',
+  pending: '#4f46e5',
+  awaiting_pm: '#6366f1',
   correction: '#d97706',
-  pl_approved: '#047857'
+  pm_rejected: '#f43f5e',
+  awaiting_pl: '#059669',
+  pl_approved: '#047857',
+  pl_rejected: '#be123c'
 };
 
-function ChartCard({ title, children, className = '' }) {
+/** Mutually exclusive pipeline buckets so stacked height matches real headcount. */
+function exclusiveClientStatus(c, { includeCorrection = false } = {}) {
+  const pending = Number(c.submission_pending) || 0;
+  const submitted = Number(c.employees_submitted) || 0;
+  const pmApproved = Number(c.pm_approved) || 0;
+  const pmRejected = Number(c.pm_rejected) || 0;
+  const correction = Number(c.pm_correction_requested) || 0;
+  const plApproved = Number(c.payroll_approved) || 0;
+  const plRejected = Number(c.payroll_rejected) || 0;
+
+  const reviewed = pmApproved + pmRejected + (includeCorrection ? correction : 0);
+  const awaitingPm = Math.max(0, submitted - reviewed);
+  const awaitingPl = Math.max(0, pmApproved - plApproved - plRejected);
+
+  return {
+    pending,
+    awaiting_pm: awaitingPm,
+    correction: includeCorrection ? correction : 0,
+    pm_rejected: pmRejected,
+    awaiting_pl: awaitingPl,
+    pl_approved: plApproved,
+    pl_rejected: plRejected,
+    total:
+      pending +
+      awaitingPm +
+      (includeCorrection ? correction : 0) +
+      pmRejected +
+      awaitingPl +
+      plApproved +
+      plRejected
+  };
+}
+
+function shortName(raw) {
+  const text = String(raw || 'Client');
+  return text.length > 16 ? `${text.slice(0, 14)}…` : text;
+}
+
+function ChartCard({ title, children, className = '', hint = '' }) {
   return (
     <div className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}>
       <div className="border-b border-slate-200 px-4 py-3">
         <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+        {hint ? <p className="mt-0.5 text-xs text-slate-500">{hint}</p> : null}
       </div>
       <div className="p-4">{children}</div>
     </div>
   );
 }
 
-function shortClientName(c) {
-  const raw = c.client_name || c.contract_code || 'Client';
-  const text = String(raw);
-  return text.length > 16 ? `${text.slice(0, 14)}…` : text;
+function PieLegend({ items }) {
+  return (
+    <div className="mt-1 flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+      {items.map((item) => (
+        <div key={item.name} className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: item.fill }} aria-hidden />
+          <span className="text-xs text-slate-600">{item.name}</span>
+          <span className="text-xs font-semibold text-slate-900">{item.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OutcomeDonut({ legend, emptyText }) {
+  const data = legend.filter((d) => d.value > 0);
+  if (data.length === 0) {
+    return <p className="py-10 text-center text-sm text-slate-500">{emptyText}</p>;
+  }
+  return (
+    <div className="flex h-64 flex-col">
+      <div className="min-h-0 flex-1">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="value"
+              nameKey="name"
+              cx="50%"
+              cy="50%"
+              innerRadius={52}
+              outerRadius={88}
+              paddingAngle={data.length > 1 ? 3 : 0}
+              stroke="#fff"
+              strokeWidth={3}
+            >
+              {data.map((entry) => (
+                <Cell key={entry.name} fill={entry.fill} />
+              ))}
+            </Pie>
+            <Tooltip
+              formatter={(value, name) => [value, name]}
+              contentStyle={{ borderRadius: 8, borderColor: '#e2e8f0', fontSize: 12 }}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <PieLegend items={legend} />
+    </div>
+  );
 }
 
 /**
  * Role-scoped dashboard charts for Payroll Lead and Program Manager.
- * Consumes already filter-scoped totals/clients from dashboard-stats.
+ * UI matches Super Admin analytics; pie content is role-specific.
  */
 export default function RoleDashboardCharts({ role, totals = {}, clients = [] }) {
   const isPm = role === 'pm';
@@ -53,58 +141,64 @@ export default function RoleDashboardCharts({ role, totals = {}, clients = [] })
     { name: 'PL Approved', value: totals.payroll_approved || 0 }
   ];
 
-  const outcomeData = isPm
+  const reviewLegend = isPm
     ? [
         { name: 'PM Approved', value: totals.pm_approved || 0, fill: '#059669' },
         { name: 'PM Rejected', value: totals.pm_rejected || 0, fill: '#e11d48' },
         { name: 'Correction Requested', value: totals.pm_correction_requested || 0, fill: '#d97706' }
-      ].filter((d) => d.value > 0)
-    : [
-        { name: 'PL Approved', value: totals.payroll_approved || 0, fill: '#059669' },
-        { name: 'PL Rejected', value: totals.payroll_rejected || 0, fill: '#e11d48' },
-        { name: 'PM Rejected', value: totals.pm_rejected || 0, fill: '#f43f5e' }
-      ].filter((d) => d.value > 0);
+      ]
+    : [];
+
+  const onboarded = totals.total_onboarded || 0;
+  const activeCount = totals.active_employees || 0;
+  const dropoutCount = totals.total_dropout || 0;
+  const attritionLegend = [
+    { name: 'Onboarded', value: onboarded, fill: '#4f46e5' },
+    { name: 'Active', value: activeCount, fill: '#059669' },
+    { name: 'Dropout', value: dropoutCount, fill: '#e11d48' }
+  ];
+  const attritionPie = [
+    { name: 'Active', value: activeCount, fill: '#059669' },
+    { name: 'Dropout', value: dropoutCount, fill: '#e11d48' }
+  ];
 
   const clientChartData = (clients || [])
     .slice()
-    .sort((a, b) => (b.onboarding_activations || 0) - (a.onboarding_activations || 0))
-    .slice(0, 12)
-    .map((c) => {
-      const row = {
-        name: shortClientName(c),
-        activations: c.onboarding_activations || 0,
-        submitted: c.employees_submitted || 0,
-        pending: c.submission_pending || 0,
-        pm_approved: c.pm_approved || 0,
-        pl_approved: c.payroll_approved || 0
-      };
-      if (isPm) {
-        row.correction = c.pm_correction_requested || 0;
-      }
-      return row;
-    });
+    .map((c) => ({
+      name: shortName(c.client_name || c.contract_code),
+      ...exclusiveClientStatus(c, { includeCorrection: true })
+    }))
+    .sort((a, b) => (b.total || 0) - (a.total || 0))
+    .slice(0, 12);
 
   const hasFunnel = funnelData.some((d) => d.value > 0);
-  const hasOutcome = outcomeData.length > 0;
-  const hasClients = clientChartData.length > 0;
+  const hasReview = isPm && reviewLegend.some((d) => d.value > 0);
+  const hasAttrition = !isPm && (attritionPie.some((d) => d.value > 0) || onboarded > 0);
+  const hasClients = clientChartData.some((d) => d.total > 0);
 
-  if (!hasFunnel && !hasOutcome && !hasClients) {
+  if (!hasFunnel && !hasReview && !hasAttrition && !hasClients) {
     return null;
   }
 
-  const funnelTitle = isPm ? 'Review funnel' : 'Pipeline funnel';
-  const outcomeTitle = isPm ? 'PM review outcomes' : 'Payroll decisions';
-  const outcomeEmpty = isPm ? 'No review outcomes yet.' : 'No payroll decisions yet.';
-
   return (
-    <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
-      <ChartCard title={funnelTitle}>
+    <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <ChartCard title="Pipeline funnel" hint="Each bar is a live headcount at that stage (not cumulative stack).">
         {hasFunnel ? (
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={funnelData} layout="vertical" margin={{ left: 8, right: 16, top: 8, bottom: 8 }}>
+              <BarChart data={funnelData} layout="vertical" margin={{ left: 8, right: 28, top: 8, bottom: 28 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: '#64748b' }} />
+                <XAxis
+                  type="number"
+                  allowDecimals={false}
+                  tick={{ fontSize: 12, fill: '#64748b' }}
+                  label={{
+                    value: 'Total Headcount',
+                    position: 'insideBottom',
+                    offset: -18,
+                    style: { fill: '#64748b', fontSize: 12 }
+                  }}
+                />
                 <YAxis
                   type="category"
                   dataKey="name"
@@ -118,6 +212,13 @@ export default function RoleDashboardCharts({ role, totals = {}, clients = [] })
                   {funnelData.map((entry, index) => (
                     <Cell key={entry.name} fill={FUNNEL_COLORS[index % FUNNEL_COLORS.length]} />
                   ))}
+                  <LabelList
+                    dataKey="value"
+                    position="right"
+                    fill="#334155"
+                    fontSize={12}
+                    fontWeight={600}
+                  />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
@@ -127,42 +228,60 @@ export default function RoleDashboardCharts({ role, totals = {}, clients = [] })
         )}
       </ChartCard>
 
-      <ChartCard title={outcomeTitle}>
-        {hasOutcome ? (
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={outcomeData}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={52}
-                  outerRadius={88}
-                  paddingAngle={2}
-                >
-                  {outcomeData.map((entry) => (
-                    <Cell key={entry.name} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{ borderRadius: 8, borderColor: '#e2e8f0', fontSize: 12 }}
-                />
-                <Legend
-                  verticalAlign="bottom"
-                  height={28}
-                  formatter={(value) => <span className="text-xs text-slate-600">{value}</span>}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        ) : (
-          <p className="py-10 text-center text-sm text-slate-500">{outcomeEmpty}</p>
-        )}
-      </ChartCard>
+      {isPm ? (
+        <ChartCard title="PM review outcomes" hint="Decisions on forms assigned to you.">
+          <OutcomeDonut legend={reviewLegend} emptyText="No review outcomes yet." />
+        </ChartCard>
+      ) : (
+        <ChartCard title="Active vs dropout" hint="Onboarded = Active + Dropout (PL-approved).">
+          {hasAttrition ? (
+            <div className="flex h-64 flex-col">
+              <div className="min-h-0 flex-1">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={
+                        attritionPie.some((d) => d.value > 0)
+                          ? attritionPie.filter((d) => d.value > 0)
+                          : [{ name: 'Onboarded', value: onboarded || 1, fill: '#059669' }]
+                      }
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={52}
+                      outerRadius={88}
+                      paddingAngle={attritionPie.filter((d) => d.value > 0).length > 1 ? 3 : 0}
+                      stroke="#fff"
+                      strokeWidth={3}
+                    >
+                      {(attritionPie.some((d) => d.value > 0)
+                        ? attritionPie.filter((d) => d.value > 0)
+                        : [{ name: 'Onboarded', fill: '#059669' }]
+                      ).map((entry) => (
+                        <Cell key={entry.name} fill={entry.fill} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value, name) => [value, name]}
+                      contentStyle={{ borderRadius: 8, borderColor: '#e2e8f0', fontSize: 12 }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <PieLegend items={attritionLegend} />
+            </div>
+          ) : (
+            <p className="py-10 text-center text-sm text-slate-500">No onboarding outcomes yet.</p>
+          )}
+        </ChartCard>
+      )}
 
-      <ChartCard title="Client-wise onboarding status" className="xl:col-span-2">
+      <ChartCard
+        title="Client-wise onboarding status"
+        className="lg:col-span-2"
+        hint="Stacked segments are exclusive statuses (no double-counting)."
+      >
         {hasClients ? (
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
@@ -184,13 +303,12 @@ export default function RoleDashboardCharts({ role, totals = {}, clients = [] })
                   wrapperStyle={{ fontSize: 12 }}
                   formatter={(value) => <span className="text-xs text-slate-600">{value}</span>}
                 />
-                <Bar dataKey="activations" name="Activations" stackId="a" fill={STATUS_COLORS.activations} />
-                <Bar dataKey="submitted" name="Submitted" stackId="a" fill={STATUS_COLORS.submitted} />
                 <Bar dataKey="pending" name="Pending" stackId="a" fill={STATUS_COLORS.pending} />
-                <Bar dataKey="pm_approved" name="PM Approved" stackId="a" fill={STATUS_COLORS.pm_approved} />
-                {isPm ? (
-                  <Bar dataKey="correction" name="Correction" stackId="a" fill={STATUS_COLORS.correction} />
-                ) : null}
+                <Bar dataKey="awaiting_pm" name="Awaiting PM" stackId="a" fill={STATUS_COLORS.awaiting_pm} />
+                <Bar dataKey="correction" name="Correction" stackId="a" fill={STATUS_COLORS.correction} />
+                <Bar dataKey="pm_rejected" name="PM Rejected" stackId="a" fill={STATUS_COLORS.pm_rejected} />
+                <Bar dataKey="awaiting_pl" name="Awaiting PL" stackId="a" fill={STATUS_COLORS.awaiting_pl} />
+                <Bar dataKey="pl_rejected" name="PL Rejected" stackId="a" fill={STATUS_COLORS.pl_rejected} />
                 <Bar
                   dataKey="pl_approved"
                   name="PL Approved"
@@ -205,7 +323,7 @@ export default function RoleDashboardCharts({ role, totals = {}, clients = [] })
           <p className="py-10 text-center text-sm text-slate-500">No clients to chart.</p>
         )}
         {clients?.length > 12 && (
-          <p className="mt-1 text-xs text-slate-500">Showing top 12 clients by activations.</p>
+          <p className="mt-1 text-xs text-slate-500">Showing top 12 clients by pipeline headcount.</p>
         )}
       </ChartCard>
     </div>

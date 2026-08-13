@@ -3070,26 +3070,13 @@ router.patch('/job-app-form', async (req, res, next) => {
     if (!EMAIL_REGEX.test(emailFinal)) {
       return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
-    if (!TEN_DIGIT_REGEX.test(secondaryMobileFinal)) {
-      return res.status(400).json({ error: 'Alternate mobile number is required and must be 10 digits.' });
-    }
-    if (secondaryMobileFinal === mobile) {
-      return res.status(400).json({ error: 'Alternate mobile must be different from your primary mobile number.' });
-    }
-    const requiresSecondaryMobileVerification =
-      !correctionMode || editableFields.has('pd_secondary_mobile');
-    if (requiresSecondaryMobileVerification) {
-      if (
-        formCurrent.pd_secondary_mobile_verified !== true ||
-        normalizeMobile(formCurrent.pd_secondary_mobile) !== secondaryMobileFinal
-      ) {
-        return res.status(400).json({ error: 'Please verify your alternate mobile number before continuing.' });
+    if (secondaryMobileFinal) {
+      if (!TEN_DIGIT_REGEX.test(secondaryMobileFinal)) {
+        return res.status(400).json({ error: 'Alternate mobile number must be 10 digits.' });
       }
-    } else if (
-      formCurrent.pd_secondary_mobile_verified !== true ||
-      !TEN_DIGIT_REGEX.test(normalizeMobile(formCurrent.pd_secondary_mobile))
-    ) {
-      return res.status(400).json({ error: 'Alternate mobile verification is required before continuing.' });
+      if (secondaryMobileFinal === mobile) {
+        return res.status(400).json({ error: 'Alternate mobile must be different from your primary mobile number.' });
+      }
     }
     const fatherName = String(body.pd_father_name ?? '').trim();
     const motherName = String(body.pd_mother_name ?? '').trim();
@@ -3207,10 +3194,7 @@ router.patch('/job-app-form', async (req, res, next) => {
       email: emailFinal,
       email_verified: true,
       pd_secondary_mobile: secondaryMobileFinal || null,
-      pd_secondary_mobile_verified: secondaryMobileFinal
-        ? formCurrent.pd_secondary_mobile_verified === true &&
-          normalizeMobile(formCurrent.pd_secondary_mobile) === secondaryMobileFinal
-        : false,
+      pd_secondary_mobile_verified: false,
       pd_father_name: fatherName,
       pd_mother_name: motherName,
       pd_spouse_name: isMarried ? spouseNameRaw : null,

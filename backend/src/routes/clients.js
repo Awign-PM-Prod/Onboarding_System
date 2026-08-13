@@ -27,6 +27,7 @@ import {
   parseClientCushion
 } from '../utils/wageConfig.js';
 import { canAccessClientAsLead, isSuperAdminRole, loadUserRole } from '../utils/roleAccess.js';
+import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -108,13 +109,21 @@ const router = Router();
 
 function emptyDashboardCounts() {
   return {
+    clients: 0,
+    employees: 0,
     onboarding_activations: 0,
     employees_submitted: 0,
     submission_pending: 0,
+    awaiting_pm: 0,
     pm_approved: 0,
     pm_rejected: 0,
+    pm_correction_requested: 0,
+    awaiting_pl: 0,
     payroll_approved: 0,
-    payroll_rejected: 0
+    payroll_rejected: 0,
+    total_onboarded: 0,
+    total_dropout: 0,
+    active_employees: 0
   };
 }
 
@@ -129,8 +138,31 @@ function applyDashboardCounts(target, employeeRow, formRow) {
 
   if (reviewStatus === 'APPROVED') target.pm_approved += 1;
   if (reviewStatus === 'REJECTED') target.pm_rejected += 1;
-  if (payrollReviewStatus === 'PAYROLL_APPROVED') target.payroll_approved += 1;
+  if (reviewStatus === 'CORRECTION_REQUESTED') target.pm_correction_requested += 1;
+  if (payrollReviewStatus === 'PAYROLL_APPROVED') {
+    target.payroll_approved += 1;
+    target.total_onboarded += 1;
+    const js = String(employeeRow?.joining_status ?? '').trim();
+    if (js === 'NOT_JOINED' || js === 'JOINED_ABSCONDED') {
+      target.total_dropout += 1;
+    }
+  }
   if (payrollReviewStatus === 'PAYROLL_REJECTED') target.payroll_rejected += 1;
+}
+
+function finalizeDashboardTotals(target) {
+  target.awaiting_pm = Math.max(
+    0,
+    (target.employees_submitted || 0) -
+      (target.pm_approved || 0) -
+      (target.pm_rejected || 0) -
+      (target.pm_correction_requested || 0)
+  );
+  target.awaiting_pl = Math.max(
+    0,
+    (target.pm_approved || 0) - (target.payroll_approved || 0) - (target.payroll_rejected || 0)
+  );
+  target.active_employees = Math.max(0, (target.total_onboarded || 0) - (target.total_dropout || 0));
 }
 
 function parseOpenEnded(body) {
@@ -402,9 +434,6 @@ router.get('/', async (req, res, next) => {
       .from('clients')
       .select('*, program_manager:program_manager_id(id, name, email)')
       .order('created_at', { ascending: false });
-    if (!isSuperAdminRole(user.role)) {
-      listQuery = listQuery.eq('created_by', req.user.id);
-    }
     const { data: clients, error } = await listQuery;
     if (error) throw error;
 
@@ -449,6 +478,9 @@ router.get('/dashboard-stats', async (req, res, next) => {
   try {
     const user = await loadUserRole(req.user.id);
     if (!user) return res.status(403).json({ error: 'User profile not found' });
+    if (user.role !== 'PAYROLL_LEAD' && !isSuperAdminRole(user.role)) {
+      return res.status(403).json({ error: 'Forbidden: requires role PAYROLL_LEAD or SUPER_ADMIN' });
+    }
     req.user.role = user.role;
 
     const fromRaw = String(req.query.from ?? '').trim();
@@ -470,7 +502,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
       .from('clients')
       .select('id, client_name, contract_code')
       .order('client_name', { ascending: true });
-    if (!isSuperAdminRole(user.role)) {
+    if (user.role === 'PAYROLL_LEAD') {
       clientsQuery = clientsQuery.eq('created_by', req.user.id);
     }
     if (filterClientId) {
@@ -487,30 +519,29 @@ router.get('/dashboard-stats', async (req, res, next) => {
     const clientIds = clientRows.map((c) => c.id);
     const clientIdSet = new Set(clientIds);
 
-    let empQuery = supabaseAdmin
-      .from('employees')
-      .select('id, client_id, onboarding_initiated, created_at');
-    if (dateFiltered) {
-      if (fromRaw) empQuery = empQuery.gte('created_at', `${fromRaw}T00:00:00.000Z`);
-      if (toRaw) empQuery = empQuery.lte('created_at', `${toRaw}T23:59:59.999Z`);
-      if (filterClientId) empQuery = empQuery.eq('client_id', filterClientId);
-    } else {
-      empQuery = empQuery.in('client_id', clientIds);
-    }
+    const employeeRows = (
+      await fetchDashboardEmployees({
+        select: 'id, client_id, onboarding_initiated, joining_status, created_at',
+        clientIds,
+        dateFiltered,
+        fromRaw,
+        toRaw,
+        filterClientId
+      })
+    ).filter((e) => clientIdSet.has(e.client_id));
 
-    const { data: employees, error: eErr } = await empQuery;
-    if (eErr) throw eErr;
-
-    const employeeRows = (employees ?? []).filter((e) => clientIdSet.has(e.client_id));
     const employeeIds = employeeRows.map((e) => e.id);
     const formMap = new Map();
     if (employeeIds.length > 0) {
-      const { data: forms, error: fErr } = await supabaseAdmin
-        .from('job_app_form')
-        .select('employee_id, submission_status, review_status, payroll_review_status')
-        .in('employee_id', employeeIds);
-      if (fErr) throw fErr;
-      for (const form of forms ?? []) {
+      const forms = await fetchAllRowsByIds(
+        (idChunk) =>
+          supabaseAdmin
+            .from('job_app_form')
+            .select('employee_id, submission_status, review_status, payroll_review_status')
+            .in('employee_id', idChunk),
+        employeeIds
+      );
+      for (const form of forms) {
         formMap.set(form.employee_id, form);
       }
     }
@@ -523,7 +554,8 @@ router.get('/dashboard-stats', async (req, res, next) => {
           ...emptyDashboardCounts(),
           client_id: c.id,
           client_name: c.client_name,
-          contract_code: c.contract_code
+          contract_code: c.contract_code,
+          employee_count: 0
         }
       ])
     );
@@ -532,10 +564,16 @@ router.get('/dashboard-stats', async (req, res, next) => {
       const current = byClient.get(employee.client_id);
       if (!current) continue;
       clientsWithEmployees.add(employee.client_id);
+      current.employee_count += 1;
       const form = formMap.get(employee.id);
       applyDashboardCounts(current, employee, form);
       applyDashboardCounts(totals, employee, form);
     }
+
+    for (const row of byClient.values()) finalizeDashboardTotals(row);
+    finalizeDashboardTotals(totals);
+    totals.clients = dateFiltered ? clientsWithEmployees.size : clientRows.length;
+    totals.employees = employeeRows.length;
 
     const resultClients = dateFiltered
       ? clientRows.filter((c) => clientsWithEmployees.has(c.id)).map((c) => byClient.get(c.id))

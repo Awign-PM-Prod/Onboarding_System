@@ -1,5 +1,13 @@
 /** Shared KPI/stat card used on PM, PL, and Super Admin dashboards. */
 
+/** Fixed card shell: 88px tall, fluid width, 16×12 padding, 12px radius, 1px border. */
+export const DASHBOARD_STAT_CARD_CLASS =
+  'box-border flex h-[88px] w-full flex-col justify-between rounded-[12px] border border-slate-200 bg-white px-4 py-3 opacity-100 shadow-sm';
+
+/** 16px gap between cards in the grid. */
+export const DASHBOARD_STAT_GRID_CLASS =
+  'grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5';
+
 export const DASHBOARD_STAT_ICONS = {
   users: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5" aria-hidden>
@@ -89,16 +97,16 @@ const TONES = {
 export default function DashboardStatCard({ title, value, tone = 'slate', icon }) {
   const t = TONES[tone] || TONES.slate;
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+    <div className={DASHBOARD_STAT_CARD_CLASS}>
       <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{title}</p>
+        <p className="min-w-0 text-xs font-medium uppercase tracking-wide text-slate-500">{title}</p>
         {icon ? (
-          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${t.icon}`}>
+          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${t.icon}`}>
             {icon}
           </span>
         ) : null}
       </div>
-      <p className={`mt-1 text-2xl font-semibold ${t.value}`}>{value}</p>
+      <p className={`text-2xl font-semibold leading-none ${t.value}`}>{value}</p>
     </div>
   );
 }

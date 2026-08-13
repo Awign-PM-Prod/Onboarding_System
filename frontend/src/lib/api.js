@@ -185,6 +185,8 @@ export const api = {
   listProgramManagers: () => request('/api/program-managers'),
   createProgramManager: (payload) =>
     request('/api/program-managers', { method: 'POST', body: JSON.stringify(payload) }),
+  createPayrollLead: (payload) =>
+    request('/api/super-admin/payroll-leads', { method: 'POST', body: JSON.stringify(payload) }),
   getStaffInvite: (token) =>
     request(`/api/public/staff-auth/invite?token=${encodeURIComponent(token)}`),
   setStaffPasswordFromInvite: (payload) =>

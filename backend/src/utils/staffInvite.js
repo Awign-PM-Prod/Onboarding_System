@@ -15,11 +15,11 @@ export function generateRandomPassword() {
   return crypto.randomBytes(32).toString('base64url');
 }
 
-export function placeholderNameFromEmail(email) {
+export function placeholderNameFromEmail(email, roleLabel = 'Program Manager') {
   const local = String(email || '')
     .split('@')[0]
     .trim();
-  return local || 'Program Manager';
+  return local || roleLabel;
 }
 
 export function buildSetPasswordLink(rawToken) {
@@ -50,11 +50,12 @@ export function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-export function buildInviteEmail({ setPasswordLink }) {
+export function buildInviteEmail({ setPasswordLink, roleLabel = 'Program Manager' }) {
   const link = String(setPasswordLink || '');
+  const label = String(roleLabel || 'Program Manager').trim() || 'Program Manager';
   const subject = 'Set up your Awign account';
   const text = [
-    'You have been invited to Awign as a Program Manager.',
+    `You have been invited to Awign as a ${label}.`,
     '',
     'Click the link below to set your name and password:',
     link,
@@ -62,7 +63,7 @@ export function buildInviteEmail({ setPasswordLink }) {
     'This link expires in 7 days. If you did not expect this email, you can ignore it.'
   ].join('\n');
   const html = `
-    <p>You have been invited to Awign as a Program Manager.</p>
+    <p>You have been invited to Awign as a ${escapeHtml(label)}.</p>
     <p><a href="${escapeHtml(link)}">Set up your account</a></p>
     <p style="color:#64748b;font-size:13px;">This link expires in 7 days. If you did not expect this email, you can ignore it.</p>
   `.trim();

@@ -45,3 +45,4 @@ Run before release. Roles: **PL** (Payroll Lead / HR ops), **PM** (Program Manag
 ## F. Edge cases
 
 - [ ] **G1–G7** DOJ/LWD, HD, P-NH comp-off, empty cells, old month uses that month's policy version, Recompute uses versioned policy
+- [ ] **G8** LWD in declaration month blanks later days (`AB`/`R`/`T` on LWD + Status sync); earlier months unchanged; later-month CSV import skips that employee on the warning popup

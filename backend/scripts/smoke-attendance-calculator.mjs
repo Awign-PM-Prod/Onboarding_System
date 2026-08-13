@@ -138,6 +138,40 @@ assert.ok(defaultSuggestions.every((s) => !dayMarks.some((m) => m.mark_date === 
 // Suggestions stay within the sheet's calendar month
 assert.ok(defaultSuggestions.every((s) => s.mark_date.startsWith('2026-04-')));
 
+const lwdSuggestions = suggestDefaultMarks(
+  policyBundle,
+  '2026-04',
+  [{ mark_date: '2026-04-01', code: 'P' }],
+  { doj: '2026-03-01', lwd: '2026-04-10' }
+);
+assert.ok(lwdSuggestions.every((s) => s.mark_date <= '2026-04-10'));
+assert.ok(!lwdSuggestions.some((s) => s.mark_date > '2026-04-10'));
+
+const lwdSummary = computeRowSummary({
+  dayMarks: [
+    { mark_date: '2026-04-01', code: 'P' },
+    { mark_date: '2026-04-10', code: 'T' }
+  ],
+  policyBundle,
+  employee: { designation: 'Field Executive', gender: 'F', doj: '2026-03-01', lwd: '2026-04-10' },
+  monthYm: '2026-04',
+  ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
+});
+assert.equal(lwdSummary.legend_totals.T, 1);
+assert.equal(lwdSummary.legend_totals.AB ?? 0, 0);
+assert.ok(lwdSummary.not_considered >= 20, 'days after LWD count as not considered');
+assert.ok(lwdSummary.total_days <= 10);
+
+const abSummary = computeRowSummary({
+  dayMarks: [{ mark_date: '2026-04-05', code: 'AB' }],
+  policyBundle,
+  employee: { designation: 'Field Executive', gender: 'F', doj: '2026-04-01', lwd: '2026-04-05' },
+  monthYm: '2026-04',
+  ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
+});
+assert.equal(abSummary.legend_totals.AB, 1);
+assert.equal(abSummary.paid_days, 0);
+
 const filledMarks = [
   ...dayMarks,
   ...defaultSuggestions.map((s) => ({ mark_date: s.mark_date, code: s.code }))

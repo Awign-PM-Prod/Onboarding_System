@@ -4,7 +4,7 @@ import ModalOverlay from '../components/ModalOverlay';
 import SuperAdminDateRangeFilters, {
   FilterSelect
 } from '../components/SuperAdminDateRangeFilters';
-import { resolveDateRange } from '../lib/superAdminDateRange';
+import { resolveDashboardDateRange } from '../lib/superAdminDateRange';
 
 const ACTOR_ROLES = [
   { value: '', label: 'All roles' },
@@ -161,6 +161,7 @@ export default function SuperAdminActivityPage() {
   const [month, setMonth] = useState('');
   const [year, setYear] = useState('');
   const [week, setWeek] = useState('');
+  const [preset, setPreset] = useState('30');
   const [appliedCustomFrom, setAppliedCustomFrom] = useState('');
   const [appliedCustomTo, setAppliedCustomTo] = useState('');
 
@@ -172,14 +173,15 @@ export default function SuperAdminActivityPage() {
 
   const dateRange = useMemo(
     () =>
-      resolveDateRange({
+      resolveDashboardDateRange({
+        preset,
+        customFrom: appliedCustomFrom,
+        customTo: appliedCustomTo,
         month,
         year,
-        week,
-        customFrom: appliedCustomFrom,
-        customTo: appliedCustomTo
+        week
       }),
-    [appliedCustomFrom, appliedCustomTo, month, year, week]
+    [appliedCustomFrom, appliedCustomTo, month, preset, year, week]
   );
 
   const load = useCallback(
@@ -280,45 +282,7 @@ export default function SuperAdminActivityPage() {
       </div>
 
       <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <SuperAdminDateRangeFilters
-          idPrefix="activity"
-          month={month}
-          year={year}
-          week={week}
-          appliedCustomFrom={appliedCustomFrom}
-          appliedCustomTo={appliedCustomTo}
-          onMonthChange={(value) => {
-            setMonth(value);
-            if (value && !year) setYear(String(new Date().getFullYear()));
-            if (value) setWeek('');
-          }}
-          onYearChange={(value) => {
-            setYear(value);
-            if (value) setWeek('');
-          }}
-          onWeekChange={(value) => {
-            setWeek(value);
-            if (value) {
-              setMonth('');
-              setYear('');
-            }
-          }}
-          onCustomClear={() => {
-            setAppliedCustomFrom('');
-            setAppliedCustomTo('');
-          }}
-          onCustomApply={(from, to) => {
-            setError('');
-            setAppliedCustomFrom(from);
-            setAppliedCustomTo(to);
-            setMonth('');
-            setYear('');
-            setWeek('');
-          }}
-          onCustomError={(message) => setError(message)}
-        />
-
-        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+        <div className="flex flex-wrap items-center gap-2">
           <FilterSelect
             id="activity-role"
             value={actorRole}
@@ -334,6 +298,35 @@ export default function SuperAdminActivityPage() {
             className="w-[12rem]"
           />
         </div>
+
+        <SuperAdminDateRangeFilters
+          idPrefix="activity"
+          variant="presets"
+          month={month}
+          year={year}
+          week={week}
+          preset={preset}
+          appliedCustomFrom={appliedCustomFrom}
+          appliedCustomTo={appliedCustomTo}
+          onPresetChange={setPreset}
+          onMonthChange={setMonth}
+          onYearChange={setYear}
+          onWeekChange={setWeek}
+          onCustomClear={() => {
+            setAppliedCustomFrom('');
+            setAppliedCustomTo('');
+          }}
+          onCustomApply={(from, to) => {
+            setError('');
+            setAppliedCustomFrom(from);
+            setAppliedCustomTo(to);
+            setPreset('');
+            setMonth('');
+            setYear('');
+            setWeek('');
+          }}
+          onCustomError={(message) => setError(message)}
+        />
       </div>
 
       {loading && (
@@ -371,14 +364,14 @@ export default function SuperAdminActivityPage() {
                         .filter(Boolean)
                         .join(' · ')}
                     </p>
-                    <time className="mt-1 block text-xs text-slate-500">
-                      {formatWhen(row.created_at)}
-                    </time>
                   </div>
-                  <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-blue-600">
-                    View details
-                    <ChevronIcon className="h-4 w-4" />
-                  </span>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="inline-flex items-center gap-1 text-sm font-medium text-blue-600">
+                      View details
+                      <ChevronIcon className="h-4 w-4" />
+                    </span>
+                    <time className="text-xs text-slate-500">{formatWhen(row.created_at)}</time>
+                  </div>
                 </button>
               </li>
             ))}

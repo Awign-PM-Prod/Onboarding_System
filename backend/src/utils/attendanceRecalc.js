@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../supabase.js';
 import { computeRowSummary, mergeYtdTaken, suggestDefaultMarks } from './attendanceCalculator.js';
+import { parseIsoDate } from './attendanceLwd.js';
 import {
   fetchClientPolicyBundle,
   fetchClientPolicyBundleForMonth,
@@ -161,7 +162,8 @@ export async function applyDefaultMarksForRows(rowsWithMarks, policyBundle, mont
 
   let applied = 0;
   for (const row of rowsWithMarks) {
-    const suggestions = suggestDefaultMarks(policyBundle, monthYmVal, row.day_marks ?? []);
+    const employee = { doj: row.doj, lwd: row.lwd };
+    const suggestions = suggestDefaultMarks(policyBundle, monthYmVal, row.day_marks ?? [], employee);
     if (!suggestions.length) continue;
 
     for (const s of suggestions) {
@@ -182,8 +184,8 @@ export async function applyDefaultMarksForRows(rowsWithMarks, policyBundle, mont
 /**
  * Apply default W/NH marks for one row. Returns updated day marks array.
  */
-export async function applyDefaultMarksForRow(rowId, dayMarks, policyBundle, monthYmVal) {
-  const suggestions = suggestDefaultMarks(policyBundle, monthYmVal, dayMarks ?? []);
+export async function applyDefaultMarksForRow(rowId, dayMarks, policyBundle, monthYmVal, employee = null) {
+  const suggestions = suggestDefaultMarks(policyBundle, monthYmVal, dayMarks ?? [], employee);
   const updated = [...(dayMarks ?? [])];
   for (const s of suggestions) {
     const { error } = await supabaseAdmin.from('attendance_day_marks').insert({
@@ -195,6 +197,30 @@ export async function applyDefaultMarksForRow(rowId, dayMarks, policyBundle, mon
     updated.push({ mark_date: s.mark_date, code: s.code });
   }
   return updated;
+}
+
+/** Delete day marks after LWD on this sheet only. Mutates rowsWithMarks. */
+export async function deleteMarksAfterLwdForRows(rowsWithMarks) {
+  let deleted = 0;
+  for (const row of rowsWithMarks ?? []) {
+    const leave = parseIsoDate(row.lwd);
+    if (!leave || !row.id) continue;
+    const { data, error } = await supabaseAdmin
+      .from('attendance_day_marks')
+      .delete()
+      .eq('row_id', row.id)
+      .gt('mark_date', leave)
+      .select('id');
+    if (error) throw error;
+    deleted += (data ?? []).length;
+    if (Array.isArray(row.day_marks)) {
+      row.day_marks = row.day_marks.filter((m) => {
+        const d = parseIsoDate(m.mark_date);
+        return !d || d <= leave;
+      });
+    }
+  }
+  return deleted;
 }
 
 export async function recalculateRowSummary({
@@ -291,6 +317,7 @@ export async function recalculateForwardYtdForEmployees(clientId, fromMonthYm, e
 export async function recalculateSheetRows(sheet, rowsWithMarks, clientId) {
   const monthYmVal = monthYm(sheet.attendance_month);
   const policyBundle = await fetchClientPolicyBundleForMonth(clientId, monthYmVal);
+  await deleteMarksAfterLwdForRows(rowsWithMarks);
   const defaultMarksApplied = await applyDefaultMarksForRows(rowsWithMarks, policyBundle, monthYmVal);
   const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
   const employeeIds = rowsWithMarks.map((r) => r.employee_id).filter(Boolean);

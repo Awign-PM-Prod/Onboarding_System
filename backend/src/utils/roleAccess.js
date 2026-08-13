@@ -14,19 +14,18 @@ export function isSuperAdminRole(role) {
   return role === 'SUPER_ADMIN';
 }
 
-/** Payroll Lead owner of the client, or Super Admin (org-wide). */
+/** Payroll Lead or Super Admin (org-wide). */
 export function canAccessClientAsLead(user, client) {
   if (!user || !client) return false;
-  if (isSuperAdminRole(user.role)) return true;
-  return user.role === 'PAYROLL_LEAD' && client.created_by === user.id;
+  return isSuperAdminRole(user.role) || user.role === 'PAYROLL_LEAD';
 }
 
-/** Client IDs the caller may manage as PM, PL owner, or Super Admin (all). */
+/** Client IDs the caller may manage as PM, PL (all), or Super Admin (all). */
 export async function listAccessibleClientIds(userId) {
   const user = await loadUserRole(userId);
   if (!user) return { user: null, clientIds: [] };
 
-  if (isSuperAdminRole(user.role)) {
+  if (isSuperAdminRole(user.role) || user.role === 'PAYROLL_LEAD') {
     const { data, error } = await supabaseAdmin.from('clients').select('id');
     if (error) throw error;
     return { user, clientIds: (data ?? []).map((c) => c.id) };
@@ -35,7 +34,7 @@ export async function listAccessibleClientIds(userId) {
   const { data, error } = await supabaseAdmin
     .from('clients')
     .select('id')
-    .or(`program_manager_id.eq.${userId},created_by.eq.${userId}`);
+    .eq('program_manager_id', userId);
   if (error) throw error;
   return { user, clientIds: (data ?? []).map((c) => c.id) };
 }

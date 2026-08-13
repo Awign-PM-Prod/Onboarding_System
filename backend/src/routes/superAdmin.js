@@ -13,6 +13,8 @@ import {
 import { runRemainingTaskDigest } from '../jobs/remainingTaskDigest.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
 import { buildLoginLink, buildPasswordResetEmail } from '../utils/staffInvite.js';
+import { createStaffInviteUser } from '../utils/createStaffInviteUser.js';
+import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
 
 const router = Router();
 
@@ -141,33 +143,31 @@ router.get('/dashboard-stats', async (req, res, next) => {
 
     // When a date range is set, filter by created_at first (cohort of employees added
     // in that period). Avoid chaining a huge .in(client_id) with date bounds.
-    let empQuery = supabaseAdmin
-      .from('employees')
-      .select(
-        'id, client_id, onboarding_initiated, joining_status, ctc_type, ctc_value, payroll_pf_uan_number, payroll_esic_number, created_at'
-      );
-    if (dateFiltered) {
-      if (fromRaw) empQuery = empQuery.gte('created_at', `${fromRaw}T00:00:00.000Z`);
-      if (toRaw) empQuery = empQuery.lte('created_at', `${toRaw}T23:59:59.999Z`);
-      if (filterClientId) empQuery = empQuery.eq('client_id', filterClientId);
-    } else {
-      empQuery = empQuery.in('client_id', clientIds);
-    }
+    const employeeRows = (
+      await fetchDashboardEmployees({
+        select:
+          'id, client_id, onboarding_initiated, joining_status, ctc_type, ctc_value, payroll_pf_uan_number, payroll_esic_number, created_at',
+        clientIds,
+        dateFiltered,
+        fromRaw,
+        toRaw,
+        filterClientId
+      })
+    ).filter((e) => clientIdSet.has(e.client_id));
 
-    const { data: employees, error: eErr } = await empQuery;
-    if (eErr) throw eErr;
-
-    const employeeRows = (employees ?? []).filter((e) => clientIdSet.has(e.client_id));
     totalEmployees = employeeRows.length;
     const employeeIds = employeeRows.map((e) => e.id);
     const formMap = new Map();
     if (employeeIds.length > 0) {
-      const { data: forms, error: fErr } = await supabaseAdmin
-        .from('job_app_form')
-        .select('employee_id, submission_status, review_status, payroll_review_status')
-        .in('employee_id', employeeIds);
-      if (fErr) throw fErr;
-      for (const form of forms ?? []) {
+      const forms = await fetchAllRowsByIds(
+        (idChunk) =>
+          supabaseAdmin
+            .from('job_app_form')
+            .select('employee_id, submission_status, review_status, payroll_review_status')
+            .in('employee_id', idChunk),
+        employeeIds
+      );
+      for (const form of forms) {
         formMap.set(form.employee_id, form);
       }
     }
@@ -774,6 +774,26 @@ router.get('/staff-users', async (_req, res, next) => {
   try {
     res.json(await listPmAndPlUsers());
   } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/payroll-leads — invite Payroll Lead (same flow as PM invite)
+router.post('/payroll-leads', async (req, res, next) => {
+  try {
+    const result = await createStaffInviteUser({
+      email: req.body?.email,
+      role: 'PAYROLL_LEAD',
+      invitedBy: req.user?.id ?? null,
+      roleLabel: 'Payroll Lead',
+      logLabel: 'pl-invite-email',
+      warnLabel: 'super-admin/payroll-leads'
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    if (err?.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 });

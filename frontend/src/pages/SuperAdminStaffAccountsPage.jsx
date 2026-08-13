@@ -19,6 +19,28 @@ function formatRequestedAt(value) {
   }
 }
 
+function PasswordVisibilityToggle({ visible, onToggle }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-500 hover:text-slate-700"
+      aria-label={visible ? 'Hide password' : 'Show password'}
+    >
+      {visible ? (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 export default function SuperAdminStaffAccountsPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -32,6 +54,8 @@ export default function SuperAdminStaffAccountsPage() {
   const [resetUser, setResetUser] = useState(null);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState('');
 
@@ -60,8 +84,9 @@ export default function SuperAdminStaffAccountsPage() {
 
   useEffect(() => {
     if (location.state?.inviteSent) {
-      const email = location.state.inviteEmail || 'the Program Manager';
-      setSuccess(`Invite sent to ${email}. They can set their name and password from the email link.`);
+      const email = location.state.inviteEmail || 'the invitee';
+      const role = location.state.inviteRole || 'staff member';
+      setSuccess(`Invite sent to ${email}. They can set their name and password from the email link (${role}).`);
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location, navigate]);
@@ -79,6 +104,8 @@ export default function SuperAdminStaffAccountsPage() {
     setResetUser(user);
     setPassword('');
     setConfirmPassword('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
     setModalError('');
     setSuccess('');
   };
@@ -88,6 +115,8 @@ export default function SuperAdminStaffAccountsPage() {
     setResetUser(null);
     setPassword('');
     setConfirmPassword('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
     setModalError('');
   };
 
@@ -135,8 +164,8 @@ export default function SuperAdminStaffAccountsPage() {
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Staff Accounts</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Invite Program Managers by email and fulfill password reset requests for Program Managers
-            and Payroll Leads.
+            Invite Program Managers and Payroll Leads by email and fulfill password reset requests for
+            both roles.
           </p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
@@ -154,6 +183,12 @@ export default function SuperAdminStaffAccountsPage() {
             className={ACTION_BTN_PRIMARY}
           >
             Invite Program Manager
+          </Link>
+          <Link
+            to="/super-admin/staff-accounts/new-payroll-lead"
+            className={ACTION_BTN_PRIMARY}
+          >
+            Invite Payroll Lead
           </Link>
         </div>
       </div>
@@ -296,14 +331,20 @@ export default function SuperAdminStaffAccountsPage() {
                 <label htmlFor="staff-new-password" className="block text-sm font-medium text-slate-700">
                   New password
                 </label>
-                <input
-                  id="staff-new-password"
-                  type="password"
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                />
+                <div className="relative mt-1">
+                  <input
+                    id="staff-new-password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 text-sm"
+                  />
+                  <PasswordVisibilityToggle
+                    visible={showPassword}
+                    onToggle={() => setShowPassword((v) => !v)}
+                  />
+                </div>
               </div>
               <div>
                 <label
@@ -312,14 +353,20 @@ export default function SuperAdminStaffAccountsPage() {
                 >
                   Confirm password
                 </label>
-                <input
-                  id="staff-confirm-password"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                />
+                <div className="relative mt-1">
+                  <input
+                    id="staff-confirm-password"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 text-sm"
+                  />
+                  <PasswordVisibilityToggle
+                    visible={showConfirmPassword}
+                    onToggle={() => setShowConfirmPassword((v) => !v)}
+                  />
+                </div>
               </div>
 
               {modalError && (

@@ -5,7 +5,7 @@ import { annualLeaveAllowanceFromPolicy } from './clientPolicy.js';
 export const LEGEND_CODES = [
   'P', 'W', 'NH', 'FH', 'P-NH', 'P-FH', 'HD',
   'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO',
-  'A', 'R', 'T', '-'
+  'A', 'AB', 'R', 'T', '-'
 ];
 
 export const LEGEND_LABELS = {
@@ -24,8 +24,9 @@ export const LEGEND_LABELS = {
   RH: 'RH',
   CO: 'CO',
   A: 'Absent LOP',
-  R: 'NC',
-  T: 'NC',
+  AB: 'Abscond',
+  R: 'Resigned',
+  T: 'Termination',
   '-': 'NC'
 };
 
@@ -45,6 +46,7 @@ export const LEGEND_TOTAL_COLUMNS = [
   { code: 'RH', label: 'RH' },
   { code: 'CO', label: 'CO' },
   { code: 'A', label: 'Absent LOP' },
+  { code: 'AB', label: 'AB' },
   { code: 'R', label: 'R' },
   { code: 'T', label: 'T' },
   { code: '-', label: '-' }
@@ -143,7 +145,10 @@ export function codeCellClass(code) {
   if (c === 'HD') return 'bg-amber-100 text-amber-900';
   if (['EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO'].includes(c)) return 'bg-violet-100 text-violet-900';
   if (c === 'P' || c === 'W') return 'bg-emerald-50 text-emerald-900';
-  if (c === 'R' || c === 'T' || c === '-') return 'bg-slate-100 text-slate-500';
+  if (c === 'AB') return 'bg-red-100 text-red-800 font-semibold';
+  if (c === 'R') return 'bg-amber-100 text-amber-900 font-medium';
+  if (c === 'T') return 'bg-rose-100 text-rose-900 font-medium';
+  if (c === '-') return 'bg-slate-100 text-slate-500';
   return 'bg-white text-slate-800';
 }
 

@@ -1,5 +1,14 @@
 import Papa from 'papaparse';
 import { computeLegendTotals, normalizeAttendanceCode } from './attendanceLegend.js';
+import {
+  applyLwdToDayMarks,
+  exitCodeFromStatus,
+  isAfterLwd,
+  isExitCode,
+  isLwdInMonth,
+  normalizeExitCode,
+  statusFromExitCode
+} from './attendanceLwd.js';
 
 function normalizeHeaderKey(k) {
   return String(k ?? '')
@@ -593,8 +602,28 @@ export function parseAmsAttendanceCsv(text, options = {}) {
       continue;
     }
 
+    const monthForRow = sheetMeta.attendance_month || peekMonth || colMap.dayCols[0]?.date || null;
+    const lwd = toSqlDate(col(row, colMap, 'LWD', 'Last Working Day'), monthForRow);
+    const statusRaw =
+      statusColIdx != null
+        ? row[statusColIdx]
+        : col(
+            row,
+            colMap,
+            'Status',
+            'Employee Status',
+            'Employment Status',
+            'Emp Status',
+            'Emp. Status',
+            'Current Status'
+          );
+    const statusNormalized = normalizeEmployeeStatus(statusRaw);
+    let status_label = statusNormalized || strOrNull(statusRaw);
+
     const dayMarks = [];
     for (const day of colMap.dayCols) {
+      if (isAfterLwd(day.date, lwd)) continue;
+
       const rawCode = row[day.index];
       const normalized = normalizeAttendanceCode(rawCode);
       const rawStr = String(rawCode ?? '').trim().toUpperCase();
@@ -619,6 +648,26 @@ export function parseAmsAttendanceCsv(text, options = {}) {
         continue;
       }
       dayMarks.push({ mark_date: day.date, code: normalized });
+    }
+
+    if (isLwdInMonth(lwd, monthForRow)) {
+      const lwdMark = dayMarks.find((m) => m.mark_date === lwd);
+      const exitFromCell = normalizeExitCode(lwdMark?.code) || (isExitCode(lwdMark?.code) ? lwdMark.code : null);
+      const exitFromStatus = exitCodeFromStatus(statusNormalized);
+      const exitCode = exitFromCell || exitFromStatus;
+      if (!exitCode) {
+        errors.push({
+          row: r + 1,
+          emp_code: empCode,
+          employee_name: name,
+          error: 'LWD date must be AB, R, or T (Abscond, Resigned, or Termination).'
+        });
+        continue;
+      }
+      const nextMarks = applyLwdToDayMarks(dayMarks, lwd, exitCode);
+      dayMarks.length = 0;
+      dayMarks.push(...nextMarks);
+      status_label = statusFromExitCode(exitCode) || status_label;
     }
 
     const payrollMonthRaw = col(row, colMap, 'Payroll Month', 'Attendance Month');
@@ -671,22 +720,6 @@ export function parseAmsAttendanceCsv(text, options = {}) {
 
     const legend_totals = computeLegendTotals(dayMarks.map((d) => d.code));
 
-    const statusRaw =
-      statusColIdx != null
-        ? row[statusColIdx]
-        : col(
-            row,
-            colMap,
-            'Status',
-            'Employee Status',
-            'Employment Status',
-            'Emp Status',
-            'Emp. Status',
-            'Current Status'
-          );
-    const statusNormalized = normalizeEmployeeStatus(statusRaw);
-    const status_label = statusNormalized || strOrNull(statusRaw);
-
     outRows.push({
       emp_code: empCode,
       employee_name_snapshot: name,
@@ -695,7 +728,7 @@ export function parseAmsAttendanceCsv(text, options = {}) {
       location: strOrNull(col(row, colMap, 'Location', 'City')),
       designation: strOrNull(col(row, colMap, 'Designation', 'Role')),
       doj: toSqlDate(col(row, colMap, 'DOJ', 'Date of Joining'), sheetMeta.attendance_month),
-      lwd: toSqlDate(col(row, colMap, 'LWD', 'Last Working Day'), sheetMeta.attendance_month),
+      lwd,
       status_label,
       amt_type: amtType && amtType !== '-' ? amtType : null,
       monthly_amt: numOrNull(col(row, colMap, 'Monthly Amt', 'Monthly Amount', 'CTC')),

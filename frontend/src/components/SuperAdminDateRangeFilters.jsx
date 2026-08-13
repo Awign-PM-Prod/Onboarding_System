@@ -46,8 +46,16 @@ function FilterSelect({ id, value, onChange, options, className = '' }) {
   );
 }
 
+const PRESET_OPTIONS = [
+  { value: '', label: 'All time' },
+  { value: '30', label: 'Past 30 days' },
+  { value: '7', label: 'Past 7 days' }
+];
+
 /**
- * Controlled Month / Year / Week / Custom Date Range filters.
+ * Controlled date filters.
+ * - default: Month / Year / Week / Custom Date Range
+ * - presets: Past 30 days / Past 7 days / Custom Date Range
  * Parent owns applied state; draft custom dates live locally until Apply.
  */
 export default function SuperAdminDateRangeFilters({
@@ -62,6 +70,10 @@ export default function SuperAdminDateRangeFilters({
   onCustomApply,
   onCustomClear,
   onCustomError,
+  /** '' | '7' | '30' — used when variant="presets" */
+  preset = '',
+  onPresetChange,
+  variant = 'default',
   idPrefix = 'sa-date',
   className = ''
 }) {
@@ -70,6 +82,7 @@ export default function SuperAdminDateRangeFilters({
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
 
+  const hasCustomRange = Boolean(appliedCustomFrom || appliedCustomTo);
   const label = customRangeLabel(appliedCustomFrom, appliedCustomTo);
 
   const clearLocalCustom = () => {
@@ -81,6 +94,7 @@ export default function SuperAdminDateRangeFilters({
   const handleClearCustom = () => {
     clearLocalCustom();
     onCustomClear?.();
+    if (variant === 'presets') onPresetChange?.('');
   };
 
   const handleApplyCustom = () => {
@@ -88,9 +102,124 @@ export default function SuperAdminDateRangeFilters({
       onCustomError?.('Custom range: start date must be on or before end date.');
       return;
     }
+    if (!customFrom && !customTo) {
+      onCustomError?.('Custom range: pick at least a start or end date.');
+      return;
+    }
+    onPresetChange?.('');
     onCustomApply?.(customFrom, customTo);
     setCustomOpen(false);
   };
+
+  const handlePresetClick = (value) => {
+    clearLocalCustom();
+    onCustomClear?.();
+    onMonthChange?.('');
+    onYearChange?.('');
+    onWeekChange?.('');
+    // Empty value = All time; other presets toggle off → All time.
+    if (value === '') {
+      onPresetChange?.('');
+      return;
+    }
+    onPresetChange?.(value === preset ? '' : value);
+  };
+
+  const customButton = (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => {
+          if (!customOpen) {
+            setCustomFrom(appliedCustomFrom || '');
+            setCustomTo(appliedCustomTo || '');
+          }
+          setCustomOpen((v) => !v);
+        }}
+        className={`inline-flex items-center gap-2 rounded-lg border bg-white px-3.5 py-2.5 text-sm font-medium shadow-sm hover:border-indigo-300 ${
+          hasCustomRange
+            ? 'border-indigo-500 text-indigo-700'
+            : 'border-slate-200 text-slate-800'
+        }`}
+      >
+        <CalendarIcon className={`h-4 w-4 ${hasCustomRange ? 'text-indigo-500' : 'text-slate-500'}`} />
+        <span className="max-w-[16rem] truncate">{label}</span>
+        <ChevronDownIcon className={`h-4 w-4 ${hasCustomRange ? 'text-indigo-500' : 'text-slate-500'}`} />
+      </button>
+      {customOpen && (
+        <div
+          className={`absolute z-20 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-xl ${
+            variant === 'presets' ? 'right-0' : 'left-0'
+          }`}
+        >
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            Custom date range
+          </p>
+          <div className="mt-2 space-y-2">
+            <label className="block text-xs text-slate-600">
+              From
+              <input
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800"
+              />
+            </label>
+            <label className="block text-xs text-slate-600">
+              To
+              <input
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800"
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleClearCustom}
+              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={handleApplyCustom}
+              className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  if (variant === 'presets') {
+    return (
+      <div className={`flex flex-wrap items-center gap-2 ${className}`}>
+        {PRESET_OPTIONS.map((opt) => {
+          const active = !hasCustomRange && preset === opt.value;
+          return (
+            <button
+              key={opt.label}
+              type="button"
+              onClick={() => handlePresetClick(opt.value)}
+              className={`rounded-lg border bg-white px-3.5 py-2.5 text-sm font-medium shadow-sm ${
+                active
+                  ? 'border-indigo-500 text-indigo-700'
+                  : 'border-slate-200 text-slate-800 hover:border-slate-300'
+              }`}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+        {customButton}
+      </div>
+    );
+  }
 
   return (
     <div className={`flex flex-wrap items-center gap-2 ${className}`}>
@@ -99,6 +228,7 @@ export default function SuperAdminDateRangeFilters({
         value={month}
         onChange={(e) => {
           handleClearCustom();
+          onPresetChange?.('');
           onMonthChange?.(e.target.value);
         }}
         options={MONTH_OPTIONS}
@@ -109,6 +239,7 @@ export default function SuperAdminDateRangeFilters({
         value={year}
         onChange={(e) => {
           handleClearCustom();
+          onPresetChange?.('');
           onYearChange?.(e.target.value);
         }}
         options={yearOptions}
@@ -119,75 +250,13 @@ export default function SuperAdminDateRangeFilters({
         value={week}
         onChange={(e) => {
           handleClearCustom();
+          onPresetChange?.('');
           onWeekChange?.(e.target.value);
         }}
         options={WEEK_OPTIONS}
         className="w-[10.5rem]"
       />
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => {
-            if (!customOpen) {
-              setCustomFrom(appliedCustomFrom || '');
-              setCustomTo(appliedCustomTo || '');
-            }
-            setCustomOpen((v) => !v);
-          }}
-          className={`inline-flex items-center gap-2 rounded-lg border bg-white px-3.5 py-2.5 text-sm font-medium shadow-sm hover:border-slate-300 ${
-            appliedCustomFrom || appliedCustomTo
-              ? 'border-blue-500 text-slate-900'
-              : 'border-slate-200 text-slate-800'
-          }`}
-        >
-          <CalendarIcon className="h-4 w-4 text-slate-500" />
-          <span className="max-w-[12rem] truncate">{label}</span>
-          <ChevronDownIcon className="h-4 w-4 text-slate-500" />
-        </button>
-        {customOpen && (
-          <div className="absolute left-0 z-20 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-              Custom date range
-            </p>
-            <div className="mt-2 space-y-2">
-              <label className="block text-xs text-slate-600">
-                From
-                <input
-                  type="date"
-                  value={customFrom}
-                  onChange={(e) => setCustomFrom(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800"
-                />
-              </label>
-              <label className="block text-xs text-slate-600">
-                To
-                <input
-                  type="date"
-                  value={customTo}
-                  onChange={(e) => setCustomTo(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800"
-                />
-              </label>
-            </div>
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={handleClearCustom}
-                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-              >
-                Clear
-              </button>
-              <button
-                type="button"
-                onClick={handleApplyCustom}
-                className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-              >
-                Apply
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      {customButton}
     </div>
   );
 }

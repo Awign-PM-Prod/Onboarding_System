@@ -151,6 +151,7 @@ export default function App() {
         <Route path="task-reminders" element={<SuperAdminTaskRemindersPage />} />
         <Route path="staff-accounts" element={<SuperAdminStaffAccountsPage />} />
         <Route path="staff-accounts/new" element={<ProgramManagerForm />} />
+        <Route path="staff-accounts/new-payroll-lead" element={<ProgramManagerForm />} />
       </Route>
 
       <Route path="/onboardingform" element={<OnboardingForm />} />

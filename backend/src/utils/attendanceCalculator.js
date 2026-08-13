@@ -6,7 +6,7 @@ import {
 } from './clientPolicyCore.js';
 
 const PAID_FULL = new Set(['P', 'W', 'NH', 'FH', 'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO']);
-const NOT_CONSIDERED = new Set(['R', 'T', '-']);
+const NOT_CONSIDERED = new Set(['AB', 'R', 'T', '-']);
 /** Day marks that count toward a consecutive present-day streak for incentive. */
 const STREAK_PRESENT = new Set(['P', 'P-NH', 'P-FH', 'HD']);
 
@@ -280,8 +280,9 @@ export function computeRowSummary({
 /**
  * Suggest default day marks for empty cells: holidays override week off.
  * Fills the calendar month so suggestions match the visible grid.
+ * Skips dates before DOJ or after LWD so exited/not-yet-joined days stay blank.
  */
-export function suggestDefaultMarks(policyBundle, monthYm, existingMarks = []) {
+export function suggestDefaultMarks(policyBundle, monthYm, existingMarks = [], employee = null) {
   const policy = policyBundle?.attendance_policy ?? {};
   const holidays = policyBundle?.holidays ?? [];
   const period = getCalendarMonthPeriod(monthYm);
@@ -295,6 +296,7 @@ export function suggestDefaultMarks(policyBundle, monthYm, existingMarks = []) {
   const suggestions = [];
   for (const d of datesInPeriod(period.start, period.end)) {
     if (existing.has(d)) continue;
+    if (!isActiveOnDate(d, employee?.doj, employee?.lwd)) continue;
     if (holidayMap.has(d)) {
       suggestions.push({ mark_date: d, code: holidayMap.get(d) });
     } else if (isWeekOffDate(d, policy.week_off_config)) {

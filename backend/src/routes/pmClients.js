@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { classifyDojReminderBucket, todayDateInIST } from '../utils/workingDays.js';
+import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
 
 const router = Router();
 
@@ -170,14 +171,27 @@ router.get('/', async (req, res, next) => {
 
 function emptyCounts() {
   return {
+    clients: 0,
+    employees: 0,
     onboarding_activations: 0,
     employees_submitted: 0,
     submission_pending: 0,
+    awaiting_pm: 0,
     pm_approved: 0,
     pm_rejected: 0,
     pm_correction_requested: 0,
+    awaiting_pl: 0,
     payroll_approved: 0,
-    payroll_rejected: 0
+    payroll_rejected: 0,
+    total_onboarded: 0,
+    total_dropout: 0,
+    active_employees: 0,
+    joining_pending: 0,
+    joining_joined: 0,
+    joining_not_joined: 0,
+    joining_absconded: 0,
+    joining_due: 0,
+    joining_overdue: 0
   };
 }
 
@@ -198,6 +212,43 @@ function applyCounts(target, employeeRow, formRow) {
 
   if (payrollReviewStatus === 'PAYROLL_APPROVED') next.payroll_approved += 1;
   if (payrollReviewStatus === 'PAYROLL_REJECTED') next.payroll_rejected += 1;
+}
+
+function finalizeRoleTotals(target) {
+  target.awaiting_pm = Math.max(
+    0,
+    (target.employees_submitted || 0) -
+      (target.pm_approved || 0) -
+      (target.pm_rejected || 0) -
+      (target.pm_correction_requested || 0)
+  );
+  target.awaiting_pl = Math.max(
+    0,
+    (target.pm_approved || 0) - (target.payroll_approved || 0) - (target.payroll_rejected || 0)
+  );
+  target.active_employees = Math.max(0, (target.total_onboarded || 0) - (target.total_dropout || 0));
+}
+
+function applyJoiningOutcome(target, employeeRow, formRow, { today } = {}) {
+  if (String(formRow?.payroll_review_status ?? '').trim() !== 'PAYROLL_APPROVED') return;
+  target.total_onboarded += 1;
+  const js = String(employeeRow?.joining_status ?? '').trim();
+  if (js === 'JOINED') {
+    target.joining_joined += 1;
+  } else if (js === 'NOT_JOINED') {
+    target.joining_not_joined += 1;
+    target.total_dropout += 1;
+  } else if (js === 'JOINED_ABSCONDED') {
+    target.joining_absconded += 1;
+    target.total_dropout += 1;
+  } else {
+    target.joining_pending += 1;
+    if (today) {
+      const bucket = classifyDojReminderBucket(employeeRow?.date_of_joining, today);
+      if (bucket === 'within_2_days') target.joining_due += 1;
+      else if (bucket === 'overdue') target.joining_overdue += 1;
+    }
+  }
 }
 
 // GET /api/pm/clients/dashboard-stats
@@ -239,34 +290,34 @@ router.get('/dashboard-stats', async (req, res, next) => {
     const clientIds = clientRows.map((c) => c.id);
     const clientIdSet = new Set(clientIds);
 
-    let empQuery = supabaseAdmin
-      .from('employees')
-      .select('id, client_id, onboarding_initiated, created_at');
-    if (dateFiltered) {
-      if (fromRaw) empQuery = empQuery.gte('created_at', `${fromRaw}T00:00:00.000Z`);
-      if (toRaw) empQuery = empQuery.lte('created_at', `${toRaw}T23:59:59.999Z`);
-      if (filterClientId) empQuery = empQuery.eq('client_id', filterClientId);
-    } else {
-      empQuery = empQuery.in('client_id', clientIds);
-    }
+    const employeeRows = (
+      await fetchDashboardEmployees({
+        select: 'id, client_id, onboarding_initiated, joining_status, date_of_joining, created_at',
+        clientIds,
+        dateFiltered,
+        fromRaw,
+        toRaw,
+        filterClientId
+      })
+    ).filter((e) => clientIdSet.has(e.client_id));
 
-    const { data: employees, error: eErr } = await empQuery;
-    if (eErr) throw eErr;
-
-    const employeeRows = (employees ?? []).filter((e) => clientIdSet.has(e.client_id));
     const employeeIds = employeeRows.map((e) => e.id);
     const formMap = new Map();
     if (employeeIds.length > 0) {
-      const { data: forms, error: fErr } = await supabaseAdmin
-        .from('job_app_form')
-        .select('employee_id, submission_status, review_status, payroll_review_status')
-        .in('employee_id', employeeIds);
-      if (fErr) throw fErr;
-      for (const form of forms ?? []) {
+      const forms = await fetchAllRowsByIds(
+        (idChunk) =>
+          supabaseAdmin
+            .from('job_app_form')
+            .select('employee_id, submission_status, review_status, payroll_review_status')
+            .in('employee_id', idChunk),
+        employeeIds
+      );
+      for (const form of forms) {
         formMap.set(form.employee_id, form);
       }
     }
 
+    const today = todayDateInIST();
     const clientsWithEmployees = new Set();
     const byClient = new Map(
       clientRows.map((c) => [
@@ -275,7 +326,8 @@ router.get('/dashboard-stats', async (req, res, next) => {
           ...emptyCounts(),
           client_id: c.id,
           client_name: c.client_name,
-          contract_code: c.contract_code
+          contract_code: c.contract_code,
+          employee_count: 0
         }
       ])
     );
@@ -284,10 +336,18 @@ router.get('/dashboard-stats', async (req, res, next) => {
       const current = byClient.get(employee.client_id);
       if (!current) continue;
       clientsWithEmployees.add(employee.client_id);
+      current.employee_count += 1;
       const form = formMap.get(employee.id);
       applyCounts(current, employee, form);
       applyCounts(totals, employee, form);
+      applyJoiningOutcome(current, employee, form, { today });
+      applyJoiningOutcome(totals, employee, form, { today });
     }
+
+    for (const row of byClient.values()) finalizeRoleTotals(row);
+    finalizeRoleTotals(totals);
+    totals.clients = dateFiltered ? clientsWithEmployees.size : clientRows.length;
+    totals.employees = employeeRows.length;
 
     const resultClients = dateFiltered
       ? clientRows.filter((c) => clientsWithEmployees.has(c.id)).map((c) => byClient.get(c.id))

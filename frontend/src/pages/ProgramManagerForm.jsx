@@ -4,14 +4,17 @@ import { api } from '../lib/api';
 import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 
 const STAFF_ACCOUNTS_LIST = '/super-admin/staff-accounts';
+const PL_INVITE_PATH = '/super-admin/staff-accounts/new-payroll-lead';
 
 export default function ProgramManagerForm() {
   const navigate = useNavigate();
   const location = useLocation();
   const paths = useWorkspacePaths();
+  const invitePayrollLead = location.pathname === PL_INVITE_PATH;
   const fromStaffAccounts = location.pathname.startsWith(STAFF_ACCOUNTS_LIST);
   const listPath = fromStaffAccounts ? STAFF_ACCOUNTS_LIST : paths.programManagers;
   const backLabel = fromStaffAccounts ? '← Back to Staff Accounts' : '← Back to Program Managers';
+  const roleTitle = invitePayrollLead ? 'Payroll Lead' : 'Program Manager';
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -37,10 +40,20 @@ export default function ProgramManagerForm() {
 
     setSubmitting(true);
     try {
-      await api.createProgramManager({
-        email: email.trim().toLowerCase()
+      const payload = { email: email.trim().toLowerCase() };
+      if (invitePayrollLead) {
+        await api.createPayrollLead(payload);
+      } else {
+        await api.createProgramManager(payload);
+      }
+      navigate(listPath, {
+        replace: true,
+        state: {
+          inviteSent: true,
+          inviteEmail: email.trim().toLowerCase(),
+          inviteRole: roleTitle
+        }
       });
-      navigate(listPath, { replace: true, state: { inviteSent: true, inviteEmail: email.trim().toLowerCase() } });
     } catch (err) {
       setError(err.message || 'Could not send invite.');
     } finally {
@@ -58,7 +71,7 @@ export default function ProgramManagerForm() {
           {backLabel}
         </Link>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900">
-          Invite Program Manager
+          Invite {roleTitle}
         </h1>
         <p className="mt-1 text-sm text-slate-500">
           Enter their email. They will receive a link to set their name and password.
@@ -76,11 +89,11 @@ export default function ProgramManagerForm() {
         className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"
       >
         <div>
-          <label htmlFor="pm-email" className="block text-sm font-medium text-slate-700">
+          <label htmlFor="staff-invite-email" className="block text-sm font-medium text-slate-700">
             Email
           </label>
           <input
-            id="pm-email"
+            id="staff-invite-email"
             type="email"
             autoComplete="email"
             value={email}

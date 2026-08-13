@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import DashboardStatCard, { DASHBOARD_STAT_ICONS } from '../components/DashboardStatCard';
+import DashboardStatCard, { DASHBOARD_STAT_GRID_CLASS, DASHBOARD_STAT_ICONS } from '../components/DashboardStatCard';
 import SuperAdminDateRangeFilters from '../components/SuperAdminDateRangeFilters';
 import RoleDashboardCharts from '../components/RoleDashboardCharts';
-import { resolveDateRange } from '../lib/superAdminDateRange';
+import { resolveDashboardDateRange } from '../lib/superAdminDateRange';
 
 const STAT_ICONS = DASHBOARD_STAT_ICONS;
 
@@ -17,27 +17,22 @@ export default function PmDashboardHome() {
   const [month, setMonth] = useState('');
   const [year, setYear] = useState('');
   const [week, setWeek] = useState('');
+  const [preset, setPreset] = useState('');
   const [appliedCustomFrom, setAppliedCustomFrom] = useState('');
   const [appliedCustomTo, setAppliedCustomTo] = useState('');
 
   const dateRange = useMemo(
     () =>
-      resolveDateRange({
+      resolveDashboardDateRange({
+        preset,
+        customFrom: appliedCustomFrom,
+        customTo: appliedCustomTo,
         month,
         year,
-        week,
-        customFrom: appliedCustomFrom,
-        customTo: appliedCustomTo
+        week
       }),
-    [appliedCustomFrom, appliedCustomTo, month, year, week]
+    [appliedCustomFrom, appliedCustomTo, month, preset, year, week]
   );
-
-  const rangeHint = useMemo(() => {
-    if (dateRange.from && dateRange.to) return `${dateRange.from} → ${dateRange.to}`;
-    if (dateRange.from) return `From ${dateRange.from}`;
-    if (dateRange.to) return `Until ${dateRange.to}`;
-    return 'All time';
-  }, [dateRange.from, dateRange.to]);
 
   useEffect(() => {
     let active = true;
@@ -88,14 +83,27 @@ export default function PmDashboardHome() {
   }, [fetchStats]);
 
   const t = stats.totals || {
+    clients: 0,
+    employees: 0,
     onboarding_activations: 0,
     employees_submitted: 0,
     submission_pending: 0,
+    awaiting_pm: 0,
     pm_approved: 0,
     pm_rejected: 0,
     pm_correction_requested: 0,
+    awaiting_pl: 0,
     payroll_approved: 0,
-    payroll_rejected: 0
+    payroll_rejected: 0,
+    total_onboarded: 0,
+    total_dropout: 0,
+    active_employees: 0,
+    joining_pending: 0,
+    joining_joined: 0,
+    joining_not_joined: 0,
+    joining_absconded: 0,
+    joining_due: 0,
+    joining_overdue: 0
   };
 
   return (
@@ -103,12 +111,12 @@ export default function PmDashboardHome() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Program Manager Dashboard</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Overall onboarding performance across your assigned clients.
+          Role analytics for review queue, corrections, and joining follow-ups across your assigned clients.
         </p>
       </div>
 
-      <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="sr-only" htmlFor="pm-dashboard-client">
             Client
           </label>
@@ -116,7 +124,7 @@ export default function PmDashboardHome() {
             id="pm-dashboard-client"
             value={clientId}
             onChange={(e) => setClientId(e.target.value)}
-            className="appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3.5 pr-9 text-sm font-medium text-slate-800 shadow-sm hover:border-slate-300 focus:border-slate-400 focus:outline-none"
+            className="w-36 max-w-full shrink-0 appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3.5 pr-9 text-sm font-medium text-slate-800 shadow-sm hover:border-slate-300 focus:border-slate-400 focus:outline-none"
           >
             <option value="">All clients</option>
             {clientOptions.map((c) => (
@@ -125,47 +133,35 @@ export default function PmDashboardHome() {
               </option>
             ))}
           </select>
-          <SuperAdminDateRangeFilters
-            idPrefix="pm-dashboard"
-            month={month}
-            year={year}
-            week={week}
-            appliedCustomFrom={appliedCustomFrom}
-            appliedCustomTo={appliedCustomTo}
-            onMonthChange={(value) => {
-              setMonth(value);
-              if (value && !year) setYear(String(new Date().getFullYear()));
-              if (value) setWeek('');
-            }}
-            onYearChange={(value) => {
-              setYear(value);
-              if (value) setWeek('');
-            }}
-            onWeekChange={(value) => {
-              setWeek(value);
-              if (value) {
-                setMonth('');
-                setYear('');
-              }
-            }}
-            onCustomClear={() => {
-              setAppliedCustomFrom('');
-              setAppliedCustomTo('');
-            }}
-            onCustomApply={(from, to) => {
-              setError('');
-              setAppliedCustomFrom(from);
-              setAppliedCustomTo(to);
-              setMonth('');
-              setYear('');
-              setWeek('');
-            }}
-            onCustomError={(message) => setError(message)}
-          />
         </div>
-        <p className="text-xs text-slate-500">
-          Showing employees created: <span className="font-medium text-slate-700">{rangeHint}</span>
-        </p>
+        <SuperAdminDateRangeFilters
+          idPrefix="pm-dashboard"
+          variant="presets"
+          month={month}
+          year={year}
+          week={week}
+          preset={preset}
+          appliedCustomFrom={appliedCustomFrom}
+          appliedCustomTo={appliedCustomTo}
+          onPresetChange={setPreset}
+          onMonthChange={setMonth}
+          onYearChange={setYear}
+          onWeekChange={setWeek}
+          onCustomClear={() => {
+            setAppliedCustomFrom('');
+            setAppliedCustomTo('');
+          }}
+          onCustomApply={(from, to) => {
+            setError('');
+            setAppliedCustomFrom(from);
+            setAppliedCustomTo(to);
+            setPreset('');
+            setMonth('');
+            setYear('');
+            setWeek('');
+          }}
+          onCustomError={(message) => setError(message)}
+        />
       </div>
 
       {loading && (
@@ -181,29 +177,25 @@ export default function PmDashboardHome() {
         <>
           <RoleDashboardCharts role="pm" totals={t} clients={stats.clients} />
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className={DASHBOARD_STAT_GRID_CLASS}>
+            <DashboardStatCard title="Clients" value={t.clients} tone="indigo" icon={STAT_ICONS.building} />
+            <DashboardStatCard title="Employees" value={t.employees} tone="indigo" icon={STAT_ICONS.users} />
             <DashboardStatCard
-              title="Onboarding Activations"
-              value={t.onboarding_activations}
-              tone="emerald"
-              icon={STAT_ICONS.activations}
-            />
-            <DashboardStatCard
-              title="Employees Submitted"
-              value={t.employees_submitted}
+              title="Awaiting PM Review"
+              value={t.awaiting_pm}
               tone="amber"
-              icon={STAT_ICONS.submitted}
+              icon={STAT_ICONS.pending}
             />
             <DashboardStatCard
-              title="Submission Pending"
-              value={t.submission_pending}
-              tone="violet"
-              icon={STAT_ICONS.pending}
+              title="Correction Requested"
+              value={t.pm_correction_requested}
+              tone="amber"
+              icon={STAT_ICONS.correction}
             />
             <DashboardStatCard
               title="PM Approved"
               value={t.pm_approved}
-              tone="violet"
+              tone="emerald"
               icon={STAT_ICONS.approved}
             />
             <DashboardStatCard
@@ -213,10 +205,28 @@ export default function PmDashboardHome() {
               icon={STAT_ICONS.rejected}
             />
             <DashboardStatCard
-              title="Correction Requested"
-              value={t.pm_correction_requested}
+              title="Joining Overdue"
+              value={t.joining_overdue}
+              tone="rose"
+              icon={STAT_ICONS.rejected}
+            />
+            <DashboardStatCard
+              title="Joining Due (≤2 days)"
+              value={t.joining_due}
               tone="amber"
-              icon={STAT_ICONS.correction}
+              icon={STAT_ICONS.pending}
+            />
+            <DashboardStatCard
+              title="Joining Pending"
+              value={t.joining_pending}
+              tone="indigo"
+              icon={STAT_ICONS.pending}
+            />
+            <DashboardStatCard
+              title="Joined"
+              value={t.joining_joined}
+              tone="emerald"
+              icon={STAT_ICONS.check}
             />
             <DashboardStatCard
               title="Payroll Approved"
@@ -225,10 +235,10 @@ export default function PmDashboardHome() {
               icon={STAT_ICONS.check}
             />
             <DashboardStatCard
-              title="Payroll Rejected"
-              value={t.payroll_rejected}
-              tone="amber"
-              icon={STAT_ICONS.rejected}
+              title="Awaiting PL"
+              value={t.awaiting_pl}
+              tone="indigo"
+              icon={STAT_ICONS.pending}
             />
           </div>
 

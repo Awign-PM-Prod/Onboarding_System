@@ -1,8 +1,9 @@
 import Papa from 'papaparse';
+import { isAfterLwd } from './attendanceLwd.js';
 
 const LEGEND_TOTAL_CODES = [
   'P', 'W', 'NH', 'FH', 'P-NH', 'P-FH', 'HD',
-  'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO', 'A', 'R', 'T', '-'
+  'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO', 'A', 'AB', 'R', 'T', '-'
 ];
 
 const LEAVE_SUMMARY_KEYS = ['EL', 'CL', 'SL', 'NH', 'FH', 'CO', 'RH', 'ML', 'PL'];
@@ -50,6 +51,7 @@ function collectDayDates(rows, sheet) {
 
 function markCodeForRow(row, isoDate, template = false) {
   if (template) return '';
+  if (isAfterLwd(isoDate, row.lwd)) return '';
   const marks = row.day_marks ?? [];
   const exact = marks.find((m) => String(m.mark_date).slice(0, 10) === isoDate);
   return exact?.code ?? '';
@@ -84,6 +86,7 @@ function baseEmployeeFields(row, sheet, { template = false } = {}) {
     Gender: row.gender ?? '',
     Designation: row.designation ?? '',
     DOJ: row.doj ?? '',
+    LWD: row.lwd ?? '',
     Status: row.status_label ?? '',
     // Template exports need a non-blank Amt. Type so re-import keeps every employee row.
     'Amt. Type': amtType || (template && String(row.emp_code ?? '').trim() ? 'MONTHLY' : ''),

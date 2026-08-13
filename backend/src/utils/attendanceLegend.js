@@ -1,5 +1,7 @@
 /** Attendance day codes and display labels (OC removed; use NH/FH). */
 
+import { normalizeExitCode } from './attendanceLwd.js';
+
 export const LEGEND_CODES = [
   'P',
   'W',
@@ -16,6 +18,7 @@ export const LEGEND_CODES = [
   'RH',
   'CO',
   'A',
+  'AB',
   'R',
   'T',
   '-'
@@ -37,8 +40,9 @@ export const LEGEND_LABELS = {
   RH: 'Restricted Holiday',
   CO: 'Comp Off',
   A: 'Absent LOP',
-  R: 'Not considered',
-  T: 'Not considered',
+  AB: 'Abscond',
+  R: 'Resigned',
+  T: 'Termination',
   '-': 'Not considered'
 };
 
@@ -58,6 +62,7 @@ export const LEGEND_STYLE_FAMILY = {
   RH: 'leave',
   CO: 'leave',
   A: 'lop',
+  AB: 'muted',
   R: 'muted',
   T: 'muted',
   '-': 'muted'
@@ -70,7 +75,7 @@ function aliasAttendanceCode(s) {
   const compact = s.replace(/[\s_]+/g, '');
   if (compact === 'PNH' || compact === 'P-NH') return 'P-NH';
   if (compact === 'PFH' || compact === 'P-FH') return 'P-FH';
-  return null;
+  return normalizeExitCode(s);
 }
 
 export function normalizeAttendanceCode(raw) {

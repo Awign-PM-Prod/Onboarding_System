@@ -39,4 +39,21 @@ describe('previewRowSummary', () => {
     expect(after.paid_days).toBe(0.5);
     expect(after.legend_totals.HD).toBe(1);
   });
+
+  it('does not count paid days after LWD', () => {
+    const after = previewRowSummary(
+      {
+        ...baseRow,
+        lwd: '2026-04-10',
+        day_marks: [
+          { mark_date: '2026-04-10', code: 'T' },
+          { mark_date: '2026-04-11', code: 'P' }
+        ]
+      },
+      policyBundle,
+      '2026-04'
+    );
+    expect(after.paid_days).toBe(0);
+    expect(after.not_considered).toBeGreaterThan(0);
+  });
 });

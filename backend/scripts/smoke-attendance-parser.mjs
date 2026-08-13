@@ -9,6 +9,7 @@ import {
   normalizeEmployeeStatus
 } from '../src/utils/amsAttendanceParser.js';
 import { computeLegendTotals, normalizeAttendanceCode } from '../src/utils/attendanceLegend.js';
+import { buildAttendanceExportCsv } from '../src/utils/attendanceExport.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const samplePath = resolve(here, '../../demo-attendance-ams-sample.csv');
@@ -21,6 +22,9 @@ assert.equal(normalizeAttendanceCode('P-NH'), 'P-NH');
 assert.equal(normalizeAttendanceCode('pnh'), 'P-NH');
 assert.equal(normalizeAttendanceCode('P_FH'), 'P-FH');
 assert.equal(normalizeAttendanceCode('a'), 'A');
+assert.equal(normalizeAttendanceCode('AB'), 'AB');
+assert.equal(normalizeAttendanceCode('absconded'), 'AB');
+assert.equal(normalizeAttendanceCode('terminated'), 'T');
 
 assert.equal(normalizeEmployeeStatus('active'), 'Active');
 assert.equal(normalizeEmployeeStatus('New Joinee'), 'New Joiner');
@@ -94,6 +98,51 @@ const empStatusCsv = [
 const empStatusParsed = parseAmsAttendanceCsv(empStatusCsv);
 assert.equal(empStatusParsed.rows[0].status_label, 'New Joiner');
 assert.equal(empStatusParsed.rows[1].status_label, 'Abscond');
+
+// LWD month: blank days after LWD; LWD day T sets Termination
+const lwdCsv = [
+  'Emp Code,Employee Name,DOJ,LWD,Status,Amt. Type,1-Apr-26,2-Apr-26,3-Apr-26,4-Apr-26,5-Apr-26',
+  'T20,Leaver,2026-01-01,2026-04-03,Active,MONTHLY,P,W,T,P,NH'
+].join('\n');
+const lwdParsed = parseAmsAttendanceCsv(lwdCsv);
+assert.equal(lwdParsed.errors.length, 0);
+assert.equal(lwdParsed.rows[0].lwd, '2026-04-03');
+assert.equal(lwdParsed.rows[0].status_label, 'Termination');
+assert.deepEqual(
+  lwdParsed.rows[0].day_marks.map((m) => `${m.mark_date}:${m.code}`),
+  ['2026-04-01:P', '2026-04-02:W', '2026-04-03:T']
+);
+const lwdExport = buildAttendanceExportCsv({
+  sheet: { attendance_month: '2026-04-01' },
+  rows: lwdParsed.rows,
+  type: 'data'
+});
+assert.match(lwdExport, /LWD/);
+assert.match(lwdExport, /2026-04-03/);
+assert.doesNotMatch(lwdExport, /4-Apr-26,NH/);
+
+const lwdFromStatusCsv = [
+  'Emp Code,Employee Name,LWD,Status,Amt. Type,1-Apr-26,2-Apr-26,3-Apr-26',
+  'T21,Absconder,2026-04-02,Absconded,MONTHLY,P,,P'
+].join('\n');
+const lwdFromStatus = parseAmsAttendanceCsv(lwdFromStatusCsv);
+assert.equal(lwdFromStatus.rows[0].status_label, 'Abscond');
+assert.equal(
+  lwdFromStatus.rows[0].day_marks.find((m) => m.mark_date === '2026-04-02')?.code,
+  'AB'
+);
+assert.ok(!lwdFromStatus.rows[0].day_marks.some((m) => m.mark_date === '2026-04-03'));
+
+const lwdMissingReasonCsv = [
+  'Emp Code,Employee Name,LWD,Status,Amt. Type,1-Apr-26,2-Apr-26',
+  'T22,NoReason,2026-04-01,Active,MONTHLY,,P'
+].join('\n');
+const lwdMissingReason = parseAmsAttendanceCsv(lwdMissingReasonCsv);
+assert.ok(
+  lwdMissingReason.errors.some((e) => /LWD date must be AB, R, or T/i.test(e.error)),
+  'LWD without exit reason should error'
+);
+assert.equal(lwdMissingReason.rows.length, 0);
 
 // Template-style rows often omit Amt. Type — still import every emp_code row.
 const noAmtTypeCsv = [

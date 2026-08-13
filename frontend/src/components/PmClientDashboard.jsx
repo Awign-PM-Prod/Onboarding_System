@@ -10,9 +10,9 @@ function StatCard({ title, value, tone = 'slate' }) {
             ? 'text-amber-700'
             : 'text-slate-900';
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+    <div className="box-border flex h-[88px] w-full flex-col justify-between rounded-[12px] border border-slate-200 bg-white px-4 py-3 opacity-100 shadow-sm">
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{title}</p>
-      <p className={`mt-1 text-2xl font-semibold tabular-nums ${valueClass}`}>{value}</p>
+      <p className={`text-2xl font-semibold leading-none tabular-nums ${valueClass}`}>{value}</p>
     </div>
   );
 }
@@ -78,7 +78,7 @@ export default function PmClientDashboard({ employees = [] }) {
 
       <div>
         <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Pipeline</h3>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Total Employees" value={stats.total_employees} />
           <StatCard title="Available" value={stats.available} tone="amber" />
           <StatCard title="Role Assigned" value={stats.role_assigned} tone="indigo" />
@@ -88,7 +88,7 @@ export default function PmClientDashboard({ employees = [] }) {
 
       <div>
         <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Forms &amp; review</h3>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Employees Submitted" value={stats.employees_submitted} />
           <StatCard title="Submission Pending" value={stats.submission_pending} tone="amber" />
           <StatCard title="PM Approved" value={stats.pm_approved} tone="emerald" />
@@ -101,7 +101,7 @@ export default function PmClientDashboard({ employees = [] }) {
 
       <div>
         <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Joining</h3>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Joining Status Set" value={stats.joined} tone="emerald" />
           <StatCard title="Joining Status Pending" value={stats.joining_pending} tone="amber" />
         </div>

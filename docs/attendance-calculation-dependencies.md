@@ -66,10 +66,10 @@ Marks stored outside the sheet's calendar month are ignored by the calculation.
 
 | Output field | Direct dependencies |
 |--------------|---------------------|
-| **`legend_totals`** | Count of each code in `day_marks` within the calendar month only (`P`, `W`, `NH`, `FH`, `P-NH`, `P-FH`, `HD`, `EL`, `SL`, `CL`, `PL`, `ML`, `RH`, `CO`, `A`, `R`, `T`, `-`) |
+| **`legend_totals`** | Count of each code in `day_marks` within the calendar month only (`P`, `W`, `NH`, `FH`, `P-NH`, `P-FH`, `HD`, `EL`, `SL`, `CL`, `PL`, `ML`, `RH`, `CO`, `A`, `AB`, `R`, `T`, `-`) |
 | **`paid_days`** | **Sum of per-day paid weights** across active employment days in the calendar month. Each cell edit changes `paid_days` by `newWeight − oldWeight` for that date (see Section 3A.1). Empty cell weight = 0. |
 | **`lop`** | Count of `A` on active employment days |
-| **`not_considered`** | Days before `doj` or after `lwd`; codes `R`, `T`, `-` on active days |
+| **`not_considered`** | Days before `doj` or after `lwd`; codes `AB`, `R`, `T`, `-` on active days |
 | **`total_days`** | Count of active employment days in the calendar month |
 
 #### Paid-day weight by code
@@ -81,7 +81,7 @@ Marks stored outside the sheet's calendar month are ignored by the calculation.
 | `A` | 0 (counts as LOP) | — |
 | `P-NH` | 1.0 default | `paid_comp_off_rule` if PAID_CO; else `nh_pay_rule` if NH comp-off on |
 | `P-FH` | 1.0 default | `paid_comp_off_rule` if PAID_CO; else `fh_pay_rule` if FH comp-off on |
-| `R`, `T`, `-` | 0 (not considered) | — |
+| `R`, `T`, `AB`, `-` | 0 (not considered) | — |
 | Empty | 0 | — |
 
 Employee active check uses **`doj`** and **`lwd`** on each calendar date in the period.
@@ -159,7 +159,7 @@ flowchart LR
 |--------------|------------|
 | **`incentive`** | Longest consecutive calendar streak of `P`, `P-NH`, `P-FH`, `HD` on active days in period; compared to `incentive_min_days`; pays `incentive_value` if `incentive_applicable` |
 
-Streak breaks on: week-off, holiday, leave, absent, empty, `R`/`T`/`-`, or inactive dates.
+Streak breaks on: week-off, holiday, leave, absent, empty, `AB`/`R`/`T`/`-`, or inactive dates.
 
 **Not affected by:** `addon_incentive`, `remarks`, `monthly_amt`.
 
@@ -172,7 +172,14 @@ Streak breaks on: week-off, holiday, leave, absent, empty, `R`/`T`/`-`, or inact
 | **`addon_incentive`** | PL/PM types manually | No — stored as entered |
 | **`remarks`** | PL/PM types manually | No |
 | **`monthly_amt`** | CSV import | No |
-| Employee snapshot (`name`, `emp_code`, `mobile`, `designation`, `doj`, `lwd`, `gender`, etc.) | CSV import | No — used as inputs to calc |
+| Employee snapshot (`name`, `emp_code`, `mobile`, `designation`, `doj`, `lwd`, `gender`, etc.) | CSV import / LWD column in grid | `lwd` is editable; used as inputs to calc |
+
+**Last working date (LWD):**
+
+- Editable in the attendance grid and round-tripped in CSV (`LWD` column after DOJ).
+- The LWD date in that month must be `AB` (Abscond), `R` (Resigned), or `T` (Termination). Status is set from that code.
+- Days **after** LWD in the **declaration month** are blank (no W/NH defaults, no `-`). Earlier months are never rewritten.
+- Employees whose LWD is before the sheet month are **excluded** from later-month import (shown on the upload warning popup) and omitted from next-month templates.
 
 ---
 
@@ -182,10 +189,10 @@ Applied on save/upload/recompute via [`suggestDefaultMarks`](../backend/src/util
 
 | Suggested code | When |
 |----------------|------|
-| `NH` | Date is in `holidays` and cell is empty |
-| `W` | Date matches `week_off_config` and cell is empty |
+| `NH` | Date is in `holidays` and cell is empty **and** date is within DOJ–LWD |
+| `W` | Date matches `week_off_config` and cell is empty **and** date is within DOJ–LWD |
 
-**Never overwrites** existing manual marks.
+**Never overwrites** existing manual marks. Dates after LWD (in the LWD month) stay blank.
 
 ---
 
@@ -206,11 +213,13 @@ Applied on save/upload/recompute via [`suggestDefaultMarks`](../backend/src/util
 
 | Grid column | Editable? | Driven by |
 |-------------|-----------|-----------|
-| Daily cells | Yes | — (input) |
+| Daily cells | Yes (blank/disabled after LWD) | — (input); LWD day is AB/R/T |
+| LWD | Yes | Date picker / CSV; requires exit reason |
+| Status | Yes | Auto-set to Abscond/Resigned/Termination when LWD is set |
 | Legend totals (P, W, EL, …) | No | Day marks |
 | Paid Days | No | **Sum of daily weights** — each cell edit adds/subtracts that code’s weight (HD = 0.5, NH/P/W = 1.0, A/empty = 0). See Section 3A.1 |
 | LOP | No | `A` count |
-| Not Considered | No | DOJ/LWD + R/T/- |
+| Not Considered | No | DOJ/LWD + AB/R/T/- |
 | Leave summary (EL, SL, CL, …) | No | Day marks + allowances + YTD prior months + NH/FH holidays in period |
 | Incentives | No | Day marks streak + incentive policy |
 | Add-on Incentives | Yes | Manual only |

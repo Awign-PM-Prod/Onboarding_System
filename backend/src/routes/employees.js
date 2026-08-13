@@ -273,10 +273,9 @@ async function fetchOwnedClient(req, clientId) {
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  if (userRow?.role === 'SUPER_ADMIN') return data;
+  if (userRow?.role === 'SUPER_ADMIN' || userRow?.role === 'PAYROLL_LEAD') return data;
   const ownedByPm = data.program_manager_id === req.user.id;
-  const ownedByLead = data.created_by === req.user.id;
-  return ownedByPm || ownedByLead ? data : null;
+  return ownedByPm ? data : null;
 }
 
 async function fetchPayrollLeadOwnedClient(req, clientId) {
@@ -295,8 +294,6 @@ async function fetchPayrollLeadOwnedClient(req, clientId) {
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  if (userRow.role === 'SUPER_ADMIN') return data;
-  if (data.created_by !== req.user.id) return null;
   return data;
 }
 

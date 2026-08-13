@@ -13,9 +13,9 @@ function StatCard({ title, value, tone = 'slate' }) {
             ? 'text-amber-700'
             : 'text-slate-900';
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+    <div className="box-border flex h-[88px] w-full flex-col justify-between rounded-[12px] border border-slate-200 bg-white px-4 py-3 opacity-100 shadow-sm">
       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{title}</p>
-      <p className={`mt-1 text-2xl font-semibold ${valueClass}`}>{value ?? '—'}</p>
+      <p className={`text-2xl font-semibold leading-none ${valueClass}`}>{value ?? '—'}</p>
     </div>
   );
 }
@@ -101,7 +101,7 @@ export default function PayrollHeadDashboardHome() {
         <>
           {/* Section 1 */}
           <SectionHeading label="Section 1 — Form submission & identity numbers" />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <StatCard
               title="Employees submitted the form"
               value={s1.form_submitted}
@@ -127,7 +127,7 @@ export default function PayrollHeadDashboardHome() {
 
           {/* Section 2 */}
           <SectionHeading label="Section 2 — Onboarding & attrition" />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <StatCard
               title="Total employees onboarded (A)"
               value={s2.total_onboarded}

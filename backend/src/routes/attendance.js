@@ -17,6 +17,19 @@ import {
   recalculateSheetRows
 } from '../utils/attendanceRecalc.js';
 import { mergeYtdTaken } from '../utils/attendanceCalculator.js';
+import {
+  applyLwdToDayMarks,
+  exitCodeFromStatus,
+  formatLwdSkipMessage,
+  isAfterLwd,
+  isExitCode,
+  isExitStatus,
+  isLwdBeforeSheetMonth,
+  isLwdDate,
+  isLwdInMonth,
+  parseIsoDate,
+  statusFromExitCode
+} from '../utils/attendanceLwd.js';
 import { getPayrollPeriod, payrollCycleLabel } from '../utils/clientPolicy.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 import {
@@ -99,6 +112,9 @@ function buildDayMarkChangeMessage(empCode, changes, maxLen = 500) {
 
 function buildRowFieldChangeMessage(empCode, beforeFields, rowUpdate) {
   const parts = [];
+  if (beforeFields.lwd !== rowUpdate.lwd && ('lwd' in rowUpdate)) {
+    parts.push(`LWD ${formatMarkLabel(beforeFields.lwd)}→${formatMarkLabel(rowUpdate.lwd)}`);
+  }
   if (beforeFields.status_label !== rowUpdate.status_label) {
     parts.push(
       `status ${formatMarkLabel(beforeFields.status_label)}→${formatMarkLabel(rowUpdate.status_label)}`
@@ -124,6 +140,204 @@ function buildRowFieldChangeMessage(empCode, beforeFields, rowUpdate) {
   return parts.length ? `${empCode}: ${parts.join('; ')}` : `${empCode}: row fields updated`;
 }
 
+async function fetchExitedEmployeesBeforeMonth(clientId, monthDate) {
+  const start = parseIsoDate(monthDate) || (String(monthDate ?? '').slice(0, 7) ? `${String(monthDate).slice(0, 7)}-01` : null);
+  const map = new Map();
+  if (!start) return map;
+
+  const { data: sheets, error: sErr } = await supabaseAdmin
+    .from('attendance_sheets')
+    .select('id')
+    .eq('client_id', clientId)
+    .lt('attendance_month', start);
+  if (sErr) throw sErr;
+  const sheetIds = (sheets ?? []).map((s) => s.id);
+  if (!sheetIds.length) return map;
+
+  const { data: rows, error: rErr } = await supabaseAdmin
+    .from('attendance_rows')
+    .select('emp_code, employee_name_snapshot, lwd, status_label')
+    .in('sheet_id', sheetIds)
+    .not('lwd', 'is', null)
+    .lt('lwd', start);
+  if (rErr) throw rErr;
+
+  for (const row of rows ?? []) {
+    const code = String(row.emp_code ?? '').trim();
+    const lwd = parseIsoDate(row.lwd);
+    if (!code || !lwd) continue;
+    const existing = map.get(code);
+    if (!existing || lwd > existing.lwd) {
+      map.set(code, {
+        emp_code: code,
+        employee_name: row.employee_name_snapshot ?? null,
+        lwd,
+        status_label: row.status_label ?? null
+      });
+    }
+  }
+  return map;
+}
+
+async function deleteEmpCodesFromSheet(sheetId, empCodes) {
+  const codes = [
+    ...new Set((empCodes ?? []).map((c) => String(c ?? '').trim()).filter(Boolean))
+  ];
+  if (!sheetId || !codes.length) return [];
+
+  const removed = [];
+  const DELETE_CHUNK = 200;
+  for (let i = 0; i < codes.length; i += DELETE_CHUNK) {
+    const chunk = codes.slice(i, i + DELETE_CHUNK);
+    const { data, error } = await supabaseAdmin
+      .from('attendance_rows')
+      .delete()
+      .eq('sheet_id', sheetId)
+      .in('emp_code', chunk)
+      .select('id, emp_code, employee_name_snapshot, lwd, status_label');
+    if (error) throw error;
+    removed.push(...(data ?? []));
+  }
+  return removed;
+}
+
+/**
+ * After LWD is set on an earlier month, drop that emp from unlocked later-month sheets.
+ */
+async function removeEmployeesFromLaterSheets({
+  clientId,
+  exits,
+  actorUserId = null,
+  actorRole = null
+}) {
+  const byCode = new Map();
+  for (const e of exits ?? []) {
+    const code = String(e?.emp_code ?? '').trim();
+    const lwd = parseIsoDate(e?.lwd);
+    if (!code || !lwd) continue;
+    const prev = byCode.get(code);
+    if (!prev || lwd > prev.lwd) {
+      byCode.set(code, {
+        emp_code: code,
+        lwd,
+        status_label: e.status_label ?? null
+      });
+    }
+  }
+  if (!byCode.size) return { sheetsTouched: 0, removedCount: 0 };
+
+  const earliestLwd = [...byCode.values()].reduce(
+    (min, e) => (e.lwd < min ? e.lwd : min),
+    '9999-12-31'
+  );
+
+  const { data: sheets, error } = await supabaseAdmin
+    .from('attendance_sheets')
+    .select('id, attendance_month, locked')
+    .eq('client_id', clientId)
+    .gt('attendance_month', earliestLwd)
+    .eq('locked', false);
+  if (error) throw error;
+
+  let sheetsTouched = 0;
+  let removedCount = 0;
+  for (const sheet of sheets ?? []) {
+    const codesToRemove = [...byCode.values()]
+      .filter((exit) => isLwdBeforeSheetMonth(exit.lwd, sheet.attendance_month))
+      .map((exit) => exit.emp_code);
+    if (!codesToRemove.length) continue;
+
+    const removed = await deleteEmpCodesFromSheet(sheet.id, codesToRemove);
+    if (!removed.length) continue;
+    sheetsTouched += 1;
+    removedCount += removed.length;
+
+    if (actorUserId) {
+      await writeLog({
+        sheetId: sheet.id,
+        action: 'ROW_FIELD_CHANGE',
+        actorUserId,
+        actorRole,
+        beforeJson: { removed_rows: removed },
+        afterJson: null,
+        message: removed
+          .map((r) => {
+            const exit = byCode.get(String(r.emp_code).trim());
+            return `${r.emp_code}: ${formatLwdSkipMessage(
+              exit?.lwd || r.lwd,
+              exit?.status_label || r.status_label
+            )}`;
+          })
+          .join('; ')
+      });
+    }
+  }
+  return { sheetsTouched, removedCount };
+}
+
+/**
+ * Drop rows that exited before this sheet month (prior-sheet LWD or stale row LWD).
+ * Skips locked sheets.
+ */
+async function pruneExitedEmployeesFromSheet({
+  clientId,
+  sheet,
+  actorUserId = null,
+  actorRole = null
+}) {
+  if (!sheet?.id || sheet.locked) return { removedCount: 0 };
+
+  const exited = await fetchExitedEmployeesBeforeMonth(clientId, sheet.attendance_month);
+  const { data: rows, error } = await supabaseAdmin
+    .from('attendance_rows')
+    .select('id, emp_code, lwd, status_label, employee_name_snapshot')
+    .eq('sheet_id', sheet.id);
+  if (error) throw error;
+
+  const codesToRemove = [];
+  const reasonByCode = new Map();
+  for (const row of rows ?? []) {
+    const code = String(row.emp_code ?? '').trim();
+    if (!code) continue;
+    const prior = exited.get(code);
+    if (prior) {
+      codesToRemove.push(code);
+      reasonByCode.set(code, prior);
+      continue;
+    }
+    if (isLwdBeforeSheetMonth(row.lwd, sheet.attendance_month)) {
+      codesToRemove.push(code);
+      reasonByCode.set(code, {
+        lwd: parseIsoDate(row.lwd),
+        status_label: row.status_label ?? null
+      });
+    }
+  }
+  if (!codesToRemove.length) return { removedCount: 0 };
+
+  const removed = await deleteEmpCodesFromSheet(sheet.id, codesToRemove);
+  if (removed.length && actorUserId) {
+    await writeLog({
+      sheetId: sheet.id,
+      action: 'ROW_FIELD_CHANGE',
+      actorUserId,
+      actorRole,
+      beforeJson: { removed_rows: removed },
+      afterJson: null,
+      message: removed
+        .map((r) => {
+          const reason = reasonByCode.get(String(r.emp_code).trim());
+          return `${r.emp_code}: ${formatLwdSkipMessage(
+            reason?.lwd || r.lwd,
+            reason?.status_label || r.status_label
+          )}`;
+        })
+        .join('; ')
+    });
+  }
+  return { removedCount: removed.length };
+}
+
 async function listMissingEmployeesForSheet(clientId, sheetId) {
   const { data: allClientEmployees, error: allEmpErr } = await supabaseAdmin
     .from('employees')
@@ -131,6 +345,13 @@ async function listMissingEmployeesForSheet(clientId, sheetId) {
     .eq('client_id', clientId)
     .not('emp_code', 'is', null);
   if (allEmpErr) throw allEmpErr;
+  const { data: sheetMeta, error: sheetErr } = await supabaseAdmin
+    .from('attendance_sheets')
+    .select('attendance_month')
+    .eq('id', sheetId)
+    .maybeSingle();
+  if (sheetErr) throw sheetErr;
+  const exited = await fetchExitedEmployeesBeforeMonth(clientId, sheetMeta?.attendance_month);
   const { data: sheetRowCodes, error: rowCodeErr } = await supabaseAdmin
     .from('attendance_rows')
     .select('emp_code')
@@ -142,7 +363,7 @@ async function listMissingEmployeesForSheet(clientId, sheetId) {
   return (allClientEmployees ?? [])
     .filter((e) => {
       const code = String(e.emp_code ?? '').trim();
-      return code && !sheetCodeSet.has(code);
+      return code && !sheetCodeSet.has(code) && !exited.has(code);
     })
     .map((e) => ({ emp_code: e.emp_code, employee_name: e.name ?? null }));
 }
@@ -366,6 +587,13 @@ router.get('/', async (req, res, next) => {
       });
     }
 
+    await pruneExitedEmployeesFromSheet({
+      clientId,
+      sheet,
+      actorUserId: req.user.id,
+      actorRole: access.user.role
+    });
+
     const bundle = await fetchSheetBundle(sheet.id);
     const caps = buildCapabilities(bundle.sheet, access, bundle.grant_user_ids);
     const eligiblePms = await loadEligiblePms(access.client);
@@ -428,13 +656,14 @@ router.get('/export', async (req, res, next) => {
     }
 
     // One sample employee only — template is a format reference, not a full roster.
+    const exited = await fetchExitedEmployeesBeforeMonth(clientId, monthDate);
     const { data: employees, error: empErr } = await supabaseAdmin
       .from('employees')
       .select('id, emp_code, name, mobile, designation, date_of_joining, ctc_type')
       .eq('client_id', clientId)
       .not('emp_code', 'is', null)
       .order('name', { ascending: true })
-      .limit(1);
+      .limit(50);
     if (empErr) throw empErr;
 
     const client_policy = await loadClientPolicyForResponse(clientId);
@@ -449,7 +678,10 @@ router.get('/export', async (req, res, next) => {
       payroll_end_date: period?.end ?? null
     };
 
-    const sampleEmp = employees?.[0];
+    const sampleEmp = (employees ?? []).find((e) => {
+      const code = String(e.emp_code ?? '').trim();
+      return code && !exited.has(code);
+    }) ?? null;
     const rows = [
       sampleEmp
         ? {
@@ -617,6 +849,7 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       .in('emp_code', empCodes.length ? empCodes : ['__none__']);
     if (empErr) throw empErr;
     const empByCode = new Map((employees ?? []).map((e) => [String(e.emp_code).trim(), e]));
+    const exited = await fetchExitedEmployeesBeforeMonth(clientId, attendanceMonth);
 
     const matched = [];
     const skipped = [];
@@ -632,13 +865,26 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
         });
         continue;
       }
+      const priorExit = exited.get(row.emp_code);
+      if (priorExit || isLwdBeforeSheetMonth(row.lwd, attendanceMonth)) {
+        const lwd = priorExit?.lwd || row.lwd;
+        const status = priorExit?.status_label || row.status_label;
+        skipped.push({
+          emp_code: row.emp_code,
+          employee_name: row.employee_name_snapshot ?? emp.name ?? null,
+          error: formatLwdSkipMessage(lwd, status)
+        });
+        continue;
+      }
       matched.push({ ...row, employee_id: emp.id });
     }
 
     if (matched.length === 0) {
       return res.status(400).json({
         error:
-          'No CSV rows matched employees on this client. Ensure emp_code values exist (e.g. T016394). Sheet was not changed.',
+          skipped.length > 0
+            ? 'No employees from this CSV were added to the sheet.'
+            : 'No CSV rows matched employees on this client. Ensure emp_code values exist (e.g. T016394). Sheet was not changed.',
         details: [...(errorsToUse ?? []), ...skipped]
       });
     }
@@ -650,13 +896,20 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       // Merge: replace only rows for emp_codes present in this CSV; keep rows from
       // earlier uploads so delayed client submissions can be added file by file.
       const matchedCodes = [...new Set(matched.map((r) => r.emp_code))];
+      const lwdSkipCodes = [...new Set(
+        skipped
+          .filter((s) => /not included after LWD month/i.test(String(s.error ?? '')))
+          .map((s) => s.emp_code)
+          .filter(Boolean)
+      )];
+      const deleteCodes = [...new Set([...matchedCodes, ...lwdSkipCodes])];
       const DELETE_CHUNK = 200;
-      for (let i = 0; i < matchedCodes.length; i += DELETE_CHUNK) {
+      for (let i = 0; i < deleteCodes.length; i += DELETE_CHUNK) {
         const { error: delErr } = await supabaseAdmin
           .from('attendance_rows')
           .delete()
           .eq('sheet_id', existing.id)
-          .in('emp_code', matchedCodes.slice(i, i + DELETE_CHUNK));
+          .in('emp_code', deleteCodes.slice(i, i + DELETE_CHUNK));
         if (delErr) throw delErr;
       }
 
@@ -770,6 +1023,22 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
       const chunk = dayMarkPayloads.slice(i, i + CHUNK);
       const { error: dmErr } = await supabaseAdmin.from('attendance_day_marks').insert(chunk);
       if (dmErr) throw dmErr;
+    }
+
+    const lwdExitsFromUpload = matched
+      .filter((row) => parseIsoDate(row.lwd))
+      .map((row) => ({
+        emp_code: row.emp_code,
+        lwd: row.lwd,
+        status_label: row.status_label
+      }));
+    if (lwdExitsFromUpload.length) {
+      await removeEmployeesFromLaterSheets({
+        clientId,
+        exits: lwdExitsFromUpload,
+        actorUserId: req.user.id,
+        actorRole: access.user.role
+      });
     }
 
     const bundleBeforeRecalc = await fetchSheetBundle(sheetId);
@@ -1065,6 +1334,7 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
     const client_policy = await loadClientPolicyForResponse(clientId, monthYmVal);
     const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
     const affectedEmployeeIds = [];
+    const lwdExitsToCascade = [];
 
     for (const change of changes) {
       const rowId = change?.row_id;
@@ -1084,15 +1354,32 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
         incentive: row.incentive,
         addon_incentive: row.addon_incentive,
         arrear_days: row.arrear_days,
-        remarks: row.remarks
+        remarks: row.remarks,
+        lwd: row.lwd
       };
       const dayMarkChanges = [];
+
+      let effectiveLwd = parseIsoDate(row.lwd);
+      if (change.lwd !== undefined) {
+        if (change.lwd === null || change.lwd === '') {
+          effectiveLwd = null;
+        } else {
+          const parsed = parseIsoDate(change.lwd);
+          if (!parsed) {
+            const err = new Error('LWD must be a valid date (YYYY-MM-DD).');
+            err.status = 400;
+            throw err;
+          }
+          effectiveLwd = parsed;
+        }
+      }
 
       if (Array.isArray(change.day_marks)) {
         for (const dm of change.day_marks) {
           const markDate = String(dm?.mark_date ?? '').slice(0, 10);
           const code = normalizeAttendanceCode(dm?.code);
           if (!markDate || !code || !isValidAttendanceCode(code)) continue;
+          if (effectiveLwd && isAfterLwd(markDate, effectiveLwd)) continue;
 
           const { data: existingMark, error: mErr } = await supabaseAdmin
             .from('attendance_day_marks')
@@ -1123,6 +1410,9 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
       }
 
       const rowUpdate = { updated_at: new Date().toISOString() };
+      if (change.lwd !== undefined) {
+        rowUpdate.lwd = effectiveLwd;
+      }
       if (change.status_label !== undefined) {
         const raw = change.status_label;
         if (raw === null || raw === '') {
@@ -1155,18 +1445,84 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
         .eq('row_id', row.id);
       if (allErr) throw allErr;
 
+      const pendingStatus = 'status_label' in rowUpdate ? rowUpdate.status_label : row.status_label;
+      if (effectiveLwd && isLwdInMonth(effectiveLwd, monthYmVal)) {
+        const lwdMark = (allMarks ?? []).find((m) => parseIsoDate(m.mark_date) === effectiveLwd);
+        const exitFromCell = isExitCode(lwdMark?.code) ? String(lwdMark.code).toUpperCase() : null;
+        const exitFromStatus = exitCodeFromStatus(pendingStatus) || exitCodeFromStatus(row.status_label);
+        const exitCode = exitFromCell || exitFromStatus;
+        if (!exitCode) {
+          const err = new Error('LWD date must be AB, R, or T (Abscond, Resigned, or Termination).');
+          err.status = 400;
+          throw err;
+        }
+        if (pendingStatus && !isExitStatus(pendingStatus) && pendingStatus !== statusFromExitCode(exitCode)) {
+          const err = new Error('When LWD is set, Status must be Abscond, Resigned, or Termination.');
+          err.status = 400;
+          throw err;
+        }
+        rowUpdate.status_label = statusFromExitCode(exitCode);
+        const nextMarks = applyLwdToDayMarks(allMarks ?? [], effectiveLwd, exitCode);
+        const lwdDay = nextMarks.find((m) => parseIsoDate(m.mark_date) === effectiveLwd);
+        if (lwdDay) {
+          const existingLwd = (allMarks ?? []).find((m) => parseIsoDate(m.mark_date) === effectiveLwd);
+          if (existingLwd) {
+            if (String(existingLwd.code ?? '').toUpperCase() !== exitCode) {
+              dayMarkChanges.push({
+                markDate: effectiveLwd,
+                before: existingLwd.code,
+                after: exitCode
+              });
+            }
+            const { error: uErr } = await supabaseAdmin
+              .from('attendance_day_marks')
+              .update({ code: exitCode })
+              .eq('row_id', row.id)
+              .eq('mark_date', effectiveLwd);
+            if (uErr) throw uErr;
+          } else {
+            dayMarkChanges.push({ markDate: effectiveLwd, before: null, after: exitCode });
+            const { error: cErr } = await supabaseAdmin
+              .from('attendance_day_marks')
+              .insert({ row_id: row.id, mark_date: effectiveLwd, code: exitCode });
+            if (cErr) throw cErr;
+          }
+        }
+      } else if (effectiveLwd && pendingStatus && !isExitStatus(pendingStatus)) {
+        const err = new Error('When LWD is set, Status must be Abscond, Resigned, or Termination.');
+        err.status = 400;
+        throw err;
+      }
+
+      if (effectiveLwd) {
+        const { error: delErr } = await supabaseAdmin
+          .from('attendance_day_marks')
+          .delete()
+          .eq('row_id', row.id)
+          .gt('mark_date', effectiveLwd);
+        if (delErr) throw delErr;
+      }
+
+      ({ data: allMarks, error: allErr } = await supabaseAdmin
+        .from('attendance_day_marks')
+        .select('mark_date, code')
+        .eq('row_id', row.id));
+      if (allErr) throw allErr;
+
+      const rowForCalc = { ...row, lwd: effectiveLwd, status_label: rowUpdate.status_label ?? pendingStatus };
       allMarks = await applyDefaultMarksForRow(
         row.id,
         allMarks ?? [],
         client_policy,
-        monthYmVal
+        monthYmVal,
+        { doj: row.doj, lwd: effectiveLwd }
       );
 
       const ytdMap = row.employee_id
         ? await fetchYtdTakenByEmployee(clientId, year, monthYmVal, [row.employee_id])
         : new Map();
       const summary = await recalculateRowSummary({
-        row,
+        row: rowForCalc,
         dayMarks: allMarks ?? [],
         policyBundle: client_policy,
         monthYm: monthYmVal,
@@ -1189,8 +1545,21 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
         .eq('id', row.id);
       if (totErr) throw totErr;
 
+      if (
+        'lwd' in rowUpdate
+        && rowUpdate.lwd
+        && parseIsoDate(beforeFields.lwd) !== parseIsoDate(rowUpdate.lwd)
+      ) {
+        lwdExitsToCascade.push({
+          emp_code: row.emp_code,
+          lwd: rowUpdate.lwd,
+          status_label: rowUpdate.status_label ?? pendingStatus ?? row.status_label
+        });
+      }
+
       const fieldChanged =
-        ('status_label' in rowUpdate && beforeFields.status_label !== rowUpdate.status_label)
+        ('lwd' in rowUpdate && beforeFields.lwd !== rowUpdate.lwd)
+        || ('status_label' in rowUpdate && beforeFields.status_label !== rowUpdate.status_label)
         || (change.addon_incentive !== undefined && beforeFields.addon_incentive !== rowUpdate.addon_incentive)
         || (change.arrear_days !== undefined && beforeFields.arrear_days !== rowUpdate.arrear_days)
         || (change.remarks !== undefined && beforeFields.remarks !== rowUpdate.remarks);
@@ -1208,6 +1577,19 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
         });
       }
       if (fieldChanged) {
+        const afterFields = {
+          lwd: 'lwd' in rowUpdate ? rowUpdate.lwd : beforeFields.lwd,
+          status_label: 'status_label' in rowUpdate
+            ? rowUpdate.status_label
+            : beforeFields.status_label,
+          addon_incentive: rowUpdate.addon_incentive !== undefined
+            ? rowUpdate.addon_incentive
+            : beforeFields.addon_incentive,
+          arrear_days: rowUpdate.arrear_days !== undefined
+            ? rowUpdate.arrear_days
+            : beforeFields.arrear_days,
+          remarks: rowUpdate.remarks !== undefined ? rowUpdate.remarks : beforeFields.remarks
+        };
         await writeLog({
           sheetId: sheet.id,
           rowId: row.id,
@@ -1215,30 +1597,8 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
           actorUserId: req.user.id,
           actorRole: access.user.role,
           beforeJson: beforeFields,
-          afterJson: {
-            status_label: 'status_label' in rowUpdate
-              ? rowUpdate.status_label
-              : beforeFields.status_label,
-            addon_incentive: rowUpdate.addon_incentive !== undefined
-              ? rowUpdate.addon_incentive
-              : beforeFields.addon_incentive,
-            arrear_days: rowUpdate.arrear_days !== undefined
-              ? rowUpdate.arrear_days
-              : beforeFields.arrear_days,
-            remarks: rowUpdate.remarks !== undefined ? rowUpdate.remarks : beforeFields.remarks
-          },
-          message: buildRowFieldChangeMessage(row.emp_code, beforeFields, {
-            status_label: 'status_label' in rowUpdate
-              ? rowUpdate.status_label
-              : beforeFields.status_label,
-            addon_incentive: rowUpdate.addon_incentive !== undefined
-              ? rowUpdate.addon_incentive
-              : beforeFields.addon_incentive,
-            arrear_days: rowUpdate.arrear_days !== undefined
-              ? rowUpdate.arrear_days
-              : beforeFields.arrear_days,
-            remarks: rowUpdate.remarks !== undefined ? rowUpdate.remarks : beforeFields.remarks
-          })
+          afterJson: afterFields,
+          message: buildRowFieldChangeMessage(row.emp_code, beforeFields, afterFields)
         });
       }
 
@@ -1247,6 +1607,15 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
 
     if (affectedEmployeeIds.length) {
       await recalculateForwardYtdForEmployees(clientId, monthYmVal, affectedEmployeeIds);
+    }
+
+    if (lwdExitsToCascade.length) {
+      await removeEmployeesFromLaterSheets({
+        clientId,
+        exits: lwdExitsToCascade,
+        actorUserId: req.user.id,
+        actorRole: access.user.role
+      });
     }
 
     if (sheet.status === 'SUBMITTED') {
@@ -1317,6 +1686,15 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
     if (rowErr) throw rowErr;
     if (!row) return res.status(404).json({ error: 'Row not found' });
 
+    if (isAfterLwd(markDate, row.lwd)) {
+      return res.status(400).json({ error: 'Cannot mark attendance after last working date.' });
+    }
+    if (isLwdDate(markDate, row.lwd) && !isExitCode(code)) {
+      return res.status(400).json({
+        error: 'LWD date must be AB, R, or T (Abscond, Resigned, or Termination).'
+      });
+    }
+
     const { data: existingMark, error: mErr } = await supabaseAdmin
       .from('attendance_day_marks')
       .select('*')
@@ -1359,7 +1737,8 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
       row.id,
       allMarks ?? [],
       client_policy,
-      monthYmVal
+      monthYmVal,
+      { doj: row.doj, lwd: row.lwd }
     );
 
     const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
@@ -1374,18 +1753,22 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
       ytdTaken: ytdMap.get(row.employee_id) ?? mergeYtdTaken([])
     });
 
+    const rowPatch = {
+      paid_days: summary.paid_days,
+      lop: summary.lop,
+      not_considered: summary.not_considered,
+      total_days: summary.total_days,
+      legend_totals: summary.legend_totals,
+      leave_summary: summary.leave_summary,
+      incentive: summary.incentive,
+      updated_at: new Date().toISOString()
+    };
+    if (isLwdDate(markDate, row.lwd) && isExitCode(code)) {
+      rowPatch.status_label = statusFromExitCode(code);
+    }
     const { error: totErr } = await supabaseAdmin
       .from('attendance_rows')
-      .update({
-        paid_days: summary.paid_days,
-        lop: summary.lop,
-        not_considered: summary.not_considered,
-        total_days: summary.total_days,
-        legend_totals: summary.legend_totals,
-        leave_summary: summary.leave_summary,
-        incentive: summary.incentive,
-        updated_at: new Date().toISOString()
-      })
+      .update(rowPatch)
       .eq('id', row.id);
     if (totErr) throw totErr;
 
@@ -1458,6 +1841,13 @@ router.post('/:sheetId/recompute', async (req, res, next) => {
       .select('user_id')
       .eq('sheet_id', sheet.id);
     assertCanEdit(sheet, access, (grants ?? []).map((g) => g.user_id));
+
+    await pruneExitedEmployeesFromSheet({
+      clientId,
+      sheet,
+      actorUserId: req.user.id,
+      actorRole: access.user.role
+    });
 
     const bundle = await fetchSheetBundle(sheet.id);
     const { payrollMeta, defaultMarksApplied } = await recalculateSheetRows(bundle.sheet, bundle.rows, clientId);

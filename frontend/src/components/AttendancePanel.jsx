@@ -22,10 +22,20 @@ import {
   employeeStatusCellClass,
   employeeStatusOptionStyle
 } from '../lib/attendanceEmployeeStatus';
+import {
+  EXIT_CODES,
+  EXIT_STATUS_LABELS,
+  applyLwdToDayMarks,
+  exitCodeFromStatus,
+  isAfterLwd,
+  isExitCode,
+  isLwdDate,
+  statusFromExitCode
+} from '../lib/attendanceLwd';
 
 const EDITABLE_CODES = [
   'P', 'W', 'NH', 'FH', 'P-NH', 'P-FH', 'HD',
-  'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO', 'A', 'R', 'T', '-'
+  'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO', 'A', 'AB', 'R', 'T', '-'
 ];
 
 const LEAVE_TYPE_OPTIONS = [
@@ -166,6 +176,10 @@ function buildRowChanges(draftRows, serverRows) {
     }
     if ((draft.status_label ?? '') !== (server.status_label ?? '')) {
       patch.status_label = draft.status_label ?? '';
+      hasChange = true;
+    }
+    if ((toDateKey(draft.lwd) ?? '') !== (toDateKey(server.lwd) ?? '')) {
+      patch.lwd = toDateKey(draft.lwd) || null;
       hasChange = true;
     }
     if (hasChange) changes.push(patch);
@@ -313,6 +327,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
   const policyRecalcKeyRef = useRef(null);
   const toastTimerRef = useRef(null);
   const [editingCell, setEditingCell] = useState(null); // { rowId, date }
+  const [lwdReasonPrompt, setLwdReasonPrompt] = useState(null); // { rowId, lwd }
   const [uploadSkipWarning, setUploadSkipWarning] = useState(null); // { imported, skipped, errors, missing?, failed?, message? }
   const [uploadSkipModalOpen, setUploadSkipModalOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -717,6 +732,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
           errors: errorList,
           missing
         });
+        setUploadSkipModalOpen(true);
       } else {
         setUploadSkipWarning(null);
       }
@@ -732,6 +748,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
           failed: true,
           message: `${prefix}${err.message}`
         });
+        setUploadSkipModalOpen(true);
       }
     } finally {
       setBusy(false);
@@ -983,11 +1000,16 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     setDraftRows((prev) => {
       const next = prev.map((r) => {
         if (r.id !== rowId) return r;
+        if (isAfterLwd(key, r.lwd)) return r;
+        if (isLwdDate(key, r.lwd) && !isExitCode(code)) return r;
         const marks = [...(r.day_marks ?? [])];
         const idx = marks.findIndex((m) => toDateKey(m.mark_date) === key);
         if (idx >= 0) marks[idx] = { ...marks[idx], mark_date: key, code };
         else marks.push({ mark_date: key, code });
         const withMarks = { ...r, day_marks: marks };
+        if (isLwdDate(key, r.lwd) && isExitCode(code)) {
+          withMarks.status_label = statusFromExitCode(code);
+        }
         const summary = previewRowSummary(withMarks, clientPolicy, monthYm);
         if (!summary) return withMarks;
         return {
@@ -1006,6 +1028,57 @@ export default function AttendancePanel({ clientId, role, projectName }) {
     });
     setEditingCell(null);
     queueRowAutoSave(rowId);
+  };
+
+  const applyLwdToRow = (rowId, lwd, exitCode) => {
+    if (!canEdit) return;
+    const monthYm = String(sheet?.attendance_month ?? month).slice(0, 7);
+    const leave = toDateKey(lwd);
+    setDraftRows((prev) => {
+      const next = prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const marks = leave
+          ? applyLwdToDayMarks(r.day_marks ?? [], leave, exitCode)
+          : (r.day_marks ?? []);
+        const withLwd = {
+          ...r,
+          lwd: leave,
+          status_label: leave ? (statusFromExitCode(exitCode) || r.status_label) : r.status_label,
+          day_marks: marks
+        };
+        const summary = previewRowSummary(withLwd, clientPolicy, monthYm);
+        if (!summary) return withLwd;
+        return {
+          ...withLwd,
+          paid_days: summary.paid_days,
+          lop: summary.lop,
+          not_considered: summary.not_considered,
+          total_days: summary.total_days,
+          legend_totals: summary.legend_totals,
+          leave_summary: summary.leave_summary,
+          incentive: summary.incentive
+        };
+      });
+      draftRowsRef.current = next;
+      return next;
+    });
+    queueRowAutoSave(rowId);
+  };
+
+  const onChangeLwd = (rowId, value) => {
+    if (!canEdit) return;
+    const leave = toDateKey(value);
+    if (!leave) {
+      applyLwdToRow(rowId, null, null);
+      return;
+    }
+    const row = draftRowsRef.current.find((r) => r.id === rowId);
+    const existingCode = exitCodeFromStatus(row?.status_label);
+    if (existingCode) {
+      applyLwdToRow(rowId, leave, existingCode);
+      return;
+    }
+    setLwdReasonPrompt({ rowId, lwd: leave });
   };
 
   const onChangeAddonIncentive = (rowId, value) => {
@@ -1034,9 +1107,33 @@ export default function AttendancePanel({ clientId, role, projectName }) {
 
   const onChangeStatusLabel = (rowId, value) => {
     if (!canEdit) return;
-    setDraftRows((prev) =>
-      prev.map((r) => (r.id === rowId ? { ...r, status_label: value || null } : r))
-    );
+    const monthYm = String(sheet?.attendance_month ?? month).slice(0, 7);
+    setDraftRows((prev) => {
+      const next = prev.map((r) => {
+        if (r.id !== rowId) return r;
+        if (r.lwd && value && !EXIT_STATUS_LABELS.includes(value)) return r;
+        let marks = r.day_marks ?? [];
+        const exitCode = exitCodeFromStatus(value);
+        if (r.lwd && exitCode) {
+          marks = applyLwdToDayMarks(marks, r.lwd, exitCode);
+        }
+        const withStatus = { ...r, status_label: value || null, day_marks: marks };
+        const summary = previewRowSummary(withStatus, clientPolicy, monthYm);
+        if (!summary) return withStatus;
+        return {
+          ...withStatus,
+          paid_days: summary.paid_days,
+          lop: summary.lop,
+          not_considered: summary.not_considered,
+          total_days: summary.total_days,
+          legend_totals: summary.legend_totals,
+          leave_summary: summary.leave_summary,
+          incentive: summary.incentive
+        };
+      });
+      draftRowsRef.current = next;
+      return next;
+    });
     queueRowAutoSave(rowId);
   };
 
@@ -1307,6 +1404,51 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                 className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
               >
                 Proceed
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {lwdReasonPrompt && (
+        <ModalOverlay
+          className="pointer-events-none"
+          backdropClassName="bg-slate-900/40"
+          onClose={() => setLwdReasonPrompt(null)}
+        >
+          <div
+            role="document"
+            aria-labelledby="lwd-reason-title"
+            className="pointer-events-auto w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl"
+          >
+            <h3 id="lwd-reason-title" className="text-lg font-semibold text-slate-900">
+              Last working date reason
+            </h3>
+            <p className="mt-2 text-sm text-slate-600">
+              Choose why {lwdReasonPrompt.lwd} is the last working date. Status will update to match.
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              {EXIT_CODES.map((code) => (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => {
+                    applyLwdToRow(lwdReasonPrompt.rowId, lwdReasonPrompt.lwd, code);
+                    setLwdReasonPrompt(null);
+                  }}
+                  className="rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm font-medium text-slate-800 hover:bg-slate-50"
+                >
+                  {code} — {statusFromExitCode(code)}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setLwdReasonPrompt(null)}
+                className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Cancel
               </button>
             </div>
           </div>
@@ -1831,7 +1973,20 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.gender || '—'}</td>
                       <td className="max-w-[120px] truncate border-b border-slate-100 px-2 py-1.5 text-slate-700">{row.designation || '—'}</td>
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.doj || '—'}</td>
-                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.lwd || '—'}</td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">
+                        {canEdit ? (
+                          <input
+                            type="date"
+                            value={toDateKey(row.lwd) || ''}
+                            min={gridDayDates[0] || undefined}
+                            max={gridDayDates[gridDayDates.length - 1] || undefined}
+                            onChange={(e) => onChangeLwd(row.id, e.target.value)}
+                            className="w-[9.5rem] rounded border border-slate-200 bg-white px-1.5 py-1 text-xs tabular-nums text-slate-800"
+                          />
+                        ) : (
+                          row.lwd || '—'
+                        )}
+                      </td>
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 text-slate-700">
                         {canEdit ? (
                           <select
@@ -1841,8 +1996,8 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                               employeeStatusCellClass(row.status_label) || 'bg-white text-slate-800'
                             }`}
                           >
-                            <option value="">—</option>
-                            {EMPLOYEE_STATUS_LABELS.map((label) => (
+                            {row.lwd ? null : <option value="">—</option>}
+                            {(row.lwd ? EXIT_STATUS_LABELS : EMPLOYEE_STATUS_LABELS).map((label) => (
                               <option key={label} value={label} style={employeeStatusOptionStyle(label)}>
                                 {label}
                               </option>
@@ -1864,12 +2019,20 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                       </td>
                       {calendarView === 'expanded' &&
                         gridDayDates.map((d) => {
-                          const code = markFor(row, d);
+                          const afterLwd = isAfterLwd(d, row.lwd);
+                          const onLwd = isLwdDate(d, row.lwd);
+                          const code = afterLwd ? '' : markFor(row, d);
                           const isEditing =
-                            editingCell?.rowId === row.id && editingCell?.date === d;
+                            !afterLwd && editingCell?.rowId === row.id && editingCell?.date === d;
+                          const dayCodes = onLwd ? EXIT_CODES : EDITABLE_CODES;
+                          const canEditDay = canEdit && !afterLwd;
                           return (
                             <td key={`${row.id}-${d}`} className={dayBodyClass(d, clientPolicy)}>
-                              {isEditing && canEdit ? (
+                              {afterLwd ? (
+                                <span className="inline-flex min-w-[2rem] items-center justify-center px-1 py-0.5 text-slate-300">
+                                  {' '}
+                                </span>
+                              ) : isEditing && canEditDay ? (
                                 <select
                                   autoFocus
                                   className="w-14 rounded border border-indigo-300 bg-white py-0.5 text-xs"
@@ -1877,7 +2040,7 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                                   onChange={(e) => onChangeCell(row.id, d, e.target.value)}
                                   onBlur={() => setEditingCell(null)}
                                 >
-                                  {EDITABLE_CODES.map((c) => (
+                                  {dayCodes.map((c) => (
                                     <option key={c} value={c}>
                                       {c === 'A'
                                         ? 'A (Absent LOP)'
@@ -1885,18 +2048,24 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                                           ? 'P-NH (Present NH)'
                                           : c === 'P-FH'
                                             ? 'P-FH (Present FH)'
-                                            : c}
+                                            : c === 'AB'
+                                              ? 'AB (Abscond)'
+                                              : c === 'R'
+                                                ? 'R (Resigned)'
+                                                : c === 'T'
+                                                  ? 'T (Termination)'
+                                                  : c}
                                     </option>
                                   ))}
                                 </select>
                               ) : (
                                 <button
                                   type="button"
-                                  disabled={!canEdit}
+                                  disabled={!canEditDay}
                                   title={LEGEND_LABELS[code] || code}
-                                  onClick={() => canEdit && setEditingCell({ rowId: row.id, date: d })}
+                                  onClick={() => canEditDay && setEditingCell({ rowId: row.id, date: d })}
                                   className={`relative inline-flex min-w-[2rem] items-center justify-center overflow-hidden rounded px-1 py-0.5 ${codeCellClass(code)} ${
-                                    canEdit ? 'cursor-pointer hover:ring-1 hover:ring-indigo-300' : 'cursor-default'
+                                    canEditDay ? 'cursor-pointer hover:ring-1 hover:ring-indigo-300' : 'cursor-default'
                                   }`}
                                 >
                                   {isPresentOnHolidayCode(code) && (
@@ -2522,7 +2691,10 @@ function LegendBar() {
     { code: 'HD', label: 'Half day' },
     { code: 'EL/SL/CL…', label: 'Leave', cls: 'bg-violet-100 text-violet-900' },
     { code: 'A', label: 'Absent LOP' },
-    { code: 'R/T/-', label: 'Not considered', cls: 'bg-slate-100 text-slate-500' }
+    { code: 'AB', label: 'Abscond' },
+    { code: 'R', label: 'Resigned' },
+    { code: 'T', label: 'Termination' },
+    { code: '-', label: 'Not considered', cls: 'bg-slate-100 text-slate-500' }
   ];
   return (
     <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">

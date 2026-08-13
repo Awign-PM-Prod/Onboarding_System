@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import DashboardStatCard, { DASHBOARD_STAT_ICONS } from '../components/DashboardStatCard';
+import DashboardStatCard, { DASHBOARD_STAT_GRID_CLASS, DASHBOARD_STAT_ICONS } from '../components/DashboardStatCard';
 import SuperAdminDashboardCharts from '../components/SuperAdminDashboardCharts';
 import SuperAdminDateRangeFilters from '../components/SuperAdminDateRangeFilters';
-import { resolveDateRange } from '../lib/superAdminDateRange';
+import { resolveDashboardDateRange } from '../lib/superAdminDateRange';
 
 const POLL_MS = 15000;
 const ICONS = DASHBOARD_STAT_ICONS;
@@ -40,6 +40,14 @@ const EMPTY_STATS = {
   clients: []
 };
 
+const STAT_SECTIONS = [
+  { id: 'workforce', label: 'Workforce Overview' },
+  { id: 'pipeline', label: 'Submission & Approval Pipeline' },
+  { id: 'payroll', label: 'Payroll Processing' },
+  { id: 'uan', label: 'Compliance – UAN Status' },
+  { id: 'esic', label: 'Compliance – ESIC Coverage' }
+];
+
 function applyStatsPayload(data) {
   return {
     totals: { ...EMPTY, ...(data?.totals || {}) },
@@ -57,31 +65,27 @@ export default function SuperAdminDashboardHome() {
   const [month, setMonth] = useState('');
   const [year, setYear] = useState('');
   const [week, setWeek] = useState('');
+  const [preset, setPreset] = useState('');
   const [appliedCustomFrom, setAppliedCustomFrom] = useState('');
   const [appliedCustomTo, setAppliedCustomTo] = useState('');
+  const [statSection, setStatSection] = useState('workforce');
   const requestSeqRef = useRef(0);
   const loadingRef = useRef(true);
 
   const dateRange = useMemo(
     () =>
-      resolveDateRange({
+      resolveDashboardDateRange({
+        preset,
+        customFrom: appliedCustomFrom,
+        customTo: appliedCustomTo,
         month,
         year,
-        week,
-        customFrom: appliedCustomFrom,
-        customTo: appliedCustomTo
+        week
       }),
-    [appliedCustomFrom, appliedCustomTo, month, year, week]
+    [appliedCustomFrom, appliedCustomTo, month, preset, year, week]
   );
 
   const hasDateFilter = Boolean(dateRange.from || dateRange.to);
-
-  const rangeHint = useMemo(() => {
-    if (dateRange.from && dateRange.to) return `${dateRange.from} → ${dateRange.to}`;
-    if (dateRange.from) return `From ${dateRange.from}`;
-    if (dateRange.to) return `Until ${dateRange.to}`;
-    return 'All time';
-  }, [dateRange.from, dateRange.to]);
 
   useEffect(() => {
     let active = true;
@@ -171,6 +175,10 @@ export default function SuperAdminDashboardHome() {
   const t = stats.totals;
   const c = stats.compliance;
   const isEmptyPeriod = !loading && !error && t.employees === 0;
+  const awaitingPl = Math.max(
+    0,
+    (Number(t.pm_approved) || 0) - (Number(t.payroll_approved) || 0) - (Number(t.payroll_rejected) || 0)
+  );
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
@@ -181,8 +189,8 @@ export default function SuperAdminDashboardHome() {
         </p>
       </div>
 
-      <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="sr-only" htmlFor="dashboard-client">
             Client
           </label>
@@ -190,56 +198,44 @@ export default function SuperAdminDashboardHome() {
             id="dashboard-client"
             value={clientId}
             onChange={(e) => setClientId(e.target.value)}
-            className="appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3.5 pr-9 text-sm font-medium text-slate-800 shadow-sm hover:border-slate-300 focus:border-slate-400 focus:outline-none"
+            className="w-36 max-w-full shrink-0 appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3.5 pr-9 text-sm font-medium text-slate-800 shadow-sm hover:border-slate-300 focus:border-slate-400 focus:outline-none"
           >
             <option value="">All clients</option>
-            {clientOptions.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
+            {clientOptions.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
               </option>
             ))}
           </select>
-          <SuperAdminDateRangeFilters
-            idPrefix="dashboard"
-            month={month}
-            year={year}
-            week={week}
-            appliedCustomFrom={appliedCustomFrom}
-            appliedCustomTo={appliedCustomTo}
-            onMonthChange={(value) => {
-              setMonth(value);
-              if (value && !year) setYear(String(new Date().getFullYear()));
-              if (value) setWeek('');
-            }}
-            onYearChange={(value) => {
-              setYear(value);
-              if (value) setWeek('');
-            }}
-            onWeekChange={(value) => {
-              setWeek(value);
-              if (value) {
-                setMonth('');
-                setYear('');
-              }
-            }}
-            onCustomClear={() => {
-              setAppliedCustomFrom('');
-              setAppliedCustomTo('');
-            }}
-            onCustomApply={(from, to) => {
-              setError('');
-              setAppliedCustomFrom(from);
-              setAppliedCustomTo(to);
-              setMonth('');
-              setYear('');
-              setWeek('');
-            }}
-            onCustomError={(message) => setError(message)}
-          />
         </div>
-        <p className="text-xs text-slate-500">
-          Showing employees created: <span className="font-medium text-slate-700">{rangeHint}</span>
-        </p>
+        <SuperAdminDateRangeFilters
+          idPrefix="dashboard"
+          variant="presets"
+          month={month}
+          year={year}
+          week={week}
+          preset={preset}
+          appliedCustomFrom={appliedCustomFrom}
+          appliedCustomTo={appliedCustomTo}
+          onPresetChange={setPreset}
+          onMonthChange={setMonth}
+          onYearChange={setYear}
+          onWeekChange={setWeek}
+          onCustomClear={() => {
+            setAppliedCustomFrom('');
+            setAppliedCustomTo('');
+          }}
+          onCustomApply={(from, to) => {
+            setError('');
+            setAppliedCustomFrom(from);
+            setAppliedCustomTo(to);
+            setPreset('');
+            setMonth('');
+            setYear('');
+            setWeek('');
+          }}
+          onCustomError={(message) => setError(message)}
+        />
       </div>
 
       {loading && (
@@ -252,7 +248,7 @@ export default function SuperAdminDashboardHome() {
       )}
 
       {!loading && !error && isEmptyPeriod && (
-        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-500 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
           {hasDateFilter
             ? 'No employees were created in this period, so pipeline metrics are empty.'
             : 'No employees found.'}
@@ -263,89 +259,138 @@ export default function SuperAdminDashboardHome() {
         <>
           <SuperAdminDashboardCharts totals={t} clients={stats.clients} />
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-            <DashboardStatCard title="Clients" value={t.clients} tone="indigo" icon={ICONS.building} />
-            <DashboardStatCard title="Employees" value={t.employees} tone="indigo" icon={ICONS.users} />
-            <DashboardStatCard
-              title="Onboarding Activations"
-              value={t.onboarding_activations}
-              tone="indigo"
-              icon={ICONS.activations}
-            />
-            <DashboardStatCard
-              title="Employees Submitted"
-              value={t.employees_submitted}
-              tone="indigo"
-              icon={ICONS.submitted}
-            />
-            <DashboardStatCard
-              title="Submission Pending"
-              value={t.submission_pending}
-              tone="amber"
-              icon={ICONS.pending}
-            />
+          <div
+            className="mb-4 flex flex-wrap gap-2"
+            role="tablist"
+            aria-label="Dashboard metric groups"
+          >
+            {STAT_SECTIONS.map((sec) => {
+              const active = statSection === sec.id;
+              return (
+                <button
+                  key={sec.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setStatSection(sec.id)}
+                  className={`rounded-full px-3.5 py-2 text-sm font-medium shadow-sm transition-colors ${
+                    active
+                      ? 'bg-indigo-700 text-white'
+                      : 'border border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                  }`}
+                >
+                  {sec.label}
+                </button>
+              );
+            })}
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-            <DashboardStatCard
-              title="Active"
-              value={t.active_employees}
-              tone="emerald"
-              icon={ICONS.check}
-            />
-            <DashboardStatCard
-              title="PL Approved"
-              value={t.payroll_approved}
-              tone="emerald"
-              icon={ICONS.approved}
-            />
-            <DashboardStatCard title="Dropout" value={t.total_dropout} tone="rose" icon={ICONS.rejected} />
-            <DashboardStatCard title="PM Approved" value={t.pm_approved} tone="emerald" icon={ICONS.approved} />
-            <DashboardStatCard title="PM Rejected" value={t.pm_rejected} tone="rose" icon={ICONS.rejected} />
-            <DashboardStatCard
-              title="PM Correction Requested"
-              value={t.pm_correction_requested}
-              tone="amber"
-              icon={ICONS.correction}
-            />
-            <DashboardStatCard
-              title="PL Rejected"
-              value={t.payroll_rejected}
-              tone="rose"
-              icon={ICONS.rejected}
-            />
-          </div>
-
-          <div className="mt-6">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">Compliance</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-              <DashboardStatCard
-                title="Form Submitted"
-                value={c.form_submitted}
-                tone="indigo"
-                icon={ICONS.document}
-              />
-              <DashboardStatCard title="With UAN" value={c.with_uan} tone="emerald" icon={ICONS.check} />
-              <DashboardStatCard title="Without UAN" value={c.without_uan} tone="amber" icon={ICONS.pending} />
-              <DashboardStatCard
-                title="With ESIC Under Limit"
-                value={c.with_esic_under_limit}
-                tone="emerald"
-                icon={ICONS.check}
-              />
-              <DashboardStatCard
-                title="Without ESIC Under Limit"
-                value={c.without_esic_under_limit}
-                tone="amber"
-                icon={ICONS.pending}
-              />
-              <DashboardStatCard
-                title="Outside ESIC Limit"
-                value={c.outside_esic_limit}
-                tone="slate"
-                icon={ICONS.document}
-              />
-            </div>
+          <div className={DASHBOARD_STAT_GRID_CLASS} role="tabpanel">
+            {statSection === 'workforce' && (
+              <>
+                <DashboardStatCard title="Clients" value={t.clients} tone="indigo" icon={ICONS.building} />
+                <DashboardStatCard title="Employees" value={t.employees} tone="indigo" icon={ICONS.users} />
+                <DashboardStatCard
+                  title="Onboarding Activations"
+                  value={t.onboarding_activations}
+                  tone="indigo"
+                  icon={ICONS.activations}
+                />
+                <DashboardStatCard title="Dropout" value={t.total_dropout} tone="rose" icon={ICONS.rejected} />
+                <DashboardStatCard
+                  title="Active"
+                  value={t.active_employees}
+                  tone="emerald"
+                  icon={ICONS.check}
+                />
+              </>
+            )}
+            {statSection === 'pipeline' && (
+              <>
+                <DashboardStatCard
+                  title="Employees Submitted"
+                  value={t.employees_submitted}
+                  tone="indigo"
+                  icon={ICONS.submitted}
+                />
+                <DashboardStatCard
+                  title="Submission Pending"
+                  value={t.submission_pending}
+                  tone="amber"
+                  icon={ICONS.pending}
+                />
+                <DashboardStatCard
+                  title="PM Approved"
+                  value={t.pm_approved}
+                  tone="emerald"
+                  icon={ICONS.approved}
+                />
+                <DashboardStatCard title="PM Rejected" value={t.pm_rejected} tone="rose" icon={ICONS.rejected} />
+                <DashboardStatCard
+                  title="PM Correction Requested"
+                  value={t.pm_correction_requested}
+                  tone="amber"
+                  icon={ICONS.correction}
+                />
+              </>
+            )}
+            {statSection === 'payroll' && (
+              <>
+                <DashboardStatCard
+                  title="Total Onboarded"
+                  value={t.total_onboarded}
+                  tone="indigo"
+                  icon={ICONS.check}
+                />
+                <DashboardStatCard
+                  title="PL Approved"
+                  value={t.payroll_approved}
+                  tone="emerald"
+                  icon={ICONS.approved}
+                />
+                <DashboardStatCard
+                  title="PL Rejected"
+                  value={t.payroll_rejected}
+                  tone="rose"
+                  icon={ICONS.rejected}
+                />
+                <DashboardStatCard title="Awaiting PL" value={awaitingPl} tone="amber" icon={ICONS.pending} />
+              </>
+            )}
+            {statSection === 'uan' && (
+              <>
+                <DashboardStatCard
+                  title="Form Submitted"
+                  value={c.form_submitted}
+                  tone="indigo"
+                  icon={ICONS.document}
+                />
+                <DashboardStatCard title="With UAN" value={c.with_uan} tone="emerald" icon={ICONS.check} />
+                <DashboardStatCard title="Without UAN" value={c.without_uan} tone="amber" icon={ICONS.pending} />
+              </>
+            )}
+            {statSection === 'esic' && (
+              <>
+                <DashboardStatCard
+                  title="With ESIC Under Limit"
+                  value={c.with_esic_under_limit}
+                  tone="emerald"
+                  icon={ICONS.check}
+                />
+                <DashboardStatCard
+                  title="Without ESIC Under Limit"
+                  value={c.without_esic_under_limit}
+                  tone="amber"
+                  icon={ICONS.pending}
+                />
+                <DashboardStatCard
+                  title="Outside ESIC Limit"
+                  value={c.outside_esic_limit}
+                  tone="slate"
+                  icon={ICONS.document}
+                />
+              </>
+            )}
           </div>
 
           <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">

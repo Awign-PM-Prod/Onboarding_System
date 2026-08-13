@@ -2426,17 +2426,6 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   const [emailSending, setEmailSending] = useState(false);
   const [emailVerifying, setEmailVerifying] = useState(false);
   const [emailVerifyError, setEmailVerifyError] = useState('');
-  const [secondaryMobileVerified, setSecondaryMobileVerified] = useState(
-    () =>
-      jobForm.pd_secondary_mobile_verified === true &&
-      TEN_DIGIT_REGEX.test(normalizeMobile(jobForm.pd_secondary_mobile))
-  );
-  const [secondaryMobileOtp, setSecondaryMobileOtp] = useState('');
-  const [secondaryMobileOtpSent, setSecondaryMobileOtpSent] = useState(false);
-  const [secondaryMobileOtpHint, setSecondaryMobileOtpHint] = useState('');
-  const [secondaryMobileSending, setSecondaryMobileSending] = useState(false);
-  const [secondaryMobileVerifying, setSecondaryMobileVerifying] = useState(false);
-  const [secondaryMobileVerifyError, setSecondaryMobileVerifyError] = useState('');
 
   useEffect(() => {
     const base = buildPersonalDraft(jobForm);
@@ -2479,14 +2468,6 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       jobForm.email_verified === true &&
         EMAIL_REGEX.test(normalizeEmail(base.email)) &&
         !(correction?.active && correction.visibleFields.has('email'))
-    );
-    setSecondaryMobileOtp('');
-    setSecondaryMobileOtpSent(false);
-    setSecondaryMobileVerifyError('');
-    setSecondaryMobileVerified(
-      jobForm.pd_secondary_mobile_verified === true &&
-        TEN_DIGIT_REGEX.test(normalizeMobile(base.pd_secondary_mobile)) &&
-        !(correction?.active && correction.visibleFields.has('pd_secondary_mobile'))
     );
   }, [jobForm, correction]);
 
@@ -2545,8 +2526,8 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
 
   const requiredOk =
     (!isRequired('email', true) || (EMAIL_REGEX.test(normalizeEmail(draft.email)) && emailVerified)) &&
-    (!isRequired('pd_secondary_mobile', true) ||
-      (TEN_DIGIT_REGEX.test(normalizeMobile(draft.pd_secondary_mobile)) && secondaryMobileVerified)) &&
+    ((!normalizeMobile(draft.pd_secondary_mobile) && !isRequired('pd_secondary_mobile', false)) ||
+      TEN_DIGIT_REGEX.test(normalizeMobile(draft.pd_secondary_mobile))) &&
     (!isRequired('pd_father_name', true) || fatherName) &&
     (!isRequired('pd_mother_name', true) || motherName) &&
     (!isRequired('pd_spouse_name', true) || !isMarried || spouseName) &&
@@ -2599,64 +2580,6 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       setEmailVerifyError(err.message || 'Could not verify email OTP.');
     } finally {
       setEmailVerifying(false);
-    }
-  };
-
-  const handleSendSecondaryMobileOtp = async () => {
-    const secondaryMobile = normalizeMobile(draft.pd_secondary_mobile);
-    if (!TEN_DIGIT_REGEX.test(secondaryMobile) || secondaryMobileSending) return;
-    if (secondaryMobile === normalizeMobile(mobile)) {
-      setSecondaryMobileVerifyError('Alternate mobile must be different from your primary mobile number.');
-      return;
-    }
-    setSecondaryMobileSending(true);
-    setSecondaryMobileVerifyError('');
-    try {
-      const result = await api.sendSecondaryMobileOtp({ mobile, employeeId, secondaryMobile });
-      setSecondaryMobileOtpSent(true);
-      setSecondaryMobileOtp('');
-      setSecondaryMobileVerified(false);
-      setSecondaryMobileOtpHint(result?.message || 'OTP sent. If demo mode, use 123123.');
-    } catch (err) {
-      setSecondaryMobileOtpSent(false);
-      setSecondaryMobileOtpHint('');
-      setSecondaryMobileVerifyError(err.message || 'Could not send OTP.');
-    } finally {
-      setSecondaryMobileSending(false);
-    }
-  };
-
-  const handleVerifySecondaryMobileOtp = async () => {
-    const secondaryMobile = normalizeMobile(draft.pd_secondary_mobile);
-    if (
-      !TEN_DIGIT_REGEX.test(secondaryMobile) ||
-      !SIX_DIGIT_REGEX.test(secondaryMobileOtp) ||
-      secondaryMobileVerifying
-    ) {
-      return;
-    }
-    setSecondaryMobileVerifying(true);
-    setSecondaryMobileVerifyError('');
-    try {
-      const result = await api.verifySecondaryMobileOtp({
-        mobile,
-        employeeId,
-        secondaryMobile,
-        otp: secondaryMobileOtp,
-      });
-      if (result?.form) {
-        setDraft((d) => ({
-          ...d,
-          pd_secondary_mobile: normalizeMobile(result.form.pd_secondary_mobile ?? secondaryMobile),
-        }));
-      }
-      setSecondaryMobileVerified(true);
-      setSecondaryMobileOtpSent(false);
-      setSecondaryMobileOtp('');
-    } catch (err) {
-      setSecondaryMobileVerifyError(err.message || 'Could not verify OTP.');
-    } finally {
-      setSecondaryMobileVerifying(false);
     }
   };
 
@@ -2725,7 +2648,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           return;
         }
       }
-      if (isRequired('pd_secondary_mobile', true)) {
+      if (secondaryMobile) {
         if (!TEN_DIGIT_REGEX.test(secondaryMobile)) {
           setError('Alternate mobile number must be 10 digits.');
           setSaving(false);
@@ -2741,11 +2664,10 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
           setSaving(false);
           return;
         }
-        if (!secondaryMobileVerified) {
-          setError('Please verify your alternate mobile number before continuing.');
-          setSaving(false);
-          return;
-        }
+      } else if (isRequired('pd_secondary_mobile', false)) {
+        setError('Alternate mobile number must be 10 digits.');
+        setSaving(false);
+        return;
       }
       if (alt.length !== 10) {
         setError('Emergency contact number must be 10 digits.');
@@ -2872,35 +2794,24 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             />
           )}
           {shouldShow('pd_secondary_mobile') && (
-            <ContactVerificationField
-              label="Alternate Mobile Number"
-              required={isRequired('pd_secondary_mobile', true)}
-              value={draft.pd_secondary_mobile}
-              onValueChange={(next) => {
-                setDraft((d) => ({ ...d, pd_secondary_mobile: next }));
-                setSecondaryMobileVerified(false);
-                setSecondaryMobileOtpSent(false);
-                setSecondaryMobileOtp('');
-                setSecondaryMobileOtpHint('');
-                setSecondaryMobileVerifyError('');
-              }}
-              verified={secondaryMobileVerified}
-              inputType="text"
-              inputMode="numeric"
-              maxLength={10}
-              placeholder="10-digit alternate mobile number"
-              hint="OTP is sent to this number via SMS."
-              otp={secondaryMobileOtp}
-              onOtpChange={setSecondaryMobileOtp}
-              otpSent={secondaryMobileOtpSent}
-              otpSentHint={secondaryMobileOtpHint}
-              onSendOtp={handleSendSecondaryMobileOtp}
-              onVerifyOtp={handleVerifySecondaryMobileOtp}
-              sendingOtp={secondaryMobileSending}
-              verifyingOtp={secondaryMobileVerifying}
-              error={secondaryMobileVerifyError}
-              normalizeInput={normalizeMobile}
-            />
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                Alternate Mobile Number{' '}
+                {isRequired('pd_secondary_mobile', false) && <span className="text-rose-500">*</span>}
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={10}
+                autoComplete="tel"
+                className={`${fieldClass(false)} tabular-nums`}
+                placeholder="10-digit alternate mobile number (optional)"
+                value={draft.pd_secondary_mobile}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, pd_secondary_mobile: normalizeMobile(e.target.value) }))
+                }
+              />
+            </div>
           )}
           {(shouldShow('pd_father_name') || shouldShow('pd_mother_name') || (isMarried && shouldShow('pd_spouse_name'))) && (
             <div className="space-y-3">
@@ -3222,35 +3133,23 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               <IconCheckCircle className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-emerald-500" />
             </div>
           </div>
-          <ContactVerificationField
-            label="Alternate Mobile Number"
-            required
-            value={draft.pd_secondary_mobile}
-            onValueChange={(next) => {
-              setDraft((d) => ({ ...d, pd_secondary_mobile: next }));
-              setSecondaryMobileVerified(false);
-              setSecondaryMobileOtpSent(false);
-              setSecondaryMobileOtp('');
-              setSecondaryMobileOtpHint('');
-              setSecondaryMobileVerifyError('');
-            }}
-            verified={secondaryMobileVerified}
-            inputType="text"
-            inputMode="numeric"
-            maxLength={10}
-            placeholder="10-digit alternate mobile number"
-            hint="OTP is sent to this number via SMS."
-            otp={secondaryMobileOtp}
-            onOtpChange={setSecondaryMobileOtp}
-            otpSent={secondaryMobileOtpSent}
-            otpSentHint={secondaryMobileOtpHint}
-            onSendOtp={handleSendSecondaryMobileOtp}
-            onVerifyOtp={handleVerifySecondaryMobileOtp}
-            sendingOtp={secondaryMobileSending}
-            verifyingOtp={secondaryMobileVerifying}
-            error={secondaryMobileVerifyError}
-            normalizeInput={normalizeMobile}
-          />
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700">
+              Alternate Mobile Number
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={10}
+              autoComplete="tel"
+              className={`${fieldClass(false)} tabular-nums`}
+              placeholder="10-digit alternate mobile number (optional)"
+              value={draft.pd_secondary_mobile}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, pd_secondary_mobile: normalizeMobile(e.target.value) }))
+              }
+            />
+          </div>
           <ContactVerificationField
             label="Email Address"
             required
@@ -3674,6 +3573,7 @@ export default function OnboardingForm() {
       )
     );
     const visibleFields = new Set(requiredFields);
+    requiredFields.delete('pd_secondary_mobile');
     if (step === 'personal') {
       if (!String(jobFormRow?.pd_emergency_contact_name ?? '').trim()) {
         visibleFields.add('pd_emergency_contact_name');

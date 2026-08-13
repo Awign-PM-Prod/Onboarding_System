@@ -82,12 +82,12 @@ function StatCard({ title, value, tone, icon }) {
   };
   const t = tones[tone] || tones.indigo;
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="box-border flex h-[88px] w-full flex-col justify-between rounded-[12px] border border-slate-200 bg-white px-4 py-3 opacity-100 shadow-sm">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p>
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${t.icon}`}>{icon}</span>
+        <p className="min-w-0 text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p>
+        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${t.icon}`}>{icon}</span>
       </div>
-      <p className={`mt-1 text-2xl font-bold ${t.value}`}>{value}</p>
+      <p className={`text-2xl font-semibold leading-none ${t.value}`}>{value}</p>
     </div>
   );
 }
@@ -349,7 +349,7 @@ export default function PayrollClientDashboardHome() {
 
       {!loading && !error && (
         <>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <StatCard title="Total Employees" value={formatNumber(stats.totalEmployees)} tone="indigo" icon={STAT_ICONS.employees} />
             <StatCard
               title="Total Leaves"

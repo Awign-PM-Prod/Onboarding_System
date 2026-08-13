@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
+import { fetchAllRows, fetchAllRowsByIds } from '../utils/supabasePaginate.js';
 
 const router = Router();
 
@@ -63,25 +64,28 @@ router.get('/clients', async (req, res, next) => {
 router.get('/compliance-stats', async (req, res, next) => {
   try {
     // 1. Fetch all employees (we need ctc fields, identity numbers, joining_status).
-    const { data: employees, error: eErr } = await supabaseAdmin
-      .from('employees')
-      .select(
-        'id, client_id, ctc_type, ctc_value, payroll_pf_uan_number, payroll_esic_number, joining_status'
-      );
-    if (eErr) throw eErr;
+    const employeeRows = await fetchAllRows(() =>
+      supabaseAdmin
+        .from('employees')
+        .select(
+          'id, client_id, ctc_type, ctc_value, payroll_pf_uan_number, payroll_esic_number, joining_status'
+        )
+    );
 
-    const employeeRows = employees ?? [];
     const employeeIds = employeeRows.map((e) => e.id);
 
     // 2. Fetch job_app_form data for those employees.
     const formMap = new Map();
     if (employeeIds.length > 0) {
-      const { data: forms, error: fErr } = await supabaseAdmin
-        .from('job_app_form')
-        .select('employee_id, submission_status, payroll_review_status')
-        .in('employee_id', employeeIds);
-      if (fErr) throw fErr;
-      for (const form of forms ?? []) {
+      const forms = await fetchAllRowsByIds(
+        (idChunk) =>
+          supabaseAdmin
+            .from('job_app_form')
+            .select('employee_id, submission_status, payroll_review_status')
+            .in('employee_id', idChunk),
+        employeeIds
+      );
+      for (const form of forms) {
         formMap.set(form.employee_id, form);
       }
     }
