@@ -65,6 +65,7 @@ router.get('/', async (req, res, next) => {
       { data: desigs, error: dErr },
       { data: employees, error: eErr },
       { data: dojExtendPending, error: dojErr },
+      { data: joiningStatusChangePending, error: jscErr },
     ] = await Promise.all([
       supabaseAdmin
         .from('designations')
@@ -73,7 +74,7 @@ router.get('/', async (req, res, next) => {
       supabaseAdmin
         .from('employees')
         .select(
-          'id, client_id, onboarding_initiated, onboarding_status, date_of_joining, joining_status, doj_extend_unlock'
+          'id, client_id, onboarding_initiated, onboarding_status, date_of_joining, joining_status, doj_extend_unlock, doj_extend_unlock_expires_at, joining_status_unlock, joining_status_unlock_expires_at'
         )
         .in('client_id', ids),
       supabaseAdmin
@@ -81,10 +82,23 @@ router.get('/', async (req, res, next) => {
         .select('employee_id, client_id')
         .in('client_id', ids)
         .eq('status', 'PENDING'),
+      supabaseAdmin
+        .from('joining_status_change_requests')
+        .select('employee_id, client_id')
+        .in('client_id', ids)
+        .eq('status', 'PENDING'),
     ]);
     if (dErr) throw dErr;
     if (eErr) throw eErr;
-    if (dojErr) throw dojErr;
+    if (dojErr) {
+      console.warn('[pmClients] doj_extend_requests lookup skipped:', dojErr.message || dojErr);
+    }
+    if (jscErr) {
+      console.warn(
+        '[pmClients] joining_status_change_requests lookup skipped:',
+        jscErr.message || jscErr
+      );
+    }
 
     const byClient = new Map();
     for (const d of desigs ?? []) {
@@ -112,6 +126,9 @@ router.get('/', async (req, res, next) => {
     const pendingDojEmployeeIds = new Set(
       (dojExtendPending ?? []).map((r) => r.employee_id)
     );
+    const pendingJoiningStatusChangeIds = new Set(
+      (joiningStatusChangePending ?? []).map((r) => r.employee_id)
+    );
 
     const actionByClient = new Map(ids.map((id) => [id, emptyActionCounts()]));
     const today = todayDateInIST();
@@ -134,7 +151,9 @@ router.get('/', async (req, res, next) => {
       }
       if (
         pendingDojEmployeeIds.has(emp.id) ||
-        Boolean(emp.doj_extend_unlock)
+        Boolean(emp.doj_extend_unlock) ||
+        pendingJoiningStatusChangeIds.has(emp.id) ||
+        Boolean(emp.joining_status_unlock)
       ) {
         counts.date_joining_extended += 1;
       }
@@ -565,7 +584,9 @@ router.get('/doj-extend-request-updates', async (req, res, next) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('doj_extend_requests')
-      .select('id, employee_id, client_id, status, reason, review_note, reviewed_at, created_at')
+      .select(
+        'id, employee_id, client_id, status, reason, review_note, reviewed_at, max_allowed_doj, unlock_expires_at, created_at'
+      )
       .eq('requested_by', req.user.id)
       .in('status', ['APPROVED', 'REJECTED'])
       .is('pm_acked_at', null)
@@ -580,7 +601,12 @@ router.get('/doj-extend-request-updates', async (req, res, next) => {
     const clientIds = [...new Set(rows.map((r) => r.client_id))];
 
     const [{ data: employees }, { data: clients }] = await Promise.all([
-      supabaseAdmin.from('employees').select('id, name, date_of_joining, doj_extend_unlock').in('id', employeeIds),
+      supabaseAdmin
+        .from('employees')
+        .select(
+          'id, name, date_of_joining, doj_extend_unlock, doj_extend_max_date, doj_extend_unlock_expires_at'
+        )
+        .in('id', employeeIds),
       supabaseAdmin.from('clients').select('id, client_name').in('id', clientIds),
     ]);
 
@@ -601,6 +627,8 @@ router.get('/doj-extend-request-updates', async (req, res, next) => {
           review_note: r.review_note,
           reviewed_at: r.reviewed_at,
           date_of_joining: emp?.date_of_joining ?? null,
+          max_allowed_doj: r.max_allowed_doj ?? emp?.doj_extend_max_date ?? null,
+          unlock_expires_at: r.unlock_expires_at ?? emp?.doj_extend_unlock_expires_at ?? null,
           doj_extend_unlock: Boolean(emp?.doj_extend_unlock),
         };
       }),
@@ -622,6 +650,89 @@ router.post('/doj-extend-request-updates/ack', async (req, res, next) => {
     const now = new Date().toISOString();
     const { data, error } = await supabaseAdmin
       .from('doj_extend_requests')
+      .update({ pm_acked_at: now, updated_at: now })
+      .in('id', ids)
+      .eq('requested_by', req.user.id)
+      .in('status', ['APPROVED', 'REJECTED'])
+      .is('pm_acked_at', null)
+      .select('id');
+    if (error) throw error;
+
+    return res.json({ acked: (data ?? []).length, ids: (data ?? []).map((r) => r.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/joining-status-change-request-updates', async (req, res, next) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('joining_status_change_requests')
+      .select(
+        'id, employee_id, client_id, status, reason, review_note, reviewed_at, unlock_expires_at, created_at'
+      )
+      .eq('requested_by', req.user.id)
+      .in('status', ['APPROVED', 'REJECTED'])
+      .is('pm_acked_at', null)
+      .order('reviewed_at', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+
+    const rows = data ?? [];
+    if (rows.length === 0) return res.json({ updates: [] });
+
+    const employeeIds = [...new Set(rows.map((r) => r.employee_id))];
+    const clientIds = [...new Set(rows.map((r) => r.client_id))];
+
+    const [{ data: employees }, { data: clients }] = await Promise.all([
+      supabaseAdmin
+        .from('employees')
+        .select(
+          'id, name, joining_status, joining_status_unlock, joining_status_unlock_expires_at'
+        )
+        .in('id', employeeIds),
+      supabaseAdmin.from('clients').select('id, client_name').in('id', clientIds),
+    ]);
+
+    const empMap = new Map((employees ?? []).map((e) => [e.id, e]));
+    const clientMap = new Map((clients ?? []).map((c) => [c.id, c.client_name]));
+
+    return res.json({
+      updates: rows.map((r) => {
+        const emp = empMap.get(r.employee_id);
+        return {
+          id: r.id,
+          employee_id: r.employee_id,
+          employee_name: emp?.name ?? 'Employee',
+          client_id: r.client_id,
+          client_name: clientMap.get(r.client_id) ?? 'Client',
+          status: r.status,
+          reason: r.reason,
+          review_note: r.review_note,
+          reviewed_at: r.reviewed_at,
+          joining_status: emp?.joining_status ?? null,
+          unlock_expires_at: r.unlock_expires_at ?? emp?.joining_status_unlock_expires_at ?? null,
+          joining_status_unlock: Boolean(emp?.joining_status_unlock),
+        };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/joining-status-change-request-updates/ack', async (req, res, next) => {
+  try {
+    const ids = Array.isArray(req.body?.ids)
+      ? [...new Set(req.body.ids.map((id) => String(id ?? '').trim()).filter(Boolean))]
+      : [];
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'ids required (non-empty array)' });
+    }
+
+    const now = new Date().toISOString();
+    const { data, error } = await supabaseAdmin
+      .from('joining_status_change_requests')
       .update({ pm_acked_at: now, updated_at: now })
       .in('id', ids)
       .eq('requested_by', req.user.id)

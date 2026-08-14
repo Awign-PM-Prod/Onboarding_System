@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import DashboardStatCard, { DASHBOARD_STAT_GRID_CLASS, DASHBOARD_STAT_ICONS } from '../components/DashboardStatCard';
 import SuperAdminDashboardCharts from '../components/SuperAdminDashboardCharts';
-import SuperAdminDateRangeFilters from '../components/SuperAdminDateRangeFilters';
+import SuperAdminDateRangeFilters, { FilterSelect } from '../components/SuperAdminDateRangeFilters';
 import { resolveDashboardDateRange } from '../lib/superAdminDateRange';
 
 const POLL_MS = 15000;
@@ -189,24 +189,21 @@ export default function SuperAdminDashboardHome() {
         </p>
       </div>
 
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-start">
         <div className="flex flex-wrap items-center gap-2">
           <label className="sr-only" htmlFor="dashboard-client">
             Client
           </label>
-          <select
+          <FilterSelect
             id="dashboard-client"
             value={clientId}
             onChange={(e) => setClientId(e.target.value)}
-            className="w-36 max-w-full shrink-0 appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3.5 pr-9 text-sm font-medium text-slate-800 shadow-sm hover:border-slate-300 focus:border-slate-400 focus:outline-none"
-          >
-            <option value="">All clients</option>
-            {clientOptions.map((opt) => (
-              <option key={opt.id} value={opt.id}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: '', label: 'All clients' },
+              ...clientOptions.map((opt) => ({ value: opt.id, label: opt.label }))
+            ]}
+            className="w-36 max-w-full shrink-0"
+          />
         </div>
         <SuperAdminDateRangeFilters
           idPrefix="dashboard"

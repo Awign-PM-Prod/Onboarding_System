@@ -388,6 +388,8 @@ export default function PmLayout() {
   const [joiningReminderStep, setJoiningReminderStep] = useState('');
   const [dojDecisionUpdates, setDojDecisionUpdates] = useState([]);
   const [dojDecisionAcking, setDojDecisionAcking] = useState(false);
+  const [joiningStatusDecisionUpdates, setJoiningStatusDecisionUpdates] = useState([]);
+  const [joiningStatusDecisionAcking, setJoiningStatusDecisionAcking] = useState(false);
   /** Client IDs for which the PM dismissed the joining reminder this session. */
   const joiningReminderDismissedRef = useRef(new Set());
   const mainScrollRef = useRef(null);
@@ -487,9 +489,21 @@ export default function PmLayout() {
       }
     };
 
+    const loadJoiningStatusDecisionUpdates = async () => {
+      try {
+        const payload = await api.getPmJoiningStatusChangeRequestUpdates();
+        if (cancelled) return;
+        const updates = Array.isArray(payload?.updates) ? payload.updates : [];
+        setJoiningStatusDecisionUpdates(updates);
+      } catch {
+        // Non-blocking
+      }
+    };
+
     const refreshAll = () => {
       loadJoiningReminders();
       loadDojDecisionUpdates();
+      loadJoiningStatusDecisionUpdates();
     };
 
     refreshAll();
@@ -525,6 +539,21 @@ export default function PmLayout() {
       // Keep modal open so PM can retry
     } finally {
       setDojDecisionAcking(false);
+    }
+  };
+
+  const ackJoiningStatusDecisions = async () => {
+    if (joiningStatusDecisionUpdates.length === 0) return;
+    setJoiningStatusDecisionAcking(true);
+    try {
+      await api.ackPmJoiningStatusChangeRequestUpdates(
+        joiningStatusDecisionUpdates.map((u) => u.id)
+      );
+      setJoiningStatusDecisionUpdates([]);
+    } catch {
+      // Keep modal open so PM can retry
+    } finally {
+      setJoiningStatusDecisionAcking(false);
     }
   };
 
@@ -688,7 +717,7 @@ export default function PmLayout() {
                   </p>
                   <p className="mt-0.5 text-slate-700">
                     {u.status === 'APPROVED'
-                      ? 'Approved — you can edit Extended DOJ once for this employee.'
+                      ? `Approved — set Extended DOJ on or before ${u.max_allowed_doj || 'the max date'} within 48 hours.`
                       : 'Rejected — DOJ remains locked for this employee.'}
                   </p>
                   {u.review_note ? (
@@ -711,8 +740,47 @@ export default function PmLayout() {
         </ModalOverlay>
       )}
 
+      {dojDecisionUpdates.length === 0 && joiningStatusDecisionUpdates.length > 0 && (
+        <ModalOverlay onClose={ackJoiningStatusDecisions} backdropClassName="bg-slate-900/50">
+          <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-900">Joining status change update</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Super Admin responded to your joining status change request(s).
+            </p>
+            <ul className="mt-4 max-h-64 space-y-3 overflow-y-auto">
+              {joiningStatusDecisionUpdates.map((u) => (
+                <li key={u.id} className="rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                  <p className="font-medium text-slate-900">
+                    {u.employee_name} · {u.client_name}
+                  </p>
+                  <p className="mt-0.5 text-slate-700">
+                    {u.status === 'APPROVED'
+                      ? 'Approved — you can change joining status once within 48 hours.'
+                      : 'Rejected — joining status remains locked for this employee.'}
+                  </p>
+                  {u.review_note ? (
+                    <p className="mt-1 text-slate-500">Note: {u.review_note}</p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={ackJoiningStatusDecisions}
+                disabled={joiningStatusDecisionAcking}
+                className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {joiningStatusDecisionAcking ? 'Saving…' : 'Got it'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
       {clientId &&
         dojDecisionUpdates.length === 0 &&
+        joiningStatusDecisionUpdates.length === 0 &&
         joiningReminderStep === 'within' &&
         joiningReminderWithin.length > 0 && (
         <JoiningStatusReminderModal
@@ -726,6 +794,7 @@ export default function PmLayout() {
       )}
       {clientId &&
         dojDecisionUpdates.length === 0 &&
+        joiningStatusDecisionUpdates.length === 0 &&
         joiningReminderStep === 'overdue' &&
         joiningReminderOverdue.length > 0 && (
         <JoiningStatusReminderModal

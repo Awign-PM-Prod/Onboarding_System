@@ -184,6 +184,9 @@ export default function PmClientDetail() {
   const [extendDojModalEmployee, setExtendDojModalEmployee] = useState(null);
   const [extendDojReason, setExtendDojReason] = useState('');
   const [extendDojLoading, setExtendDojLoading] = useState(false);
+  const [statusChangeModalEmployee, setStatusChangeModalEmployee] = useState(null);
+  const [statusChangeReason, setStatusChangeReason] = useState('');
+  const [statusChangeLoading, setStatusChangeLoading] = useState(false);
   const [extendedDojDraftById, setExtendedDojDraftById] = useState({});
   const [extendedDojSavingId, setExtendedDojSavingId] = useState(null);
   const [transferModalEmployee, setTransferModalEmployee] = useState(null);
@@ -1173,6 +1176,28 @@ export default function PmClientDetail() {
     }
   };
 
+  const submitJoiningStatusChangeRequest = async () => {
+    if (!statusChangeModalEmployee || statusChangeLoading) return;
+    setStatusChangeLoading(true);
+    try {
+      await api.requestJoiningStatusChange({
+        clientId: id,
+        employeeId: statusChangeModalEmployee.id,
+        reason: statusChangeReason,
+      });
+      setToast(
+        `Joining status change request sent for ${statusChangeModalEmployee.name}. Waiting for Super Admin.`
+      );
+      setStatusChangeModalEmployee(null);
+      setStatusChangeReason('');
+      await softRefresh();
+    } catch (err) {
+      setToast(err.message || 'Could not send joining status change request.');
+    } finally {
+      setStatusChangeLoading(false);
+    }
+  };
+
   const saveExtendedDoj = async (row) => {
     if (extendedDojSavingId) return;
     const nextDate = String(extendedDojDraftById[row.id] ?? '').trim();
@@ -1208,8 +1233,6 @@ export default function PmClientDetail() {
 
   const renderJoiningStatusCell = (row, defaultLabel) => {
     const status = String(row.joining_status ?? '').trim().toUpperCase();
-    const changeCount = Number(row.joining_status_change_count ?? 0);
-    const canSecondStageAbscond = changeCount < 3 && status === 'JOINED_OTHER_DATE';
     const inTestingEmployees = activeTab === 'testing' && testingSubtab === 'employees';
     const isPayrollApprovedRow = String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED';
     const isPmApprovedRow = String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED';
@@ -1219,21 +1242,35 @@ export default function PmClientDetail() {
       isPmApprovedRow;
     const unlock = Boolean(row.doj_extend_unlock);
     const pendingExtend = Boolean(row.doj_extend_request_pending);
+    const statusUnlock = Boolean(row.joining_status_unlock);
+    const pendingStatusChange = Boolean(row.joining_status_change_request_pending);
     const canInlineEdit =
       ((activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') || (inTestingEmployees && isPayrollApprovedRow)) &&
-      (
-        !status ||
-        (changeCount < 2 && (status === 'JOINED' || status === 'JOINED_OTHER_DATE' || status === 'NOT_JOINED')) ||
-        canSecondStageAbscond
-      );
+      isPayrollApprovedRow &&
+      isPmApprovedRow &&
+      (!status || statusUnlock);
+
+    const formatExpiry = (iso) => {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toLocaleString();
+    };
 
     const extendControls = canRequestExtendContext ? (
       <div className="mt-1.5 flex flex-col gap-1.5 border-t border-slate-100 pt-1.5">
         {unlock ? (
           <>
             <label className="text-[11px] font-medium text-amber-800">Extended DOJ (editable once)</label>
+            <p className="text-[10px] text-amber-800">
+              Max allowed: {row.doj_extend_max_date || '—'}
+              {row.doj_extend_unlock_expires_at
+                ? ` · Expires ${formatExpiry(row.doj_extend_unlock_expires_at)}`
+                : ''}
+            </p>
             <input
               type="date"
+              max={row.doj_extend_max_date || undefined}
               value={extendedDojDraftById[row.id] ?? ''}
               onChange={(e) =>
                 setExtendedDojDraftById((prev) => ({ ...prev, [row.id]: e.target.value }))
@@ -1273,10 +1310,40 @@ export default function PmClientDetail() {
       </div>
     ) : null;
 
+    const statusChangeControls =
+      canRequestExtendContext && status ? (
+        <div className="mt-1.5 flex flex-col gap-1 border-t border-slate-100 pt-1.5">
+          {statusUnlock ? (
+            <p className="text-[10px] text-emerald-800">
+              Status unlocked once
+              {row.joining_status_unlock_expires_at
+                ? ` · Expires ${formatExpiry(row.joining_status_unlock_expires_at)}`
+                : ''}
+            </p>
+          ) : pendingStatusChange ? (
+            <span className="inline-flex w-fit rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
+              Status change pending
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setStatusChangeModalEmployee(row);
+                setStatusChangeReason('');
+              }}
+              className="self-start rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Request status change
+            </button>
+          )}
+        </div>
+      ) : null;
+
     if (!canInlineEdit) {
       return (
         <div className="min-w-[220px]">
           <div>{defaultLabel(row)}</div>
+          {statusChangeControls}
           {extendControls}
         </div>
       );
@@ -1296,25 +1363,13 @@ export default function PmClientDetail() {
     const shouldShowJoinedSave =
       needsEmpCodeForCurrent &&
       Boolean(String(currentEmpCode ?? '').trim()) &&
-      (currentValue !== 'JOINED_OTHER_DATE' || Boolean(currentDate)) &&
+      (currentValue === 'JOINED_OTHER_DATE' || Boolean(currentDate) || currentValue === 'JOINED') &&
       (
         status !== currentValue ||
         (currentValue === 'JOINED_OTHER_DATE' && currentDate !== persistedDate) ||
         String(currentEmpCode ?? '').trim() !== persistedEmpCode
       );
-    const allowedOptions = [];
-    if (!status) {
-      allowedOptions.push('JOINED', 'NOT_JOINED', 'JOINED_OTHER_DATE', 'JOINED_ABSCONDED');
-    } else {
-      allowedOptions.push(status);
-      if (status === 'NOT_JOINED' && changeCount < 2) allowedOptions.push('JOINED_OTHER_DATE');
-      if ((status === 'JOINED' || status === 'JOINED_OTHER_DATE') && changeCount < 2) {
-        allowedOptions.push('JOINED_ABSCONDED');
-      }
-      if (status === 'JOINED_OTHER_DATE' && changeCount >= 2 && changeCount < 3) {
-        allowedOptions.push('JOINED_ABSCONDED');
-      }
-    }
+    const allowedOptions = ['JOINED', 'NOT_JOINED', 'JOINED_OTHER_DATE', 'JOINED_ABSCONDED'];
     const dedupedOptions = Array.from(new Set(allowedOptions));
     const labelFor = (option) => {
       if (option === 'JOINED') return 'Joined';
@@ -1327,25 +1382,20 @@ export default function PmClientDetail() {
     return (
       <div className="flex min-w-[220px] flex-col gap-1.5">
         <select
-          value={currentValue}
-          onFocus={() => {
-            setJoiningInlineEmployeeId(row.id);
-            setJoiningInlineStatus(status);
-            setJoiningInlineDate(String(row.joining_actual_date ?? '').trim());
-            setJoiningInlineEmpCode(String(row.emp_code ?? '').trim());
-          }}
+          value={currentValue || ''}
+          onFocus={() => startInlineJoiningEdit(row)}
           onChange={(e) => handleInlineStatusChange(row, e.target.value)}
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
-          disabled={joiningInlineLoading}
+          disabled={joiningInlineLoading && joiningInlineEmployeeId === row.id}
+          className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
         >
-          <option value="">Select status</option>
+          {!status ? <option value="">Set joining status…</option> : null}
           {dedupedOptions.map((option) => (
             <option key={option} value={option}>
               {labelFor(option)}
             </option>
           ))}
         </select>
-        {currentValue === 'JOINED_OTHER_DATE' && (
+        {currentValue === 'JOINED_OTHER_DATE' ? (
           <input
             type="date"
             value={currentDate}
@@ -1354,10 +1404,10 @@ export default function PmClientDetail() {
               setJoiningInlineStatus('JOINED_OTHER_DATE');
               setJoiningInlineDate(e.target.value);
             }}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
           />
-        )}
-        {needsEmpCodeForCurrent && (
+        ) : null}
+        {needsEmpCodeForCurrent ? (
           <input
             type="text"
             value={currentEmpCode}
@@ -1366,20 +1416,24 @@ export default function PmClientDetail() {
               setJoiningInlineStatus(currentValue || 'JOINED');
               setJoiningInlineEmpCode(e.target.value);
             }}
-            placeholder="Emp Code (StaffingGo)"
-            className="w-full rounded border border-slate-300 px-2 py-1 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            placeholder="Emp Code"
+            className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
           />
-        )}
-        {shouldShowJoinedSave && (
+        ) : null}
+        {shouldShowJoinedSave ||
+        (currentValue === 'JOINED_OTHER_DATE' &&
+          currentDate &&
+          (currentValue !== status || currentDate !== persistedDate)) ? (
           <button
             type="button"
+            disabled={joiningInlineLoading && joiningInlineEmployeeId === row.id}
             onClick={() => saveInlineJoiningEdit(row)}
-            disabled={joiningInlineLoading}
             className="self-start rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
-            {joiningInlineLoading ? 'Saving...' : 'Save'}
+            {joiningInlineLoading && joiningInlineEmployeeId === row.id ? 'Saving…' : 'Save'}
           </button>
-        )}
+        ) : null}
+        {statusChangeControls}
         {extendControls}
       </div>
     );
@@ -2531,6 +2585,57 @@ export default function PmClientDetail() {
                   className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
                   {extendDojLoading ? 'Sending…' : 'Send request'}
+                </button>
+              </div>
+            </div>
+          </ModalOverlay>
+        )}
+
+        {statusChangeModalEmployee && (
+          <ModalOverlay
+            onClose={() => {
+              if (statusChangeLoading) return;
+              setStatusChangeModalEmployee(null);
+              setStatusChangeReason('');
+            }}
+            backdropClassName="bg-slate-900/50"
+          >
+            <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl">
+              <h3 className="text-lg font-semibold text-slate-900">Request joining status change</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Super Admin will unlock a one-time change for{' '}
+                <span className="font-medium text-slate-900">{statusChangeModalEmployee.name}</span>.
+                Current status: {statusChangeModalEmployee.joining_status || '—'}.
+              </p>
+              <label className="mt-4 mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Reason (optional)
+              </label>
+              <textarea
+                value={statusChangeReason}
+                onChange={(e) => setStatusChangeReason(e.target.value)}
+                rows={3}
+                placeholder="Why does this status need to change?"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={statusChangeLoading}
+                  onClick={() => {
+                    setStatusChangeModalEmployee(null);
+                    setStatusChangeReason('');
+                  }}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={statusChangeLoading}
+                  onClick={submitJoiningStatusChangeRequest}
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+                >
+                  {statusChangeLoading ? 'Sending…' : 'Send request'}
                 </button>
               </div>
             </div>

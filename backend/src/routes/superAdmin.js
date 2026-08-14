@@ -15,6 +15,7 @@ import { invokeResendEmail } from '../utils/sendEmail.js';
 import { buildLoginLink, buildPasswordResetEmail } from '../utils/staffInvite.js';
 import { createStaffInviteUser } from '../utils/createStaffInviteUser.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
+import { unlockExpiresAtFromNow } from '../utils/unlockTtl.js';
 
 const router = Router();
 
@@ -1049,7 +1050,7 @@ router.get('/doj-extend-requests', async (req, res, next) => {
 
     let query = supabaseAdmin
       .from('doj_extend_requests')
-      .select('id, employee_id, client_id, requested_by, reason, status, reviewed_by, reviewed_at, review_note, created_at')
+      .select('id, employee_id, client_id, requested_by, reason, status, reviewed_by, reviewed_at, review_note, max_allowed_doj, unlock_expires_at, created_at')
       .order('created_at', { ascending: false })
       .limit(100);
     if (statusFilter !== 'ALL') {
@@ -1097,6 +1098,8 @@ router.get('/doj-extend-requests', async (req, res, next) => {
           reviewed_by_name: reviewer?.name ?? null,
           reviewed_at: r.reviewed_at,
           review_note: r.review_note,
+          max_allowed_doj: r.max_allowed_doj,
+          unlock_expires_at: r.unlock_expires_at,
           created_at: r.created_at,
         };
       }),
@@ -1112,6 +1115,7 @@ router.post('/doj-extend-requests/:id/review', async (req, res, next) => {
     const requestId = String(req.params.id ?? '').trim();
     const decision = String(req.body?.decision ?? '').trim().toUpperCase();
     const reviewNote = String(req.body?.note ?? req.body?.review_note ?? '').trim() || null;
+    const maxAllowedDojRaw = String(req.body?.max_allowed_doj ?? '').trim();
 
     if (!['APPROVED', 'REJECTED'].includes(decision)) {
       return res.status(400).json({ error: 'decision must be APPROVED or REJECTED.' });
@@ -1128,6 +1132,36 @@ router.post('/doj-extend-requests/:id/review', async (req, res, next) => {
       return res.status(400).json({ error: 'Only PENDING requests can be reviewed.' });
     }
 
+    const { data: emp, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, name, date_of_joining')
+      .eq('id', requestRow.employee_id)
+      .maybeSingle();
+    if (empErr) throw empErr;
+
+    let maxAllowedDoj = null;
+    let unlockExpiresAt = null;
+    if (decision === 'APPROVED') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(maxAllowedDojRaw)) {
+        return res.status(400).json({ error: 'max_allowed_doj is required (YYYY-MM-DD) when approving.' });
+      }
+      const d = new Date(`${maxAllowedDojRaw}T00:00:00Z`);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ error: 'max_allowed_doj is not a valid date.' });
+      }
+      maxAllowedDoj = maxAllowedDojRaw;
+      const currentDoj = String(emp?.date_of_joining ?? '').trim();
+      if (!currentDoj) {
+        return res.status(400).json({ error: 'Employee has no current date of joining.' });
+      }
+      if (maxAllowedDoj <= currentDoj) {
+        return res.status(400).json({
+          error: `max_allowed_doj must be after the current DOJ (${currentDoj}).`,
+        });
+      }
+      unlockExpiresAt = unlockExpiresAtFromNow();
+    }
+
     const now = new Date().toISOString();
     const { data: updatedReq, error: upReqErr } = await supabaseAdmin
       .from('doj_extend_requests')
@@ -1136,6 +1170,8 @@ router.post('/doj-extend-requests/:id/review', async (req, res, next) => {
         reviewed_by: req.user.id,
         reviewed_at: now,
         review_note: reviewNote,
+        max_allowed_doj: maxAllowedDoj,
+        unlock_expires_at: unlockExpiresAt,
         pm_acked_at: null,
         updated_at: now,
       })
@@ -1151,16 +1187,14 @@ router.post('/doj-extend-requests/:id/review', async (req, res, next) => {
     if (decision === 'APPROVED') {
       const { error: unlockErr } = await supabaseAdmin
         .from('employees')
-        .update({ doj_extend_unlock: true })
+        .update({
+          doj_extend_unlock: true,
+          doj_extend_max_date: maxAllowedDoj,
+          doj_extend_unlock_expires_at: unlockExpiresAt,
+        })
         .eq('id', requestRow.employee_id);
       if (unlockErr) throw unlockErr;
     }
-
-    const { data: emp } = await supabaseAdmin
-      .from('employees')
-      .select('name, date_of_joining')
-      .eq('id', requestRow.employee_id)
-      .maybeSingle();
 
     await logOrgActivityFromReq(req, {
       action: decision === 'APPROVED' ? 'DOJ_EXTEND_APPROVED' : 'DOJ_EXTEND_REJECTED',
@@ -1169,14 +1203,176 @@ router.post('/doj-extend-requests/:id/review', async (req, res, next) => {
       clientId: requestRow.client_id,
       summary:
         decision === 'APPROVED'
-          ? `Approved Extend DOJ for ${emp?.name || requestRow.employee_id}`
+          ? `Approved Extend DOJ for ${emp?.name || requestRow.employee_id} (max ${maxAllowedDoj})`
           : `Rejected Extend DOJ for ${emp?.name || requestRow.employee_id}`,
       metadata: {
         request_id: requestId,
         decision,
         review_note: reviewNote,
-        date_of_joining: emp?.date_of_joining ?? null
+        date_of_joining: emp?.date_of_joining ?? null,
+        max_allowed_doj: maxAllowedDoj,
+        unlock_expires_at: unlockExpiresAt,
       }
+    });
+
+    return res.json({ request: updatedReq });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/super-admin/joining-status-change-requests?status=PENDING
+router.get('/joining-status-change-requests', async (req, res, next) => {
+  try {
+    const statusFilter = String(req.query.status ?? 'PENDING').trim().toUpperCase() || 'PENDING';
+    if (!['PENDING', 'APPROVED', 'REJECTED', 'EXPIRED', 'ALL'].includes(statusFilter)) {
+      return res.status(400).json({ error: 'status must be PENDING, APPROVED, REJECTED, EXPIRED, or ALL.' });
+    }
+
+    let query = supabaseAdmin
+      .from('joining_status_change_requests')
+      .select('id, employee_id, client_id, requested_by, reason, status, reviewed_by, reviewed_at, review_note, unlock_expires_at, created_at')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (statusFilter !== 'ALL') {
+      query = query.eq('status', statusFilter);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    const rows = data ?? [];
+    if (rows.length === 0) return res.json({ requests: [] });
+
+    const employeeIds = [...new Set(rows.map((r) => r.employee_id))];
+    const clientIds = [...new Set(rows.map((r) => r.client_id))];
+    const userIds = [...new Set(rows.flatMap((r) => [r.requested_by, r.reviewed_by].filter(Boolean)))];
+
+    const [{ data: employees }, { data: clients }, { data: users }] = await Promise.all([
+      supabaseAdmin
+        .from('employees')
+        .select('id, name, joining_status, date_of_joining, mobile')
+        .in('id', employeeIds),
+      supabaseAdmin.from('clients').select('id, client_name').in('id', clientIds),
+      supabaseAdmin.from('users').select('id, name, email').in('id', userIds),
+    ]);
+
+    const empMap = new Map((employees ?? []).map((e) => [e.id, e]));
+    const clientMap = new Map((clients ?? []).map((c) => [c.id, c]));
+    const userMap = new Map((users ?? []).map((u) => [u.id, u]));
+
+    return res.json({
+      requests: rows.map((r) => {
+        const emp = empMap.get(r.employee_id);
+        const client = clientMap.get(r.client_id);
+        const pm = userMap.get(r.requested_by);
+        const reviewer = r.reviewed_by ? userMap.get(r.reviewed_by) : null;
+        return {
+          id: r.id,
+          employee_id: r.employee_id,
+          employee_name: emp?.name ?? 'Employee',
+          employee_mobile: emp?.mobile ?? null,
+          joining_status: emp?.joining_status ?? null,
+          date_of_joining: emp?.date_of_joining ?? null,
+          client_id: r.client_id,
+          client_name: client?.client_name ?? 'Client',
+          requested_by: r.requested_by,
+          requested_by_name: pm?.name ?? pm?.email ?? 'Program Manager',
+          reason: r.reason,
+          status: r.status,
+          reviewed_by: r.reviewed_by,
+          reviewed_by_name: reviewer?.name ?? null,
+          reviewed_at: r.reviewed_at,
+          review_note: r.review_note,
+          unlock_expires_at: r.unlock_expires_at,
+          created_at: r.created_at,
+        };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/joining-status-change-requests/:id/review
+router.post('/joining-status-change-requests/:id/review', async (req, res, next) => {
+  try {
+    const requestId = String(req.params.id ?? '').trim();
+    const decision = String(req.body?.decision ?? '').trim().toUpperCase();
+    const reviewNote = String(req.body?.note ?? req.body?.review_note ?? '').trim() || null;
+
+    if (!['APPROVED', 'REJECTED'].includes(decision)) {
+      return res.status(400).json({ error: 'decision must be APPROVED or REJECTED.' });
+    }
+
+    const { data: requestRow, error: reqErr } = await supabaseAdmin
+      .from('joining_status_change_requests')
+      .select('*')
+      .eq('id', requestId)
+      .maybeSingle();
+    if (reqErr) throw reqErr;
+    if (!requestRow) return res.status(404).json({ error: 'Request not found.' });
+    if (requestRow.status !== 'PENDING') {
+      return res.status(400).json({ error: 'Only PENDING requests can be reviewed.' });
+    }
+
+    const unlockExpiresAt = decision === 'APPROVED' ? unlockExpiresAtFromNow() : null;
+    const now = new Date().toISOString();
+    const { data: updatedReq, error: upReqErr } = await supabaseAdmin
+      .from('joining_status_change_requests')
+      .update({
+        status: decision,
+        reviewed_by: req.user.id,
+        reviewed_at: now,
+        review_note: reviewNote,
+        unlock_expires_at: unlockExpiresAt,
+        pm_acked_at: null,
+        updated_at: now,
+      })
+      .eq('id', requestId)
+      .eq('status', 'PENDING')
+      .select('*')
+      .maybeSingle();
+    if (upReqErr) throw upReqErr;
+    if (!updatedReq) {
+      return res.status(409).json({ error: 'Request was already reviewed.' });
+    }
+
+    if (decision === 'APPROVED') {
+      const { error: unlockErr } = await supabaseAdmin
+        .from('employees')
+        .update({
+          joining_status_unlock: true,
+          joining_status_unlock_expires_at: unlockExpiresAt,
+        })
+        .eq('id', requestRow.employee_id);
+      if (unlockErr) throw unlockErr;
+    }
+
+    const { data: emp } = await supabaseAdmin
+      .from('employees')
+      .select('name, joining_status')
+      .eq('id', requestRow.employee_id)
+      .maybeSingle();
+
+    await logOrgActivityFromReq(req, {
+      action:
+        decision === 'APPROVED'
+          ? 'JOINING_STATUS_CHANGE_APPROVED'
+          : 'JOINING_STATUS_CHANGE_REJECTED',
+      entityType: 'employee',
+      entityId: requestRow.employee_id,
+      clientId: requestRow.client_id,
+      summary:
+        decision === 'APPROVED'
+          ? `Approved joining status change unlock for ${emp?.name || requestRow.employee_id}`
+          : `Rejected joining status change unlock for ${emp?.name || requestRow.employee_id}`,
+      metadata: {
+        request_id: requestId,
+        decision,
+        review_note: reviewNote,
+        joining_status: emp?.joining_status ?? null,
+        unlock_expires_at: unlockExpiresAt,
+      },
     });
 
     return res.json({ request: updatedReq });

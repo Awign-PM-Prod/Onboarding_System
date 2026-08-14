@@ -9,6 +9,12 @@ import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 import { applyCushion, normalizeRegionName, normalizeWageZone } from '../utils/wageConfig.js';
 import { listAccessibleClientIds } from '../utils/roleAccess.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
+import {
+  DOJ_UNLOCK_CLEAR,
+  JOINING_STATUS_UNLOCK_CLEAR,
+  ensureDojUnlockValid,
+  ensureJoiningStatusUnlockValid,
+} from '../utils/unlockTtl.js';
 
 const router = Router();
 
@@ -707,24 +713,19 @@ function normalizeJoiningDate(raw) {
   return s;
 }
 
-function validateJoiningTransition(currentStatus, currentCount, nextStatus) {
+/**
+ * First set (no status): always allowed.
+ * Later changes: only when Super Admin unlock is still valid.
+ */
+function validateJoiningTransition(currentStatus, { unlockValid = false } = {}) {
   const curr = String(currentStatus ?? '').trim().toUpperCase();
-  const count = Number(currentCount ?? 0);
-  if (count <= 0 || !curr) return { ok: true };
-  if (count >= 3) return { ok: false, message: 'Joining status can no longer be updated for this employee.' };
-  if (count >= 2) {
-    if (curr === 'JOINED_OTHER_DATE' && nextStatus === 'JOINED_ABSCONDED') {
-      return { ok: true };
-    }
-    return { ok: false, message: 'Only Joined on other date -> Joined and absconded is allowed at this stage.' };
-  }
-  if ((curr === 'JOINED' || curr === 'JOINED_OTHER_DATE') && nextStatus === 'JOINED_ABSCONDED') {
-    return { ok: true };
-  }
-  if (curr === 'NOT_JOINED' && nextStatus === 'JOINED_OTHER_DATE') {
-    return { ok: true };
-  }
-  return { ok: false, message: 'Invalid joining status transition for this employee.' };
+  if (!curr) return { ok: true };
+  if (unlockValid) return { ok: true };
+  return {
+    ok: false,
+    message:
+      'Joining status is locked after the first set. Request Super Admin approval to change it.',
+  };
 }
 
 async function nextPayrollReviewCycle(jobAppFormId) {
@@ -1002,6 +1003,59 @@ router.get('/', async (req, res, next) => {
           row.doj_extend_request_id = null;
           row.doj_extend_request_reason = null;
         }
+      }
+
+      try {
+        const { data: pendingStatusReqs, error: pendingStatusErr } = await supabaseAdmin
+          .from('joining_status_change_requests')
+          .select('id, employee_id, status, reason, created_at')
+          .in('employee_id', employeeIds)
+          .eq('status', 'PENDING');
+        if (pendingStatusErr) throw pendingStatusErr;
+        const pendingStatusByEmployee = new Map(
+          (pendingStatusReqs ?? []).map((r) => [r.employee_id, r])
+        );
+        for (const row of out) {
+          const pending = pendingStatusByEmployee.get(row.id);
+          row.joining_status_change_request_pending = Boolean(pending);
+          row.joining_status_change_request_id = pending?.id ?? null;
+          row.joining_status_change_request_reason = pending?.reason ?? null;
+        }
+      } catch (pendingStatusLoadErr) {
+        console.warn(
+          '[employees] joining_status_change_requests enrich skipped:',
+          pendingStatusLoadErr?.message || pendingStatusLoadErr
+        );
+        for (const row of out) {
+          row.joining_status_change_request_pending = false;
+          row.joining_status_change_request_id = null;
+          row.joining_status_change_request_reason = null;
+        }
+      }
+
+      // Lazy-expire unused unlocks so list reflects locked state.
+      for (const row of out) {
+        if (row.doj_extend_unlock) {
+          const check = await ensureDojUnlockValid(row);
+          if (check.expired) {
+            Object.assign(row, DOJ_UNLOCK_CLEAR);
+          }
+        }
+        if (row.joining_status_unlock) {
+          const check = await ensureJoiningStatusUnlockValid(row);
+          if (check.expired) {
+            Object.assign(row, JOINING_STATUS_UNLOCK_CLEAR);
+          }
+        }
+      }
+    } else {
+      for (const row of out) {
+        row.doj_extend_request_pending = false;
+        row.doj_extend_request_id = null;
+        row.doj_extend_request_reason = null;
+        row.joining_status_change_request_pending = false;
+        row.joining_status_change_request_id = null;
+        row.joining_status_change_request_reason = null;
       }
     }
 
@@ -1575,6 +1629,10 @@ router.post('/:id/transfer-project', async (req, res, next) => {
         joining_status_updated_at: null,
         joining_status_updated_by: null,
         doj_extend_unlock: false,
+        doj_extend_max_date: null,
+        doj_extend_unlock_expires_at: null,
+        joining_status_unlock: false,
+        joining_status_unlock_expires_at: null,
         payroll_pf_uan_number: null,
         payroll_esic_number: null,
         payroll_numbers_updated_at: null,
@@ -1732,7 +1790,9 @@ router.post('/joining-status/bulk', async (req, res, next) => {
 
     const { data: employees, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, joining_status, joining_status_change_count, emp_code')
+      .select(
+        'id, client_id, joining_status, joining_status_change_count, joining_status_unlock, joining_status_unlock_expires_at, emp_code'
+      )
       .in('id', ids)
       .eq('client_id', clientId);
     if (empErr) throw empErr;
@@ -1771,7 +1831,7 @@ router.post('/joining-status/bulk', async (req, res, next) => {
         continue;
       }
 
-      const transition = validateJoiningTransition(row.joining_status, currentCount, joiningStatus);
+      const transition = validateJoiningTransition(row.joining_status, { unlockValid: false });
       if (!transition.ok) {
         failed.push({ employee_id: row.id, error: transition.message });
         continue;
@@ -1835,7 +1895,9 @@ router.post('/:id/joining-status', async (req, res, next) => {
 
     const { data: row, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, joining_status, joining_status_change_count, emp_code')
+      .select(
+        'id, client_id, name, joining_status, joining_status_change_count, joining_status_unlock, joining_status_unlock_expires_at, emp_code'
+      )
       .eq('id', employeeId)
       .eq('client_id', clientId)
       .maybeSingle();
@@ -1854,10 +1916,21 @@ router.post('/:id/joining-status', async (req, res, next) => {
       });
     }
 
-    const currentCount = Number(row.joining_status_change_count ?? 0);
-    const transition = validateJoiningTransition(row.joining_status, currentCount, joiningStatus);
+    const unlockCheck = await ensureJoiningStatusUnlockValid(row);
+    const unlockValid = unlockCheck.valid;
+    const currentStatus = String(row.joining_status ?? '').trim().toUpperCase();
+    if (currentStatus && joiningStatus === currentStatus) {
+      return res.status(400).json({ error: 'New joining status must be different from the current status.' });
+    }
+
+    const transition = validateJoiningTransition(row.joining_status, { unlockValid });
     if (!transition.ok) {
       return res.status(400).json({ error: transition.message });
+    }
+    if (unlockCheck.expired && currentStatus) {
+      return res.status(400).json({
+        error: 'Joining status unlock expired. Request Super Admin approval again.',
+      });
     }
 
     let empCodeToSet = null;
@@ -1871,6 +1944,7 @@ router.post('/:id/joining-status', async (req, res, next) => {
       empCodeToSet = availability.empCode;
     }
 
+    const currentCount = Number(row.joining_status_change_count ?? 0);
     const nextCount = currentCount + 1;
     const now = new Date().toISOString();
     const payload = {
@@ -1878,8 +1952,11 @@ router.post('/:id/joining-status', async (req, res, next) => {
       joining_actual_date: joiningStatus === 'JOINED_OTHER_DATE' ? joiningDate : null,
       joining_status_change_count: nextCount,
       joining_status_updated_at: now,
-      joining_status_updated_by: req.user.id
+      joining_status_updated_by: req.user.id,
     };
+    if (unlockValid) {
+      Object.assign(payload, JOINING_STATUS_UNLOCK_CLEAR);
+    }
     if (empCodeToSet) {
       payload.emp_code = empCodeToSet;
     }
@@ -1888,18 +1965,28 @@ router.post('/:id/joining-status', async (req, res, next) => {
       payload.joining_status_set_by = req.user.id;
     }
 
-    const { data: updated, error: upErr } = await supabaseAdmin
+    let updateQuery = supabaseAdmin
       .from('employees')
       .update(payload)
       .eq('id', row.id)
-      .eq('client_id', clientId)
-      .select('*')
-      .maybeSingle();
+      .eq('client_id', clientId);
+    if (unlockValid) {
+      updateQuery = updateQuery.eq('joining_status_unlock', true);
+    }
+
+    const { data: updated, error: upErr } = await updateQuery.select('*').maybeSingle();
     if (upErr) {
       if (String(upErr.message ?? '').toLowerCase().includes('emp_code') || upErr.code === '23505') {
         return res.status(409).json({ error: `emp_code "${empCodeToSet}" already exists` });
       }
       throw upErr;
+    }
+    if (!updated) {
+      return res.status(409).json({
+        error: unlockValid
+          ? 'Could not update joining status (unlock may have expired).'
+          : 'Could not update joining status.',
+      });
     }
 
     await logOrgActivityFromReq(req, {
@@ -1908,10 +1995,244 @@ router.post('/:id/joining-status', async (req, res, next) => {
       entityId: row.id,
       clientId,
       summary: `Joining status set to ${joiningStatus} for employee ${updated?.name || row.id}`,
-      metadata: { joining_status: joiningStatus }
+      metadata: { joining_status: joiningStatus, via_unlock: unlockValid }
     });
 
     return res.json({ employee: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/joining-status-change-request/bulk', async (req, res, next) => {
+  try {
+    const clientId = String(req.body?.client_id ?? '').trim();
+    const ids = Array.isArray(req.body?.employee_ids)
+      ? [...new Set(req.body.employee_ids.map((id) => String(id ?? '').trim()).filter(Boolean))]
+      : [];
+    const reason = String(req.body?.reason ?? '').trim() || null;
+
+    if (!clientId) return res.status(400).json({ error: 'client_id is required.' });
+    if (ids.length === 0) return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
+
+    const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
+    if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const { data: employees, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select(
+        'id, client_id, name, joining_status, joining_status_unlock, joining_status_unlock_expires_at'
+      )
+      .in('id', ids)
+      .eq('client_id', clientId);
+    if (empErr) throw empErr;
+    if (!employees?.length) {
+      return res.status(404).json({ error: 'No matching employees found for this client' });
+    }
+
+    const employeeIds = employees.map((e) => e.id);
+    const [{ data: forms, error: formsErr }, { data: pendingReqs, error: pendingErr }] = await Promise.all([
+      supabaseAdmin
+        .from('job_app_form')
+        .select('employee_id, review_status, payroll_review_status')
+        .in('employee_id', employeeIds),
+      supabaseAdmin
+        .from('joining_status_change_requests')
+        .select('id, employee_id')
+        .in('employee_id', employeeIds)
+        .eq('status', 'PENDING'),
+    ]);
+    if (formsErr) throw formsErr;
+    if (pendingErr) throw pendingErr;
+
+    const formByEmployeeId = new Map((forms ?? []).map((f) => [f.employee_id, f]));
+    const pendingByEmployeeId = new Set((pendingReqs ?? []).map((r) => r.employee_id));
+
+    const failed = [];
+    const updatedIds = [];
+    const now = new Date().toISOString();
+
+    for (const row of employees) {
+      const form = formByEmployeeId.get(row.id);
+      if (!form || form.review_status !== 'APPROVED' || form.payroll_review_status !== 'PAYROLL_APPROVED') {
+        failed.push({
+          employee_id: row.id,
+          error: 'Joining status change can only be requested for employees approved by Payroll Lead.',
+        });
+        continue;
+      }
+      if (!String(row.joining_status ?? '').trim()) {
+        failed.push({
+          employee_id: row.id,
+          error: 'Joining status has not been set yet. Set it first without a request.',
+        });
+        continue;
+      }
+
+      const unlockCheck = await ensureJoiningStatusUnlockValid(row);
+      if (unlockCheck.valid) {
+        failed.push({
+          employee_id: row.id,
+          error: 'Joining status is already unlocked for this employee. Change it first.',
+        });
+        continue;
+      }
+      if (pendingByEmployeeId.has(row.id)) {
+        failed.push({
+          employee_id: row.id,
+          error: 'A joining status change request is already pending for this employee.',
+        });
+        continue;
+      }
+
+      const { data: created, error: insErr } = await supabaseAdmin
+        .from('joining_status_change_requests')
+        .insert({
+          employee_id: row.id,
+          client_id: clientId,
+          requested_by: req.user.id,
+          reason,
+          status: 'PENDING',
+          created_at: now,
+          updated_at: now,
+        })
+        .select('id')
+        .maybeSingle();
+      if (insErr) {
+        failed.push({
+          employee_id: row.id,
+          error:
+            insErr.code === '23505'
+              ? 'A joining status change request is already pending for this employee.'
+              : insErr.message || 'Could not create joining status change request.',
+        });
+        continue;
+      }
+
+      updatedIds.push(row.id);
+      pendingByEmployeeId.add(row.id);
+
+      await logOrgActivityFromReq(req, {
+        action: 'JOINING_STATUS_CHANGE_REQUESTED',
+        entityType: 'employee',
+        entityId: row.id,
+        clientId,
+        summary: `Requested joining status change unlock for ${row.name || row.id}`,
+        metadata: {
+          request_id: created?.id,
+          current_joining_status: row.joining_status,
+          reason,
+          bulk: true,
+        },
+      });
+    }
+
+    return res.json({
+      updated: updatedIds.length,
+      employee_ids: updatedIds,
+      failed,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/joining-status-change-request', async (req, res, next) => {
+  try {
+    const employeeId = req.params.id;
+    const clientId = String(req.body?.client_id ?? '').trim();
+    const reason = String(req.body?.reason ?? '').trim() || null;
+
+    if (!clientId) return res.status(400).json({ error: 'client_id is required.' });
+
+    const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
+    if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const { data: row, error: empErr } = await supabaseAdmin
+      .from('employees')
+      .select(
+        'id, client_id, name, joining_status, joining_status_unlock, joining_status_unlock_expires_at'
+      )
+      .eq('id', employeeId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+    if (empErr) throw empErr;
+    if (!row) return res.status(404).json({ error: 'Employee not found for this client' });
+    if (!String(row.joining_status ?? '').trim()) {
+      return res.status(400).json({
+        error: 'Joining status has not been set yet. Set it first without a request.',
+      });
+    }
+
+    const unlockCheck = await ensureJoiningStatusUnlockValid(row);
+    if (unlockCheck.valid) {
+      return res.status(400).json({
+        error: 'Joining status is already unlocked for this employee. Change it first.',
+      });
+    }
+
+    const { data: form, error: formErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('review_status, payroll_review_status')
+      .eq('employee_id', employeeId)
+      .maybeSingle();
+    if (formErr) throw formErr;
+    if (!form || form.review_status !== 'APPROVED' || form.payroll_review_status !== 'PAYROLL_APPROVED') {
+      return res.status(400).json({
+        error: 'Joining status change can only be requested for employees approved by Payroll Lead.',
+      });
+    }
+
+    const { data: existingPending, error: pendingErr } = await supabaseAdmin
+      .from('joining_status_change_requests')
+      .select('id')
+      .eq('employee_id', employeeId)
+      .eq('status', 'PENDING')
+      .maybeSingle();
+    if (pendingErr) throw pendingErr;
+    if (existingPending) {
+      return res.status(409).json({
+        error: 'A joining status change request is already pending for this employee.',
+      });
+    }
+
+    const now = new Date().toISOString();
+    const { data: created, error: insErr } = await supabaseAdmin
+      .from('joining_status_change_requests')
+      .insert({
+        employee_id: employeeId,
+        client_id: clientId,
+        requested_by: req.user.id,
+        reason,
+        status: 'PENDING',
+        created_at: now,
+        updated_at: now,
+      })
+      .select('*')
+      .maybeSingle();
+    if (insErr) {
+      if (insErr.code === '23505') {
+        return res.status(409).json({
+          error: 'A joining status change request is already pending for this employee.',
+        });
+      }
+      throw insErr;
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'JOINING_STATUS_CHANGE_REQUESTED',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId,
+      summary: `Requested joining status change unlock for ${row.name || employeeId}`,
+      metadata: {
+        request_id: created?.id,
+        current_joining_status: row.joining_status,
+        reason,
+      },
+    });
+
+    return res.status(201).json({ request: created });
   } catch (err) {
     next(err);
   }
@@ -1933,7 +2254,9 @@ router.post('/doj-extend-request/bulk', async (req, res, next) => {
 
     const { data: employees, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, name, date_of_joining, doj_extend_unlock')
+      .select(
+        'id, client_id, name, date_of_joining, doj_extend_unlock, doj_extend_unlock_expires_at'
+      )
       .in('id', ids)
       .eq('client_id', clientId);
     if (empErr) throw empErr;
@@ -1979,12 +2302,15 @@ router.post('/doj-extend-request/bulk', async (req, res, next) => {
         });
         continue;
       }
-      if (row.doj_extend_unlock) {
-        failed.push({
-          employee_id: row.id,
-          error: 'DOJ is already unlocked for this employee. Set the new Extended DOJ first.'
-        });
-        continue;
+      {
+        const unlockCheck = await ensureDojUnlockValid(row);
+        if (unlockCheck.valid) {
+          failed.push({
+            employee_id: row.id,
+            error: 'DOJ is already unlocked for this employee. Set the new Extended DOJ first.'
+          });
+          continue;
+        }
       }
       if (pendingByEmployeeId.has(row.id)) {
         failed.push({
@@ -2059,7 +2385,9 @@ router.post('/:id/doj-extend-request', async (req, res, next) => {
 
     const { data: row, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, name, date_of_joining, doj_extend_unlock')
+      .select(
+        'id, client_id, name, date_of_joining, doj_extend_unlock, doj_extend_unlock_expires_at'
+      )
       .eq('id', employeeId)
       .eq('client_id', clientId)
       .maybeSingle();
@@ -2068,10 +2396,13 @@ router.post('/:id/doj-extend-request', async (req, res, next) => {
     if (!row.date_of_joining) {
       return res.status(400).json({ error: 'Employee has no expected date of joining to extend.' });
     }
-    if (row.doj_extend_unlock) {
-      return res.status(400).json({
-        error: 'DOJ is already unlocked for this employee. Set the new Extended DOJ first.'
-      });
+    {
+      const unlockCheck = await ensureDojUnlockValid(row);
+      if (unlockCheck.valid) {
+        return res.status(400).json({
+          error: 'DOJ is already unlocked for this employee. Set the new Extended DOJ first.'
+        });
+      }
     }
 
     const { data: form, error: formErr } = await supabaseAdmin
@@ -2153,15 +2484,21 @@ router.put('/:id/extended-doj', async (req, res, next) => {
 
     const { data: row, error: empErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, name, date_of_joining, doj_extend_unlock, onboarding_status')
+      .select(
+        'id, client_id, name, date_of_joining, doj_extend_unlock, doj_extend_max_date, doj_extend_unlock_expires_at, onboarding_status'
+      )
       .eq('id', employeeId)
       .eq('client_id', clientId)
       .maybeSingle();
     if (empErr) throw empErr;
     if (!row) return res.status(404).json({ error: 'Employee not found for this client' });
-    if (!row.doj_extend_unlock) {
+
+    const unlockCheck = await ensureDojUnlockValid(row);
+    if (!unlockCheck.valid) {
       return res.status(400).json({
-        error: 'Extended DOJ is locked for this employee. Request Super Admin approval first.'
+        error: unlockCheck.expired
+          ? 'Extended DOJ unlock expired. Request Super Admin approval again.'
+          : 'Extended DOJ is locked for this employee. Request Super Admin approval first.',
       });
     }
     if (row.onboarding_status === 'AVAILABLE') {
@@ -2170,13 +2507,24 @@ router.put('/:id/extended-doj', async (req, res, next) => {
     if (nextDoj === String(row.date_of_joining ?? '').trim()) {
       return res.status(400).json({ error: 'New date of joining must be different from the current date.' });
     }
+    const maxAllowed = String(row.doj_extend_max_date ?? '').trim();
+    if (!maxAllowed) {
+      return res.status(400).json({
+        error: 'Max allowed DOJ is missing on this unlock. Ask Super Admin to re-approve.',
+      });
+    }
+    if (nextDoj > maxAllowed) {
+      return res.status(400).json({
+        error: `New date of joining must be on or before the max allowed DOJ (${maxAllowed}).`,
+      });
+    }
 
     const now = new Date().toISOString();
     const { data: updated, error: upErr } = await supabaseAdmin
       .from('employees')
       .update({
         date_of_joining: nextDoj,
-        doj_extend_unlock: false,
+        ...DOJ_UNLOCK_CLEAR,
         joining_status: null,
         joining_actual_date: null,
         joining_status_change_count: 0,
@@ -2184,6 +2532,7 @@ router.put('/:id/extended-doj', async (req, res, next) => {
         joining_status_set_by: null,
         joining_status_updated_at: null,
         joining_status_updated_by: null,
+        ...JOINING_STATUS_UNLOCK_CLEAR,
       })
       .eq('id', employeeId)
       .eq('client_id', clientId)
@@ -2203,7 +2552,8 @@ router.put('/:id/extended-doj', async (req, res, next) => {
       summary: `Extended DOJ for ${row.name || employeeId} from ${row.date_of_joining} to ${nextDoj}`,
       metadata: {
         old_date_of_joining: row.date_of_joining,
-        new_date_of_joining: nextDoj
+        new_date_of_joining: nextDoj,
+        max_allowed_doj: maxAllowed,
       }
     });
 

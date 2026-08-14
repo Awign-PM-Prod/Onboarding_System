@@ -24,6 +24,9 @@ const ACTION_OPTIONS = [
   { value: 'ROLE_DETAILS_SET', label: 'Role details set' },
   { value: 'ONBOARDING_INITIATED', label: 'Onboarding initiated' },
   { value: 'JOINING_STATUS_UPDATED', label: 'Joining status updated' },
+  { value: 'JOINING_STATUS_CHANGE_REQUESTED', label: 'Joining status change requested' },
+  { value: 'JOINING_STATUS_CHANGE_APPROVED', label: 'Joining status change approved' },
+  { value: 'JOINING_STATUS_CHANGE_REJECTED', label: 'Joining status change rejected' },
   { value: 'DOJ_EXTEND_REQUESTED', label: 'DOJ extend requested' },
   { value: 'DOJ_EXTEND_APPROVED', label: 'DOJ extend approved' },
   { value: 'DOJ_EXTEND_REJECTED', label: 'DOJ extend rejected' },
@@ -161,7 +164,7 @@ export default function SuperAdminActivityPage() {
   const [month, setMonth] = useState('');
   const [year, setYear] = useState('');
   const [week, setWeek] = useState('');
-  const [preset, setPreset] = useState('30');
+  const [preset, setPreset] = useState('');
   const [appliedCustomFrom, setAppliedCustomFrom] = useState('');
   const [appliedCustomTo, setAppliedCustomTo] = useState('');
 
@@ -281,21 +284,21 @@ export default function SuperAdminActivityPage() {
         </p>
       </div>
 
-      <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+      <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-start">
         <div className="flex flex-wrap items-center gap-2">
           <FilterSelect
             id="activity-role"
             value={actorRole}
             onChange={(e) => setActorRole(e.target.value)}
             options={ACTOR_ROLES}
-            className="w-[10rem]"
+            className="w-[8.5rem]"
           />
           <FilterSelect
             id="activity-action"
             value={action}
             onChange={(e) => setAction(e.target.value)}
             options={ACTION_OPTIONS}
-            className="w-[12rem]"
+            className="w-[10rem]"
           />
         </div>
 

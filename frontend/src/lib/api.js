@@ -264,6 +264,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ids })
     }),
+  getPmJoiningStatusChangeRequestUpdates: () =>
+    request('/api/pm/clients/joining-status-change-request-updates'),
+  ackPmJoiningStatusChangeRequestUpdates: (ids) =>
+    request('/api/pm/clients/joining-status-change-request-updates/ack', {
+      method: 'POST',
+      body: JSON.stringify({ ids })
+    }),
   sendPmBulkAlert: (payload) =>
     request('/api/pm/alerts/send', {
       method: 'POST',
@@ -279,6 +286,23 @@ export const api = {
     }),
   bulkRequestDojExtend: ({ clientId, employeeIds, reason }) =>
     request('/api/employees/doj-extend-request/bulk', {
+      method: 'POST',
+      body: JSON.stringify({
+        client_id: clientId,
+        employee_ids: employeeIds,
+        reason: reason || null
+      })
+    }),
+  requestJoiningStatusChange: ({ clientId, employeeId, reason }) =>
+    request(`/api/employees/${encodeURIComponent(employeeId)}/joining-status-change-request`, {
+      method: 'POST',
+      body: JSON.stringify({
+        client_id: clientId,
+        reason: reason || null
+      })
+    }),
+  bulkRequestJoiningStatusChange: ({ clientId, employeeIds, reason }) =>
+    request('/api/employees/joining-status-change-request/bulk', {
       method: 'POST',
       body: JSON.stringify({
         client_id: clientId,
@@ -618,11 +642,28 @@ export const api = {
     if (status) q.set('status', status);
     return request(`/api/super-admin/doj-extend-requests?${q.toString()}`);
   },
-  reviewSuperAdminDojExtendRequest: (requestId, { decision, note }) =>
+  reviewSuperAdminDojExtendRequest: (requestId, { decision, note, maxAllowedDoj }) =>
     request(`/api/super-admin/doj-extend-requests/${encodeURIComponent(requestId)}/review`, {
       method: 'POST',
-      body: JSON.stringify({ decision, note: note || null })
+      body: JSON.stringify({
+        decision,
+        note: note || null,
+        max_allowed_doj: maxAllowedDoj || null
+      })
     }),
+  listSuperAdminJoiningStatusChangeRequests: (status = 'PENDING') => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    return request(`/api/super-admin/joining-status-change-requests?${q.toString()}`);
+  },
+  reviewSuperAdminJoiningStatusChangeRequest: (requestId, { decision, note }) =>
+    request(
+      `/api/super-admin/joining-status-change-requests/${encodeURIComponent(requestId)}/review`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ decision, note: note || null })
+      }
+    ),
   getSalaryMinimumForState: (state, { zone, skill_level } = {}) => {
     const q = new URLSearchParams();
     if (zone) q.set('zone', zone);

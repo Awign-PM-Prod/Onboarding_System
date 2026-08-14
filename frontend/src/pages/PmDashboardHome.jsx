@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import DashboardStatCard, { DASHBOARD_STAT_GRID_CLASS, DASHBOARD_STAT_ICONS } from '../components/DashboardStatCard';
-import SuperAdminDateRangeFilters from '../components/SuperAdminDateRangeFilters';
+import SuperAdminDateRangeFilters, { FilterSelect } from '../components/SuperAdminDateRangeFilters';
 import RoleDashboardCharts from '../components/RoleDashboardCharts';
 import { resolveDashboardDateRange } from '../lib/superAdminDateRange';
 
@@ -115,24 +115,21 @@ export default function PmDashboardHome() {
         </p>
       </div>
 
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-start">
         <div className="flex flex-wrap items-center gap-2">
           <label className="sr-only" htmlFor="pm-dashboard-client">
             Client
           </label>
-          <select
+          <FilterSelect
             id="pm-dashboard-client"
             value={clientId}
             onChange={(e) => setClientId(e.target.value)}
-            className="w-36 max-w-full shrink-0 appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3.5 pr-9 text-sm font-medium text-slate-800 shadow-sm hover:border-slate-300 focus:border-slate-400 focus:outline-none"
-          >
-            <option value="">All clients</option>
-            {clientOptions.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: '', label: 'All clients' },
+              ...clientOptions.map((c) => ({ value: c.id, label: c.label }))
+            ]}
+            className="w-36 max-w-full shrink-0"
+          />
         </div>
         <SuperAdminDateRangeFilters
           idPrefix="pm-dashboard"

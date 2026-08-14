@@ -55,7 +55,7 @@ const PRESET_OPTIONS = [
 /**
  * Controlled date filters.
  * - default: Month / Year / Week / Custom Date Range
- * - presets: Past 30 days / Past 7 days / Custom Date Range
+ * - presets: All time dropdown (Past 7 / 30 days) + Custom Date Range
  * Parent owns applied state; draft custom dates live locally until Apply.
  */
 export default function SuperAdminDateRangeFilters({
@@ -111,18 +111,13 @@ export default function SuperAdminDateRangeFilters({
     setCustomOpen(false);
   };
 
-  const handlePresetClick = (value) => {
+  const handlePresetSelect = (value) => {
     clearLocalCustom();
     onCustomClear?.();
     onMonthChange?.('');
     onYearChange?.('');
     onWeekChange?.('');
-    // Empty value = All time; other presets toggle off → All time.
-    if (value === '') {
-      onPresetChange?.('');
-      return;
-    }
-    onPresetChange?.(value === preset ? '' : value);
+    onPresetChange?.(value);
   };
 
   const customButton = (
@@ -147,11 +142,7 @@ export default function SuperAdminDateRangeFilters({
         <ChevronDownIcon className={`h-4 w-4 ${hasCustomRange ? 'text-indigo-500' : 'text-slate-500'}`} />
       </button>
       {customOpen && (
-        <div
-          className={`absolute z-20 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-xl ${
-            variant === 'presets' ? 'right-0' : 'left-0'
-          }`}
-        >
+        <div className="absolute left-0 z-20 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
             Custom date range
           </p>
@@ -199,23 +190,13 @@ export default function SuperAdminDateRangeFilters({
   if (variant === 'presets') {
     return (
       <div className={`flex flex-wrap items-center gap-2 ${className}`}>
-        {PRESET_OPTIONS.map((opt) => {
-          const active = !hasCustomRange && preset === opt.value;
-          return (
-            <button
-              key={opt.label}
-              type="button"
-              onClick={() => handlePresetClick(opt.value)}
-              className={`rounded-lg border bg-white px-3.5 py-2.5 text-sm font-medium shadow-sm ${
-                active
-                  ? 'border-indigo-500 text-indigo-700'
-                  : 'border-slate-200 text-slate-800 hover:border-slate-300'
-              }`}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
+        <FilterSelect
+          id={`${idPrefix}-preset`}
+          value={hasCustomRange ? '' : preset}
+          onChange={(e) => handlePresetSelect(e.target.value)}
+          options={PRESET_OPTIONS}
+          className="w-[9.5rem]"
+        />
         {customButton}
       </div>
     );
