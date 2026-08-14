@@ -6,8 +6,9 @@ import { api } from '../lib/api';
 export default function Login() {
   const { signIn, session, profile, loading } = useAuth();
   const location = useLocation();
-  const [email, setEmail] = useState('payrolllead@test.com');
-  const [password, setPassword] = useState('123456');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [credentialsUnlocked, setCredentialsUnlocked] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState('');
@@ -88,6 +89,7 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
       <form
         onSubmit={onSubmit}
+        autoComplete="off"
         className="w-full max-w-sm bg-white p-8 rounded-lg shadow-sm border border-slate-200"
       >
         <div className="mb-6 flex items-center gap-3">
@@ -101,8 +103,15 @@ export default function Login() {
         <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
         <input
           type="email"
+          name="email"
           required
           value={email}
+          readOnly={!credentialsUnlocked}
+          autoComplete={credentialsUnlocked ? 'username' : 'off'}
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          onFocus={() => setCredentialsUnlocked(true)}
           onChange={(e) => setEmail(e.target.value)}
           className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-indigo-300"
         />
@@ -111,8 +120,12 @@ export default function Login() {
         <div className="relative mb-2">
           <input
             type={showPassword ? 'text' : 'password'}
+            name="password"
             required
             value={password}
+            readOnly={!credentialsUnlocked}
+            autoComplete={credentialsUnlocked ? 'current-password' : 'off'}
+            onFocus={() => setCredentialsUnlocked(true)}
             onChange={(e) => setPassword(e.target.value)}
             className="w-full border border-slate-300 rounded-md px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
           />

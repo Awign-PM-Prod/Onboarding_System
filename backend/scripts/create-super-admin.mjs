@@ -72,12 +72,12 @@ async function run() {
   const byId = await admin.auth.admin.getUserById(SUPER_ADMIN_ID);
   if (byId?.data?.user) {
     authUserId = byId.data.user.id;
-    console.log(`  auth user already exists by id: ${authUserId}`);
+    console.log('  auth user already exists by id');
   } else {
     const byEmail = await findAuthUserByEmail(SUPER_ADMIN_EMAIL);
     if (byEmail) {
       authUserId = byEmail.id;
-      console.log(`  auth user already exists by email: ${authUserId}`);
+      console.log('  auth user already exists by email');
     } else {
       const { data, error } = await admin.auth.admin.createUser({
         id: SUPER_ADMIN_ID,
@@ -88,9 +88,15 @@ async function run() {
       });
       if (error) throw new Error(`create auth user: ${error.message}`);
       authUserId = data.user.id;
-      console.log(`  auth user created: ${authUserId}`);
+      console.log('  auth user created');
     }
   }
+
+  const { error: pwErr } = await admin.auth.admin.updateUserById(authUserId, {
+    password: PASSWORD
+  });
+  if (pwErr) throw new Error(`update password: ${pwErr.message}`);
+  console.log('  password updated');
 
   const { data: existingProfile, error: findErr } = await admin
     .from('users')
