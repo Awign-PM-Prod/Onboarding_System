@@ -740,6 +740,22 @@ async function nextPayrollReviewCycle(jobAppFormId) {
   return Number(max ?? 0) + 1;
 }
 
+function normalizeEmployeeEmail(raw) {
+  return String(raw ?? '').trim().toLowerCase();
+}
+
+function uniqueContactConflictMessage(error) {
+  if (!error || error.code !== '23505') return null;
+  const msg = String(error.message ?? error.details ?? '').toLowerCase();
+  if (msg.includes('employees_email_unique') || /\bemail\b/.test(msg)) {
+    return 'email already exists';
+  }
+  if (msg.includes('employees_mobile_unique') || /\bmobile\b/.test(msg)) {
+    return 'mobile already exists';
+  }
+  return null;
+}
+
 // Returns a Set of mobile values that already exist in the employees table
 // for the given mobile list. Used to skip duplicates during batch inserts.
 async function fetchExistingMobiles(mobiles) {
@@ -750,6 +766,57 @@ async function fetchExistingMobiles(mobiles) {
     .in('mobile', mobiles);
   if (error) throw error;
   return new Set(data.map(r => r.mobile));
+}
+
+// Returns a Set of lowercased emails that already exist in the employees table.
+async function fetchExistingEmails(emails) {
+  const normalized = [...new Set((emails || []).map(normalizeEmployeeEmail).filter(Boolean))];
+  if (!normalized.length) return new Set();
+  const { data, error } = await supabaseAdmin
+    .from('employees')
+    .select('email')
+    .in('email', normalized);
+  if (error) throw error;
+  return new Set((data ?? []).map((r) => normalizeEmployeeEmail(r.email)).filter(Boolean));
+}
+
+/**
+ * Drop rows whose mobile or email already exists in the DB or earlier in this list.
+ */
+function rejectDuplicateContacts(validated, { existingMobiles, existingEmails, errorKey, sourceKey, scopeLabel }) {
+  const seenMobiles = new Set();
+  const seenEmails = new Set();
+  const toInsert = [];
+  const errors = [];
+
+  for (const v of validated) {
+    const mobile = v.payload.mobile;
+    const email = v.payload.email;
+    const rowErrors = [];
+
+    if (existingMobiles.has(mobile)) {
+      rowErrors.push(`mobile "${mobile}" already exists`);
+    } else if (seenMobiles.has(mobile)) {
+      rowErrors.push(`mobile "${mobile}" is duplicated in this ${scopeLabel}`);
+    }
+
+    if (existingEmails.has(email)) {
+      rowErrors.push(`email "${email}" already exists`);
+    } else if (seenEmails.has(email)) {
+      rowErrors.push(`email "${email}" is duplicated in this ${scopeLabel}`);
+    }
+
+    if (rowErrors.length) {
+      errors.push({ [errorKey]: v[sourceKey], errors: rowErrors });
+      continue;
+    }
+
+    seenMobiles.add(mobile);
+    seenEmails.add(email);
+    toInsert.push(v.payload);
+  }
+
+  return { toInsert, errors };
 }
 
 async function fetchExistingEmpCodes(codes) {
@@ -835,7 +902,7 @@ function validateEmployeeRow(raw, designationSet) {
   const errors = [];
   const name = String(raw.name ?? '').trim();
   const mobile = String(raw.mobile ?? '').trim();
-  const email = String(raw.email ?? '').trim();
+  const email = normalizeEmployeeEmail(raw.email);
   const designation = String(raw.designation ?? '').trim();
   const doj = String(raw.date_of_joining ?? '').trim();
   const ctcType = String(raw.ctc_type ?? '').trim().toUpperCase();
@@ -1110,24 +1177,18 @@ router.post('/', async (req, res, next) => {
       }
     });
 
-    // Skip rows whose mobile already exists in the DB or appears earlier in
-    // this same batch. Each skipped row is reported in `errors`.
+    // Skip rows whose mobile or email already exists in the DB or appears earlier
+    // in this same batch. Each skipped row is reported in `errors`.
     const existingMobiles = await fetchExistingMobiles(validated.map(v => v.payload.mobile));
-    const seenInBatch = new Set();
-    const toInsert = [];
-    for (const v of validated) {
-      const mobile = v.payload.mobile;
-      if (existingMobiles.has(mobile)) {
-        errors.push({ index: v.source_index, errors: [`mobile "${mobile}" already exists`] });
-        continue;
-      }
-      if (seenInBatch.has(mobile)) {
-        errors.push({ index: v.source_index, errors: [`mobile "${mobile}" is duplicated in this batch`] });
-        continue;
-      }
-      seenInBatch.add(mobile);
-      toInsert.push(v.payload);
-    }
+    const existingEmails = await fetchExistingEmails(validated.map(v => v.payload.email));
+    const { toInsert, errors: duplicateErrors } = rejectDuplicateContacts(validated, {
+      existingMobiles,
+      existingEmails,
+      errorKey: 'index',
+      sourceKey: 'source_index',
+      scopeLabel: 'batch'
+    });
+    errors.push(...duplicateErrors);
 
     // Single-row request with a duplicate -> 409 for a clearer UX.
     if (!isBatch && toInsert.length === 0 && errors.length > 0) {
@@ -1152,7 +1213,11 @@ router.post('/', async (req, res, next) => {
         .from('employees')
         .insert(rowsWithRef)
         .select();
-      if (error) throw error;
+      if (error) {
+        const conflict = uniqueContactConflictMessage(error);
+        if (conflict) return res.status(409).json({ error: conflict });
+        throw error;
+      }
       inserted = data;
       await ensureActiveAssignmentHistory(inserted);
     }
@@ -1248,24 +1313,18 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
       }
     });
 
-    // Skip rows whose mobile already exists in the DB or appears earlier in
-    // this same file. Reported in `errors` with the original spreadsheet row.
+    // Skip rows whose mobile or email already exists in the DB or appears earlier
+    // in this same file. Reported in `errors` with the original spreadsheet row.
     const existingMobiles = await fetchExistingMobiles(validated.map(v => v.payload.mobile));
-    const seenInFile = new Set();
-    const toInsert = [];
-    for (const v of validated) {
-      const mobile = v.payload.mobile;
-      if (existingMobiles.has(mobile)) {
-        errors.push({ row: v.source_row, errors: [`mobile "${mobile}" already exists`] });
-        continue;
-      }
-      if (seenInFile.has(mobile)) {
-        errors.push({ row: v.source_row, errors: [`mobile "${mobile}" is duplicated in this file`] });
-        continue;
-      }
-      seenInFile.add(mobile);
-      toInsert.push(v.payload);
-    }
+    const existingEmails = await fetchExistingEmails(validated.map(v => v.payload.email));
+    const { toInsert, errors: duplicateErrors } = rejectDuplicateContacts(validated, {
+      existingMobiles,
+      existingEmails,
+      errorKey: 'row',
+      sourceKey: 'source_row',
+      scopeLabel: 'file'
+    });
+    errors.push(...duplicateErrors);
 
     let inserted = 0;
     if (toInsert.length) {
@@ -1279,7 +1338,11 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
         .from('employees')
         .insert(rowsWithRef)
         .select('id, client_id');
-      if (error) throw error;
+      if (error) {
+        const conflict = uniqueContactConflictMessage(error);
+        if (conflict) return res.status(409).json({ error: conflict });
+        throw error;
+      }
       await ensureActiveAssignmentHistory(data ?? []);
       inserted = toInsert.length;
     }

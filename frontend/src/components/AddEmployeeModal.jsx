@@ -41,14 +41,16 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
     try {
       const payload = {
         client_id: clientId,
-        ...form
+        name: form.name,
+        mobile: form.mobile,
+        email: form.email.trim().toLowerCase()
       };
       await api.createEmployee(payload);
       const createdName = String(form.name ?? '').trim();
       await onCreated?.({
         name: createdName,
         mobile: form.mobile,
-        email: form.email
+        email: payload.email
       });
       if (embedded) setForm({ ...empty });
       else onClose?.();

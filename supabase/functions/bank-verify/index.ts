@@ -127,24 +127,24 @@ serve(async (req) => {
   const data =
     (upstreamBody?.data as Record<string, unknown> | undefined) ?? {};
   const accountExists = data?.account_exists;
-  // Soft degradation: Partner returns 200 with account_exists: null when
-  // upstream is unavailable — treat as manual_review, do not hard-fail.
-  const manualReview =
-    Boolean(upstreamBody?.manual_review) ||
-    accountExists === null ||
-    accountExists === undefined;
 
-  const warning = String(upstreamBody?.warning ?? "").trim() ||
-    (manualReview && accountExists !== true
-      ? "Bank verification could not be completed. Flagged for manual review."
-      : null);
+  if (accountExists !== true) {
+    return json(400, {
+      error:
+        "Bank account could not be verified. Please re-enter account number and IFSC and check again.",
+      error_code: "ACCOUNT_NOT_VERIFIED",
+      message:
+        "Bank account could not be verified. Please re-enter account number and IFSC and check again.",
+      upstream: upstreamBody,
+    });
+  }
 
   return json(200, {
     ok: true,
     data,
     success: Boolean(upstreamBody?.success ?? true),
-    manual_review: accountExists === true ? Boolean(upstreamBody?.manual_review) : manualReview,
-    warning,
+    manual_review: false,
+    warning: null,
     messageCode: null,
   });
 });

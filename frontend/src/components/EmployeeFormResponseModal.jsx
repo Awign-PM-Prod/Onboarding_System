@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import ModalOverlay from './ModalOverlay';
+import { Z_MODAL_NESTED } from '../lib/zIndex';
 
 const HIDDEN_KEYS = new Set([
   'id',
@@ -31,6 +32,7 @@ function prettifyKey(key) {
   if (key === 'bp_nominee_name') return 'Nominee Name';
   if (key === 'bp_nominee_relation') return 'Nominee Relation';
   if (key === 'bp_nominee_mobile') return 'Nominee Mobile Number';
+  if (key === 'aad_profile_photo') return 'Aadhaar Profile Photo';
   if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
   if (key === 'pd_current_address') return 'Current Address';
   if (key === 'bp_pf_uan_face_auth_screenshot_url') return 'PF UAN Face Authentication Screenshot';
@@ -167,7 +169,7 @@ const ORDERED_FIELDS = [
 ];
 
 const DOCUMENT_TAB_DEFINITIONS = [
-  { key: 'aad_profile_photo', label: 'Profile Photo' },
+  { key: 'aad_profile_photo', label: 'Aadhaar Profile Photo' },
   { key: 'kyc_aadhar_front_url', label: 'Aadhaar Front' },
   { key: 'kyc_aadhar_back_url', label: 'Aadhaar Back' },
   { key: 'qual_highest_qualification_doc_url', label: 'Highest Qualification' },
@@ -339,6 +341,9 @@ export default function EmployeeFormResponseModal({
   const [fieldMarks, setFieldMarks] = useState({});
   const [decisionReason, setDecisionReason] = useState('');
   const [decisionError, setDecisionError] = useState('');
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectConfirmError, setRejectConfirmError] = useState('');
   const [activeDocumentTabId, setActiveDocumentTabId] = useState('');
 
   useEffect(() => {
@@ -352,6 +357,9 @@ export default function EmployeeFormResponseModal({
       }
       setDecisionReason('');
       setDecisionError('');
+      setRejectConfirmOpen(false);
+      setRejectReason('');
+      setRejectConfirmError('');
     }
   }, [open, form, previousCorrectionRejectedFields, isPayrollMode]);
 
@@ -429,19 +437,20 @@ export default function EmployeeFormResponseModal({
     }
   }, [open, hasIncorrectMarks, incorrectFieldLabels.join('|')]);
 
-  const submitDecision = async (decisionStatus) => {
-    if (!onDecision || deciding) return;
-    if ((decisionStatus === 'REJECTED' || decisionStatus === 'CORRECTION_REQUESTED') && !decisionReason.trim()) {
+  const submitDecision = async (decisionStatus, reasonOverride) => {
+    if (!onDecision || deciding) return false;
+    const reason = String(reasonOverride ?? decisionReason).trim();
+    if ((decisionStatus === 'REJECTED' || decisionStatus === 'CORRECTION_REQUESTED') && !reason) {
       setDecisionError('Please add a reason before continuing.');
-      return;
+      return false;
     }
     if (isPayrollMode && decisionStatus === 'CORRECTION_REQUESTED') {
       setDecisionError('Invalid decision.');
-      return;
+      return false;
     }
     if (decisionStatus === 'CORRECTION_REQUESTED' && incorrectFieldKeys.length === 0) {
       setDecisionError('Please mark at least one field as incorrect to request correction.');
-      return;
+      return false;
     }
     const completeFieldMarks = Object.fromEntries(
       reviewableKeys.map((key) => [key, fieldMarks[key] === 'incorrect' ? 'incorrect' : 'correct'])
@@ -449,16 +458,56 @@ export default function EmployeeFormResponseModal({
     setDecisionError('');
     await onDecision({
       decision_status: decisionStatus,
-      decision_reason: decisionReason.trim() || null,
+      decision_reason: reason || null,
       rejected_fields: decisionStatus === 'CORRECTION_REQUESTED' ? incorrectFieldKeys : [],
       field_marks: completeFieldMarks
     });
+    return true;
+  };
+
+  const openRejectConfirm = () => {
+    if (deciding) return;
+    setDecisionError('');
+    setRejectConfirmError('');
+    setRejectReason(decisionReason.trim());
+    setRejectConfirmOpen(true);
+  };
+
+  const closeRejectConfirm = () => {
+    if (deciding) return;
+    setRejectConfirmOpen(false);
+    setRejectConfirmError('');
+  };
+
+  const confirmReject = async () => {
+    const reason = rejectReason.trim();
+    if (!reason) {
+      setRejectConfirmError('Please add a reason before rejecting.');
+      return;
+    }
+    setDecisionReason(reason);
+    const ok = await submitDecision('REJECTED', reason);
+    if (ok !== false) {
+      setRejectConfirmOpen(false);
+    }
+  };
+
+  const handleMainClose = () => {
+    if (deciding) return;
+    if (rejectConfirmOpen) return;
+    onClose?.();
   };
 
   if (!open) return null;
 
+  const alreadyRejected = isPayrollMode
+    ? String(form?.payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_REJECTED'
+    : String(form?.review_status ?? '').trim().toUpperCase() === 'REJECTED';
+  const canReject = Boolean(onDecision) && !loading && Boolean(form) && !alreadyRejected;
+  const canApprove = canReject && !hasIncorrectMarks && !alreadyApprovedForCorrection;
+
   return (
-    <ModalOverlay onClose={onClose} align="bottom" backdropClassName="bg-slate-900/50">
+    <ModalOverlay onClose={handleMainClose} align="bottom" backdropClassName="bg-slate-900/50">
       <div className="relative flex max-h-[min(90vh,760px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:px-6">
           <div className="min-w-0 flex-1">
@@ -491,7 +540,7 @@ export default function EmployeeFormResponseModal({
             )}
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleMainClose}
               className="shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
               aria-label="Close"
             >
@@ -663,54 +712,95 @@ export default function EmployeeFormResponseModal({
               </div>
             )}
             <div className={`flex flex-wrap items-center gap-2 ${hasIncorrectMarks ? 'shrink-0 sm:justify-end' : 'justify-end'}`}>
-              {!hasIncorrectMarks ? (
-                alreadyApprovedForCorrection ? (
-                  <p className="text-sm text-slate-500">
-                    Mark any incorrect field to{' '}
-                    {isPayrollMode ? 'reject this application for correction' : 'send this application for correction'}.
-                  </p>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => submitDecision('APPROVED')}
-                    disabled={deciding}
-                    className="rounded-lg bg-emerald-700 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
-                  >
-                    {deciding ? 'Submitting...' : 'Approve'}
-                  </button>
-                )
-              ) : (
-                <>
-                  {!isPayrollMode && (
-                    <button
-                      type="button"
-                      onClick={() => submitDecision('CORRECTION_REQUESTED')}
-                      disabled={deciding}
-                      className="rounded-lg border border-rose-300 bg-white px-4 py-2.5 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-                    >
-                      {deciding ? 'Submitting...' : 'Send for correction'}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => submitDecision('REJECTED')}
-                    disabled={deciding}
-                    className="rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-                  >
-                    {deciding
-                      ? 'Submitting...'
-                      : alreadyApprovedForCorrection
-                        ? isPayrollMode
-                          ? 'Reject for correction'
-                          : 'Reject'
-                        : 'Reject'}
-                  </button>
-                </>
+              {canApprove && (
+                <button
+                  type="button"
+                  onClick={() => submitDecision('APPROVED')}
+                  disabled={deciding}
+                  className="rounded-lg bg-emerald-700 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+                >
+                  {deciding ? 'Submitting...' : 'Approve'}
+                </button>
+              )}
+              {alreadyApprovedForCorrection && !hasIncorrectMarks && !isPayrollMode && (
+                <p className="text-sm text-slate-500">
+                  Mark any incorrect field to send this application for correction.
+                </p>
+              )}
+              {!isPayrollMode && hasIncorrectMarks && (
+                <button
+                  type="button"
+                  onClick={() => submitDecision('CORRECTION_REQUESTED')}
+                  disabled={deciding}
+                  className="rounded-lg border border-rose-300 bg-white px-4 py-2.5 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  {deciding ? 'Submitting...' : 'Send for correction'}
+                </button>
+              )}
+              {canReject && (
+                <button
+                  type="button"
+                  onClick={openRejectConfirm}
+                  disabled={deciding}
+                  className="rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                >
+                  {alreadyApprovedForCorrection && isPayrollMode ? 'Reject for correction' : 'Reject'}
+                </button>
               )}
             </div>
           </div>
         </div>
       </div>
+      {rejectConfirmOpen && (
+        <ModalOverlay
+          onClose={closeRejectConfirm}
+          backdropClassName="bg-slate-900/50"
+          zIndex={Z_MODAL_NESTED}
+        >
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-900">Reject application?</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              This will reject{' '}
+              <span className="font-medium text-slate-900">{employeeName || 'this employee'}</span>
+              . Please add a reason to continue.
+            </p>
+            <label className="mt-4 mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor="reject-confirm-reason">
+              Reason <span className="text-rose-500">*</span>
+            </label>
+            <textarea
+              id="reject-confirm-reason"
+              value={rejectReason}
+              onChange={(e) => {
+                setRejectReason(e.target.value);
+                setRejectConfirmError('');
+              }}
+              rows={4}
+              placeholder="Enter the reason for rejection..."
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-300"
+              autoFocus
+            />
+            {rejectConfirmError && <p className="mt-2 text-sm text-rose-600">{rejectConfirmError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={deciding}
+                onClick={closeRejectConfirm}
+                className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deciding || !rejectReason.trim()}
+                onClick={confirmReject}
+                className="rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+              >
+                {deciding ? 'Rejecting…' : 'Confirm reject'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
     </ModalOverlay>
   );
 }

@@ -20,6 +20,7 @@ function MetaItem({ label, children }) {
 export default function ClientProjectMetaHeader({
   title,
   contractCode,
+  programManagerName,
   contractStartDate,
   contractEndDate,
   openEndedContract = false,
@@ -69,9 +70,13 @@ export default function ClientProjectMetaHeader({
         )}
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 xl:items-start xl:gap-x-8">
+      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 xl:items-start xl:gap-x-8">
         <MetaItem label="Contract Code">
           <span className="font-mono">{contractCode || '—'}</span>
+        </MetaItem>
+
+        <MetaItem label="Undertaking PM Name">
+          {programManagerName || '—'}
         </MetaItem>
 
         {(entity || state) && (

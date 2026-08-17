@@ -33,6 +33,8 @@ const MAX_BANK_PHOTO_DOCUMENT_BYTES = MAX_UPLOAD_BYTES;
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const ACCOUNT_NUMBER_REGEX = /^[0-9]{9,18}$/;
+const PLACEHOLDER_ACCOUNT_REGEX = /^0+$/;
+const PLACEHOLDER_IFSC_REGEX = /^[A-Z]{4}0{7}$/;
 const PINCODE_REGEX = /^[0-9]{6}$/;
 const MAX_SUBMISSION_ATTEMPTS = 3;
 
@@ -1461,10 +1463,10 @@ router.post('/bank/verify', async (req, res, next) => {
     if (accountHolderName.length < 2) {
       return res.status(400).json({ error: 'Account holder name is required.' });
     }
-    if (!ACCOUNT_NUMBER_REGEX.test(accountNumber)) {
+    if (!ACCOUNT_NUMBER_REGEX.test(accountNumber) || PLACEHOLDER_ACCOUNT_REGEX.test(accountNumber)) {
       return res.status(400).json({ error: 'Account number must be 9–18 digits.' });
     }
-    if (!IFSC_CODE_REGEX.test(ifsc)) {
+    if (!IFSC_CODE_REGEX.test(ifsc) || PLACEHOLDER_IFSC_REGEX.test(ifsc)) {
       return res.status(400).json({ error: 'Enter a valid IFSC code.' });
     }
 
@@ -1497,57 +1499,30 @@ router.post('/bank/verify', async (req, res, next) => {
     const providerData = edgeResult?.data ?? {};
     const accountExists = providerData?.account_exists === true;
     const providerFullName = String(providerData?.full_name ?? '').trim();
-    const manualReview =
-      Boolean(edgeResult?.manual_review) || (!accountExists && providerData?.account_exists !== false);
 
-    // Hard reject only when provider explicitly says the account does not exist.
-    if (providerData?.account_exists === false) {
+    // Only a confirmed account is verified. Provider outages and unresolved
+    // lookups (account_exists null) used to soft-pass as verified + manual_review.
+    if (!accountExists) {
       return res.status(400).json({
         error: 'Bank account could not be verified. Please re-enter account number and IFSC and check again.',
       });
     }
+    if (!providerFullName) {
+      return res.status(400).json({ error: 'Bank verification did not return account holder name.' });
+    }
 
-    let resolvedHolderName = providerFullName;
-    if (!manualReview) {
-      if (!accountExists) {
-        return res.status(400).json({
-          error: 'Bank account could not be verified. Please re-enter account number and IFSC and check again.',
-        });
-      }
-      if (!providerFullName) {
-        return res.status(400).json({ error: 'Bank verification did not return account holder name.' });
-      }
-
-      const aadhaarName = await resolveAadhaarNameForEmployee(row.id);
-      if (!aadhaarName) {
-        return res.status(400).json({ error: 'Aadhaar name not found. Complete Aadhaar verification first.' });
-      }
-      const holderMatchesEmployee = namesLikelyMatch(aadhaarName, providerFullName);
-      if (!holderMatchesEmployee) {
-        return res.status(400).json({
-          error: 'Account holder name does not match Aadhaar name.',
-          details: {
-            aadhaar_name: aadhaarName,
-            bank_name: providerFullName,
-          },
-        });
-      }
-    } else if (!resolvedHolderName) {
-      // Soft pass: provider name missing — keep the name the user typed.
-      resolvedHolderName = accountHolderName;
-    } else {
-      // Soft pass with a provider name: still try to match when Aadhaar is available,
-      // but do not block if Aadhaar name is missing (manual review path).
-      const aadhaarName = await resolveAadhaarNameForEmployee(row.id);
-      if (aadhaarName && !namesLikelyMatch(aadhaarName, providerFullName)) {
-        return res.status(400).json({
-          error: 'Account holder name does not match Aadhaar name.',
-          details: {
-            aadhaar_name: aadhaarName,
-            bank_name: providerFullName,
-          },
-        });
-      }
+    const aadhaarName = await resolveAadhaarNameForEmployee(row.id);
+    if (!aadhaarName) {
+      return res.status(400).json({ error: 'Aadhaar name not found. Complete Aadhaar verification first.' });
+    }
+    if (!namesLikelyMatch(aadhaarName, providerFullName)) {
+      return res.status(400).json({
+        error: 'Account holder name does not match Aadhaar name.',
+        details: {
+          aadhaar_name: aadhaarName,
+          bank_name: providerFullName,
+        },
+      });
     }
 
     const now = new Date().toISOString();
@@ -1559,7 +1534,7 @@ router.post('/bank/verify', async (req, res, next) => {
         mobile: row.mobile,
         email: row.email ?? null,
         designation: row.designation ?? null,
-        kyc_account_holder_name: resolvedHolderName,
+        kyc_account_holder_name: providerFullName,
         kyc_account_number: accountNumber,
         kyc_ifsc_code: ifsc,
         // Partner KYC does not return bank/branch metadata.
@@ -1572,16 +1547,9 @@ router.post('/bank/verify', async (req, res, next) => {
     );
     if (upsertErr) throw upsertErr;
 
-    const warning = manualReview
-      ? String(edgeResult?.warning ?? '').trim() ||
-        'Bank verification could not be completed. Flagged for manual review.'
-      : null;
-
     return res.json({
       verified: true,
-      manual_review: manualReview || undefined,
-      warning: warning || undefined,
-      account_holder_name: resolvedHolderName,
+      account_holder_name: providerFullName,
       account_number: accountNumber,
       ifsc,
       ifsc_details: null,
@@ -2334,7 +2302,7 @@ router.post('/kyc-document-validate', (req, res, next) => {
         ok: true,
         checked: false,
         warnings: [
-          'Could not auto-check this document right now. You can continue, but upload a clear image.',
+          'Could not auto-check this document right now. Please upload a clear image and try again.',
         ],
         details: edgeErr?.message || 'Auto-check unavailable',
       });
@@ -2963,14 +2931,29 @@ router.patch('/job-app-form', async (req, res, next) => {
       if (holder.length < 2) {
         return res.status(400).json({ error: 'Account holder name is required.' });
       }
-      if (!ACCOUNT_NUMBER_REGEX.test(acct)) {
+      if (!ACCOUNT_NUMBER_REGEX.test(acct) || PLACEHOLDER_ACCOUNT_REGEX.test(acct)) {
         return res.status(400).json({ error: 'Enter a valid account number (9–18 digits).' });
       }
-      if (!IFSC_CODE_REGEX.test(ifsc)) {
+      if (!IFSC_CODE_REGEX.test(ifsc) || PLACEHOLDER_IFSC_REGEX.test(ifsc)) {
         return res.status(400).json({ error: 'Enter a valid IFSC code.' });
       }
       if (!passUrl) {
         return res.status(400).json({ error: 'Bank passbook upload is required.' });
+      }
+
+      const bankFieldsInScope =
+        !correctionMode ||
+        editableFields.has('kyc_account_holder_name') ||
+        editableFields.has('kyc_account_number') ||
+        editableFields.has('kyc_ifsc_code');
+      const storedAcct = String(formCurrent.kyc_account_number ?? '').replace(/\D/g, '');
+      const storedIfsc = String(formCurrent.kyc_ifsc_code ?? '').replace(/\s/g, '').toUpperCase();
+      const bankAlreadyVerified =
+        formCurrent.kyc_bank_verified === true &&
+        storedAcct === acct &&
+        storedIfsc === ifsc;
+      if (bankFieldsInScope && !bankAlreadyVerified) {
+        return res.status(400).json({ error: 'Please verify bank account details before continuing.' });
       }
 
       const kycUpdate = {
@@ -2983,7 +2966,7 @@ router.patch('/job-app-form', async (req, res, next) => {
         kyc_ifsc_code: ifsc,
         kyc_bank_passbook_url: passUrl,
         kyc_pan_verified: true,
-        kyc_bank_verified: true,
+        kyc_bank_verified: bankAlreadyVerified,
         kyc_bank_branch_confirmed: bankBranchConfirmed,
       };
       const correctionScopeErr = ensureCorrectionEditScope(kycUpdate);

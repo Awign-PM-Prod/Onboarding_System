@@ -33,6 +33,8 @@ const BP_MAX_BYTES = UPLOAD_MAX_BYTES;
 const PAN_NUMBER_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_CODE_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const ACCOUNT_NUMBER_REGEX = /^[0-9]{9,18}$/;
+const PLACEHOLDER_ACCOUNT_REGEX = /^0+$/;
+const PLACEHOLDER_IFSC_REGEX = /^[A-Z]{4}0{7}$/;
 const PINCODE_REGEX = /^[0-9]{6}$/;
 
 const HIGHEST_QUALIFICATION_OPTIONS = [
@@ -394,7 +396,7 @@ function DocUploadField({
             type="file"
             accept={accept}
             onChange={onChange}
-            className={FILE_INPUT_CLASS}
+            className={`${FILE_INPUT_CLASS} ${error ? 'border-rose-500' : ''}`}
           />
           {hint && <p className="mt-1.5 text-xs text-slate-500">{hint}</p>}
         </>
@@ -1086,16 +1088,25 @@ function kycKindLabel(kind) {
   return 'PAN';
 }
 
+function kycHintIsBlocking(hint) {
+  return Boolean(hint?.blocking);
+}
+
+function kycHintTextClass(hint) {
+  return hint?.tone === 'success' ? 'text-emerald-700' : 'text-rose-600';
+}
+
 function kycValidationHint(kind, validation) {
   const explicitWarnings = Array.isArray(validation?.warnings)
     ? validation.warnings.map((item) => String(item ?? '').trim()).filter(Boolean)
     : [];
   if (!validation?.checked) {
     return {
-      tone: 'warn',
+      tone: 'error',
+      blocking: true,
       text:
         explicitWarnings[0] ||
-        'Could not auto-check this document right now. You can continue, but upload a clear image.',
+        'Could not verify this document. Please upload a clear, correct image and try again.',
     };
   }
 
@@ -1103,41 +1114,52 @@ function kycValidationHint(kind, validation) {
   const docLabel = kycKindLabel(kind);
   if (result?.is_expected_kind === false) {
     return {
-      tone: 'warn',
+      tone: 'error',
+      blocking: true,
       text: `This does not look like a ${docLabel} image. Please upload the correct image.`,
     };
   }
 
   if (kind === 'aadhaar_front' && result?.matches?.aadhaar_number_match === false) {
     return {
-      tone: 'warn',
-      text: 'This does not seem to match the Aadhaar number added by you.',
+      tone: 'error',
+      blocking: true,
+      text: 'This does not seem to match the Aadhaar number added by you. Please upload the correct Aadhaar front.',
     };
   }
   if (kind === 'pan_card' && result?.matches?.pan_number_match === false) {
     return {
-      tone: 'warn',
-      text: 'This does not seem to match the PAN number added by you.',
+      tone: 'error',
+      blocking: true,
+      text: 'This does not seem to match the PAN number added by you. Please upload the correct PAN card.',
     };
   }
 
-  if (kind === 'aadhaar_front' && result?.matches?.aadhaar_number_match === true) {
-    return { tone: 'success', text: 'Aadhaar front verified.' };
-  }
-  if (kind === 'pan_card' && result?.matches?.pan_number_match === true) {
-    return { tone: 'success', text: 'PAN card verified.' };
-  }
-  if (kind === 'aadhaar_back') {
-    return { tone: 'success', text: 'Aadhaar back verified.' };
+  if (result?.quality_ok === false) {
+    return {
+      tone: 'error',
+      blocking: true,
+      text: 'Image quality is too low. Please upload a clearer photo.',
+    };
   }
 
   const modelWarnings = Array.isArray(result?.warnings)
     ? result.warnings.map((item) => String(item ?? '').trim()).filter(Boolean)
     : [];
   if (modelWarnings.length > 0) {
-    return { tone: 'warn', text: modelWarnings[0] };
+    return { tone: 'error', blocking: true, text: modelWarnings[0] };
   }
-  return { tone: 'success', text: `${docLabel} image looks correct.` };
+
+  if (kind === 'aadhaar_front') {
+    return { tone: 'success', blocking: false, text: 'Aadhaar front verified.' };
+  }
+  if (kind === 'aadhaar_back') {
+    return { tone: 'success', blocking: false, text: 'Aadhaar back verified.' };
+  }
+  if (kind === 'pan_card') {
+    return { tone: 'success', blocking: false, text: 'PAN card verified.' };
+  }
+  return { tone: 'success', blocking: false, text: `${docLabel} image looks correct.` };
 }
 
 function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSuccess, correction }) {
@@ -1234,16 +1256,10 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     const ifscLoaded = visible?.has('kyc_ifsc_code') ? '' : String(jobForm.kyc_ifsc_code ?? '').replace(/\s/g, '').toUpperCase();
     const bankFlagLoaded = !visible?.has('kyc_bank_verified') && jobForm?.kyc_bank_verified === true;
     const branchConfirmedLoaded = !visible?.has('kyc_bank_branch_confirmed') && jobForm?.kyc_bank_branch_confirmed === true;
-    setBankVerified(
-      Boolean(
-        bankFlagLoaded || (
-          hLoaded.length >= 2 &&
-          ACCOUNT_NUMBER_REGEX.test(acctLoaded) &&
-          IFSC_CODE_REGEX.test(ifscLoaded)
-        )
-      )
-    );
-    setBankBranchConfirmed(Boolean(branchConfirmedLoaded || bankFlagLoaded));
+    const placeholderBank =
+      PLACEHOLDER_ACCOUNT_REGEX.test(acctLoaded) || PLACEHOLDER_IFSC_REGEX.test(ifscLoaded);
+    setBankVerified(Boolean(bankFlagLoaded && !placeholderBank));
+    setBankBranchConfirmed(Boolean((branchConfirmedLoaded || bankFlagLoaded) && !placeholderBank));
     setBankVerifyMsg('');
     const branchLoaded = !visible?.has('kyc_bank_ifsc_details')
       ? String(jobForm?.kyc_bank_ifsc_details ?? '').trim()
@@ -1271,10 +1287,23 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       return kycValidationHint(kind, validation);
     } catch {
       return {
-        tone: 'warn',
-        text: 'Could not auto-check this document right now. You can continue, but upload a clear image.',
+        tone: 'error',
+        blocking: true,
+        text: 'Could not verify this document. Please upload a clear, correct image and try again.',
       };
     }
+  };
+
+  const acceptValidatedKycUpload = async ({ kind, file, setHint, setErr, setUrl, setFileName }) => {
+    const hint = await validateKyc(kind, file);
+    setHint(hint);
+    if (kycHintIsBlocking(hint)) {
+      setErr(hint.text);
+      return false;
+    }
+    setUrl(await uploadKyc(kind, file));
+    setFileName(file.name);
+    return true;
   };
 
   const handleAadhaarFront = async (e) => {
@@ -1282,10 +1311,12 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     e.target.value = '';
     if (!file) return;
     if (!isAllowedOcrImageFile(file)) {
+      setFrontHint(null);
       setFrontErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
     if (file.size > KYC_IMAGE_MAX_BYTES) {
+      setFrontHint(null);
       setFrontErr('File must be 5 MB or smaller.');
       return;
     }
@@ -1293,9 +1324,14 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     setFrontHint(null);
     setFrontUp(true);
     try {
-      setFrontHint(await validateKyc('aadhaar_front', file));
-      setFrontUrl(await uploadKyc('aadhaar_front', file));
-      setFrontFileName(file.name);
+      await acceptValidatedKycUpload({
+        kind: 'aadhaar_front',
+        file,
+        setHint: setFrontHint,
+        setErr: setFrontErr,
+        setUrl: setFrontUrl,
+        setFileName: setFrontFileName,
+      });
     } catch (err) {
       setFrontErr(err.message || 'Upload failed.');
     } finally {
@@ -1308,10 +1344,12 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     e.target.value = '';
     if (!file) return;
     if (!isAllowedOcrImageFile(file)) {
+      setBackHint(null);
       setBackErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
     if (file.size > KYC_IMAGE_MAX_BYTES) {
+      setBackHint(null);
       setBackErr('File must be 5 MB or smaller.');
       return;
     }
@@ -1319,9 +1357,14 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     setBackHint(null);
     setBackUp(true);
     try {
-      setBackHint(await validateKyc('aadhaar_back', file));
-      setBackUrl(await uploadKyc('aadhaar_back', file));
-      setBackFileName(file.name);
+      await acceptValidatedKycUpload({
+        kind: 'aadhaar_back',
+        file,
+        setHint: setBackHint,
+        setErr: setBackErr,
+        setUrl: setBackUrl,
+        setFileName: setBackFileName,
+      });
     } catch (err) {
       setBackErr(err.message || 'Upload failed.');
     } finally {
@@ -1334,14 +1377,17 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     e.target.value = '';
     if (!file) return;
     if (!panVerified || !PAN_NUMBER_REGEX.test(panNumber.trim())) {
+      setPanCardHint(null);
       setPanCardErr('Please verify PAN number first, then upload PAN card image.');
       return;
     }
     if (!isAllowedOcrImageFile(file)) {
+      setPanCardHint(null);
       setPanCardErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
     if (file.size > KYC_IMAGE_MAX_BYTES) {
+      setPanCardHint(null);
       setPanCardErr('File must be 5 MB or smaller.');
       return;
     }
@@ -1349,9 +1395,14 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     setPanCardHint(null);
     setPanCardUp(true);
     try {
-      setPanCardHint(await validateKyc('pan_card', file));
-      setPanCardUrl(await uploadKyc('pan_card', file));
-      setPanCardFileName(file.name);
+      await acceptValidatedKycUpload({
+        kind: 'pan_card',
+        file,
+        setHint: setPanCardHint,
+        setErr: setPanCardErr,
+        setUrl: setPanCardUrl,
+        setFileName: setPanCardFileName,
+      });
     } catch (err) {
       setPanCardErr(err.message || 'Upload failed.');
     } finally {
@@ -1452,12 +1503,12 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       setBankVerifyMsg('Enter the account holder name.');
       return;
     }
-    if (!ACCOUNT_NUMBER_REGEX.test(acct)) {
+    if (!ACCOUNT_NUMBER_REGEX.test(acct) || PLACEHOLDER_ACCOUNT_REGEX.test(acct)) {
       setBankVerified(false);
-      setBankVerifyMsg('Account number must be 9–18 digits.');
+      setBankVerifyMsg('Enter a valid account number (9–18 digits).');
       return;
     }
-    if (!IFSC_CODE_REGEX.test(ifscNorm)) {
+    if (!IFSC_CODE_REGEX.test(ifscNorm) || PLACEHOLDER_IFSC_REGEX.test(ifscNorm)) {
       setBankVerified(false);
       setBankVerifyMsg('Enter a valid IFSC (e.g. HDFC0001234).');
       return;
@@ -1472,6 +1523,16 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         ifsc: ifscNorm,
       })
       .then((result) => {
+        if (!result?.verified || result.manual_review) {
+          setBankVerified(false);
+          setBankBranchSummary(null);
+          setBankBranchConfirmed(false);
+          setBankVerifyMsg(
+            result?.warning ||
+              'Bank account could not be verified. Please check details and try again.'
+          );
+          return;
+        }
         setAccountHolder(result.account_holder_name ?? h);
         setAccountNumber(result.account_number ?? acct);
         setIfsc(result.ifsc ?? ifscNorm);
@@ -1483,12 +1544,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
         });
         setBankBranchConfirmed(true);
         setBankVerified(true);
-        setBankVerifyMsg(
-          result.manual_review
-            ? result.warning ||
-              'Bank details saved for manual review. You can continue.'
-            : ''
-        );
+        setBankVerifyMsg('');
       })
       .catch((err) => {
         setBankVerified(false);
@@ -1515,10 +1571,32 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     isRequired('kyc_account_number', true) ||
     isRequired('kyc_ifsc_code', true);
   const bankOk = !bankRequired || bankVerified;
-  const canNext = docsOk && panOk && bankOk;
+  const bankFieldsVisible =
+    shouldShow('kyc_account_holder_name') ||
+    shouldShow('kyc_account_number') ||
+    shouldShow('kyc_ifsc_code');
+  const bankBranchOk = !bankFieldsVisible || !bankVerified || bankBranchConfirmed;
+  const kycHintsOk =
+    (!shouldShow('kyc_aadhar_front_url') || !kycHintIsBlocking(frontHint)) &&
+    (!shouldShow('kyc_aadhar_back_url') || !kycHintIsBlocking(backHint)) &&
+    (!shouldShow('kyc_pan_card_url') || !kycHintIsBlocking(panCardHint));
+  const kycFieldErrorsOk =
+    (!shouldShow('kyc_aadhar_front_url') || !frontErr) &&
+    (!shouldShow('kyc_aadhar_back_url') || !backErr) &&
+    (!shouldShow('kyc_pan_card_url') || !panCardErr) &&
+    (!shouldShow('kyc_bank_passbook_url') || !passErr);
+  const canNext = docsOk && panOk && bankOk && bankBranchOk && kycHintsOk && kycFieldErrorsOk;
 
   const handleNext = async () => {
     if (!canNext || saving) return;
+    if (kycHintIsBlocking(frontHint) || kycHintIsBlocking(backHint) || kycHintIsBlocking(panCardHint)) {
+      setError('Please upload valid Aadhaar and PAN images and resolve all warnings before continuing.');
+      return;
+    }
+    if (!bankBranchOk) {
+      setError('Please confirm the bank branch details to continue.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -1536,7 +1614,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           .replace(/\s/g, '')
           .toUpperCase(),
         kyc_bank_passbook_url: String(passbookUrl).trim(),
-        kyc_bank_branch_confirmed: bankVerified ? true : false,
+        kyc_bank_branch_confirmed: Boolean(bankVerified && bankBranchConfirmed),
       });
       onSaveSuccess?.(form);
     } catch (err) {
@@ -1589,8 +1667,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
               removing={frontRemoving}
               onChange={handleAadhaarFront}
             >
-              {frontHint && (
-                <p className={`mt-2 text-sm ${frontHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {frontHint && (frontHint.tone === 'success' || !frontErr) && (
+                <p className={`mt-2 text-sm ${kycHintTextClass(frontHint)}`}>
                   {frontHint.text}
                 </p>
               )}
@@ -1619,8 +1697,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
               removing={backRemoving}
               onChange={handleAadhaarBack}
             >
-              {backHint && (
-                <p className={`mt-2 text-sm ${backHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {backHint && (backHint.tone === 'success' || !backErr) && (
+                <p className={`mt-2 text-sm ${kycHintTextClass(backHint)}`}>
                   {backHint.text}
                 </p>
               )}
@@ -1668,7 +1746,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           </div>
         </div>}
         {shouldShow('kyc_pan_number') && panVerifyMsg && (
-          <p className={`text-sm ${panVerified ? 'text-emerald-700' : 'text-rose-600'}`}>{panVerifyMsg}</p>
+          <p className="text-sm text-rose-600">{panVerifyMsg}</p>
         )}
         {shouldShow('kyc_pan_card_url') && (
           <DocUploadField
@@ -1693,8 +1771,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             removing={panCardRemoving}
             onChange={!panVerified ? undefined : handlePanCard}
           >
-            {panCardHint && (
-              <p className={`mt-2 text-sm ${panCardHint.tone === 'success' ? 'text-emerald-700' : 'text-amber-700'}`}>
+            {panCardHint && (panCardHint.tone === 'success' || !panCardErr) && (
+              <p className={`mt-2 text-sm ${kycHintTextClass(panCardHint)}`}>
                 {panCardHint.text}
               </p>
             )}
@@ -1785,7 +1863,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           </p>
         )}
         {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) && bankVerifyMsg && (
-          <p className={`text-sm ${bankVerified ? 'text-emerald-700' : 'text-rose-600'}`}>{bankVerifyMsg}</p>
+          <p className="text-sm text-rose-600">{bankVerifyMsg}</p>
         )}
         {(shouldShow('kyc_account_holder_name') || shouldShow('kyc_account_number') || shouldShow('kyc_ifsc_code')) &&
           bankVerified &&
@@ -1811,7 +1889,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
                 <span>I confirm this is my bank branch.</span>
               </label>
               {!bankBranchConfirmed && (
-                <p className="text-xs text-amber-700">
+                <p className="text-sm text-rose-600">
                   Please confirm the bank branch details to continue.
                 </p>
               )}
@@ -1844,6 +1922,11 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       )}
 
       {error && <p className="text-sm text-rose-600">{error}</p>}
+      {!error && (!kycHintsOk || !kycFieldErrorsOk || !bankBranchOk) && (
+        <p className="text-sm text-rose-600">
+          Please resolve all warnings and upload valid documents before continuing.
+        </p>
+      )}
 
       <div className={NAV_ROW}>
         <button type="button" onClick={onPrevious} className={NAV_BTN_PREV}>
@@ -2916,8 +2999,8 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
               )}
               {shouldShow('pd_current_address') && (
                 <div className="mt-3">
-                  {sameAsAadhaarChoice === 'no' && (
-                    <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
+                  {sameAsAadhaarChoice === 'no' && !currentAddressValue && (
+                    <p className="mb-1.5 text-xs text-rose-600">Please add your current address.</p>
                   )}
                   <textarea
                     rows={3}
@@ -3378,8 +3461,8 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
                 No
               </label>
             </div>
-            {sameAsAadhaarChoice === 'no' && (
-              <p className="mb-1.5 text-xs text-amber-700">Please add your current address.</p>
+            {sameAsAadhaarChoice === 'no' && !currentAddressValue && (
+              <p className="mb-1.5 text-xs text-rose-600">Please add your current address.</p>
             )}
             <textarea
               rows={3}
