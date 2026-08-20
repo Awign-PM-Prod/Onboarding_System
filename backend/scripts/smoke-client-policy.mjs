@@ -90,7 +90,7 @@ for (let day = 1; day <= 30; day += 1) {
 const aprilSummary = computeRowSummary({
   dayMarks: aprilMarks,
   policyBundle: aprilBundle,
-  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null },
+  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null, state: 'Maharashtra' },
   monthYm: '2026-04',
   ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
 });
@@ -113,7 +113,7 @@ const aprilIncentivePolicy = normalizeAttendancePolicy({
 const aprilWeekdayOnly = computeRowSummary({
   dayMarks: aprilMarks,
   policyBundle: { ...aprilBundle, attendance_policy: aprilIncentivePolicy },
-  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null },
+  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null, state: 'Maharashtra' },
   monthYm: '2026-04',
   ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
 });
@@ -126,7 +126,7 @@ const consecutiveAprilMarks = Array.from({ length: 30 }, (_, i) => ({
 const aprilWithIncentive = computeRowSummary({
   dayMarks: consecutiveAprilMarks,
   policyBundle: { ...aprilBundle, attendance_policy: aprilIncentivePolicy },
-  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null },
+  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null, state: 'Maharashtra' },
   monthYm: '2026-04',
   ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
 });
@@ -146,7 +146,7 @@ assert.equal(aprilWithIncentive.leave_summary.SL_annual, 10);
 const nhPeriodSummary = computeRowSummary({
   dayMarks: [{ mark_date: '2026-04-03', code: 'NH' }],
   policyBundle: aprilBundle,
-  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null },
+  employee: { designation: 'Executive', gender: 'F', doj: '2026-01-01', lwd: null, state: 'Maharashtra' },
   monthYm: '2026-04',
   ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 5, FH: 0 }
 });
@@ -169,7 +169,7 @@ const autoFillBundle = {
 const autoSuggestions = suggestDefaultMarks(autoFillBundle, '2026-04', [
   { mark_date: '2026-04-01', code: 'P' },
   { mark_date: '2026-04-02', code: 'P' }
-]);
+], { doj: '2026-04-01', lwd: null, state: 'Maharashtra' });
 assert.ok(autoSuggestions.some((s) => s.mark_date === '2026-04-04' && s.code === 'W'));
 assert.ok(autoSuggestions.some((s) => s.mark_date === '2026-04-03' && s.code === 'NH'));
 const autoFilledSummary = computeRowSummary({
@@ -179,7 +179,7 @@ const autoFilledSummary = computeRowSummary({
     ...autoSuggestions.map((s) => ({ mark_date: s.mark_date, code: s.code }))
   ],
   policyBundle: autoFillBundle,
-  employee: { designation: 'Executive', gender: 'F', doj: '2026-04-01', lwd: null },
+  employee: { designation: 'Executive', gender: 'F', doj: '2026-04-01', lwd: null, state: 'Maharashtra' },
   monthYm: '2026-04',
   ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
 });
@@ -196,7 +196,7 @@ const mixedMarks = [
 const mixedSummary = computeRowSummary({
   dayMarks: mixedMarks,
   policyBundle: aprilBundle,
-  employee: { designation: 'Executive', gender: 'F', doj: '2026-04-01', lwd: null },
+  employee: { designation: 'Executive', gender: 'F', doj: '2026-04-01', lwd: null, state: 'Maharashtra' },
   monthYm: '2026-04',
   ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
 });

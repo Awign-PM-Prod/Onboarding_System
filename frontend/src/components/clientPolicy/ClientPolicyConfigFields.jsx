@@ -18,10 +18,12 @@ export default function ClientPolicyConfigFields({
   attendancePolicy,
   leaveAllowances,
   holidays,
+  holidaySource = 'custom',
   fieldErrors = {},
   onAttendancePolicyChange,
   onLeaveAllowancesChange,
   onHolidaysChange,
+  onHolidaySourceChange,
   designations = [],
   onDesignationsChange = null,
   showDesignations = false
@@ -90,6 +92,9 @@ export default function ClientPolicyConfigFields({
       <ClientHolidaysInput
         value={holidays}
         onChange={onHolidaysChange}
+        holidaySource={holidaySource}
+        onHolidaySourceChange={onHolidaySourceChange}
+        error={fieldErrors.holiday_source || fieldErrors.holidays}
       />
     </div>
   );

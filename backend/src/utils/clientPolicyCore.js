@@ -279,6 +279,10 @@ export function validateLeaveAllowancesPayload(allowances, designations, errors)
   }
 }
 
+export function normalizeHolidaySource(raw) {
+  return String(raw ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom';
+}
+
 export function validateHolidaysPayload(holidays, errors) {
   if (!Array.isArray(holidays)) {
     errors.holidays = 'must be an array';
@@ -291,15 +295,17 @@ export function validateHolidaysPayload(holidays, errors) {
     const type = h?.holiday_type == null || h?.holiday_type === ''
       ? 'NH'
       : String(h.holiday_type).toUpperCase();
+    const state = String(h?.state ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       errors[`holidays.${i}.holiday_date`] = 'invalid date';
     }
     if (type !== 'NH' && type !== 'FH') {
       errors[`holidays.${i}.holiday_type`] = 'must be NH or FH';
     }
-    if (seen.has(date)) {
+    const key = `${state.toLowerCase()}|${date}`;
+    if (seen.has(key)) {
       errors[`holidays.${i}`] = 'duplicate';
     }
-    seen.add(date);
+    seen.add(key);
   }
 }

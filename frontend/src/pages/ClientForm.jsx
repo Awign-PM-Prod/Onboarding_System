@@ -50,7 +50,8 @@ const emptyForm = {
   designations: [],
   attendance_policy: { ...DEFAULT_ATTENDANCE_POLICY },
   leave_allowances: [],
-  holidays: []
+  holidays: [],
+  holiday_source: 'default'
 };
 
 function downloadBlob(blob, filename) {
@@ -145,7 +146,8 @@ export default function ClientForm() {
           leave_allowances: (found.leave_allowances?.length
             ? found.leave_allowances
             : buildLeaveAllowancesForDesignations(found.designations ?? [])),
-          holidays: found.holidays ?? []
+          holidays: found.holidays ?? [],
+          holiday_source: found.holiday_source === 'default' ? 'default' : 'custom'
         });
       })
       .catch(err => setError(err.message))
@@ -338,7 +340,8 @@ export default function ClientForm() {
           : null,
         cushion_type: form.cushion_enabled ? form.cushion_type : null,
         cushion_value: form.cushion_enabled ? Number(form.cushion_value) : null,
-        holidays: (form.holidays ?? []).filter((h) => h.holiday_date)
+        holidays: (form.holidays ?? []).filter((h) => h.holiday_date),
+        holiday_source: form.holiday_source === 'default' ? 'default' : 'custom'
       };
       delete payload.cushion_enabled;
       if (isEdit) {
@@ -775,11 +778,13 @@ export default function ClientForm() {
               attendancePolicy={form.attendance_policy}
               leaveAllowances={form.leave_allowances}
               holidays={form.holidays}
+              holidaySource={form.holiday_source}
               fieldErrors={fieldErrors}
               designations={form.designations}
               onAttendancePolicyChange={(attendance_policy) => set({ attendance_policy })}
               onLeaveAllowancesChange={(leave_allowances) => set({ leave_allowances })}
               onHolidaysChange={(holidays) => set({ holidays })}
+              onHolidaySourceChange={(holiday_source) => set({ holiday_source })}
             />
           </div>
 

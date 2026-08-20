@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { computeIncentiveFromPolicy, computeRowSummary, computeMaxConsecutivePresentStreak, suggestDefaultMarks } from '../src/utils/attendanceCalculator.js';
+import { computeIncentiveFromPolicy, computeRowSummary, computeMaxConsecutivePresentStreak, holidaysForEmployee, suggestDefaultMarks } from '../src/utils/attendanceCalculator.js';
 import {
   getCalendarMonthPeriod,
   getPayrollPeriod,
@@ -130,6 +130,39 @@ const summaryWithIncentive = computeRowSummary({
   ytdTaken: { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 }
 });
 assert.equal(summaryWithIncentive.incentive, 900);
+
+const mixedHolidays = [
+  { state: 'Maharashtra', holiday_date: '2026-04-03', holiday_type: 'NH' },
+  { state: 'Karnataka', holiday_date: '2026-04-10', holiday_type: 'FH' },
+  { holiday_date: '2026-04-14', holiday_type: 'NH' }
+];
+assert.equal(holidaysForEmployee(mixedHolidays, null).length, 0);
+assert.equal(holidaysForEmployee(mixedHolidays, '').length, 0);
+const mhHolidays = holidaysForEmployee(mixedHolidays, 'Maharashtra');
+assert.equal(mhHolidays.length, 2);
+assert.ok(mhHolidays.every((h) => !h.state || h.state === 'Maharashtra'));
+const kaHolidays = holidaysForEmployee(mixedHolidays, 'Karnataka');
+assert.equal(kaHolidays.length, 2);
+assert.ok(kaHolidays.every((h) => !h.state || h.state === 'Karnataka'));
+
+const mhSuggestions = suggestDefaultMarks(
+  { ...policyBundle, holidays: mixedHolidays },
+  '2026-04',
+  [],
+  { doj: '2026-04-01', lwd: null, state: 'Maharashtra' }
+);
+assert.ok(mhSuggestions.some((s) => s.mark_date === '2026-04-03' && s.code === 'NH'));
+assert.ok(mhSuggestions.some((s) => s.mark_date === '2026-04-14' && s.code === 'NH'));
+assert.ok(!mhSuggestions.some((s) => s.mark_date === '2026-04-10'));
+
+const noStateSuggestions = suggestDefaultMarks(
+  { ...policyBundle, holidays: mixedHolidays },
+  '2026-04',
+  [],
+  { doj: '2026-04-01', lwd: null }
+);
+assert.ok(noStateSuggestions.every((s) => s.code === 'W'));
+assert.ok(!noStateSuggestions.some((s) => s.mark_date === '2026-04-03'));
 
 const defaultSuggestions = suggestDefaultMarks(policyBundle, '2026-04', dayMarks);
 assert.ok(defaultSuggestions.length > 0);

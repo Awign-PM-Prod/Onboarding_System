@@ -2,7 +2,7 @@ import NumericInput from './NumericInput';
 
 const FIELDS = [
   { key: 'sick_days', label: 'Sick' },
-  { key: 'paid_days', label: 'Paid' },
+  { key: 'paid_days', label: 'Casual' },
   { key: 'maternity_days', label: 'Maternity' },
   { key: 'paternity_days', label: 'Paternity' },
   { key: 'earned_days', label: 'Earned' }

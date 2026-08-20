@@ -168,6 +168,7 @@ function SuperAdminLayoutInner() {
   const isClientFormPage = paths.isClientFormPath(pathname);
   const isActivityPage = pathname.startsWith('/super-admin/activity');
   const isSalaryPage = pathname.startsWith('/super-admin/salary-config');
+  const isHolidayCalendarPage = pathname.startsWith('/super-admin/holiday-calendar');
   const isRegionZonesPage = pathname.startsWith('/super-admin/region-zones');
   const isTaskRemindersPage = pathname.startsWith('/super-admin/task-reminders');
   const isStaffAccountsPage = pathname.startsWith('/super-admin/staff-accounts');
@@ -374,6 +375,14 @@ function SuperAdminLayoutInner() {
       label: 'Region Zones',
       active: isRegionZonesPage,
       icon: <IconMap className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
+      id: 'holiday-calendar',
+      to: '/super-admin/holiday-calendar',
+      label: 'Holiday Calendar',
+      active: isHolidayCalendarPage,
+      icon: <IconCalendar className="h-full w-full" />,
       onClick: () => setPanelOpenPersist(false)
     },
     {

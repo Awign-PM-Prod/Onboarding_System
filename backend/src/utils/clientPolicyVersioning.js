@@ -26,9 +26,14 @@ export function normalizePolicyBundleFromJson(policyJson, normalizeAttendancePol
     })),
     holidays: (raw.holidays ?? []).map((h) => ({
       id: h.id ?? null,
+      state: String(h.state ?? '').trim() || null,
       holiday_date: String(h.holiday_date).slice(0, 10),
-      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH'
-    }))
+      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
+      holiday_name: String(h.holiday_name ?? '').trim() || null
+    })),
+    holiday_source: String(raw.holiday_source ?? '').trim().toLowerCase() === 'default'
+      ? 'default'
+      : 'custom'
   };
 }
 
@@ -37,9 +42,14 @@ export function bundleToPolicyJson(bundle) {
     attendance_policy: bundle.attendance_policy,
     leave_allowances: bundle.leave_allowances ?? [],
     holidays: (bundle.holidays ?? []).map((h) => ({
+      state: String(h.state ?? '').trim() || null,
       holiday_date: String(h.holiday_date).slice(0, 10),
-      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH'
-    }))
+      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
+      holiday_name: String(h.holiday_name ?? '').trim() || null
+    })),
+    holiday_source: String(bundle.holiday_source ?? '').trim().toLowerCase() === 'default'
+      ? 'default'
+      : 'custom'
   };
 }
 

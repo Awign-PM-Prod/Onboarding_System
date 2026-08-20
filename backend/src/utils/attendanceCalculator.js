@@ -68,6 +68,18 @@ function holidaysInPeriod(holidays, start, end) {
   return { nh, fh };
 }
 
+/** Holidays that apply to this employee: scoped by work state; unscoped (legacy) apply to all. */
+export function holidaysForEmployee(holidays, employeeState) {
+  const state = String(employeeState ?? '').trim();
+  if (!state) return [];
+  const key = state.toLowerCase();
+  return (holidays ?? []).filter((h) => {
+    const hs = String(h?.state ?? '').trim();
+    if (!hs) return true;
+    return hs.toLowerCase() === key;
+  });
+}
+
 function emptyYtd() {
   return { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 };
 }
@@ -158,7 +170,7 @@ export function computeRowSummary({
 }) {
   const policy = policyBundle?.attendance_policy ?? {};
   const leaveAllowances = policyBundle?.leave_allowances ?? [];
-  const holidays = policyBundle?.holidays ?? [];
+  const holidays = holidaysForEmployee(policyBundle?.holidays, employee?.state);
 
   const period = getCalendarMonthPeriod(monthYm);
   const periodDates = datesInPeriod(period.start, period.end);
@@ -284,7 +296,7 @@ export function computeRowSummary({
  */
 export function suggestDefaultMarks(policyBundle, monthYm, existingMarks = [], employee = null) {
   const policy = policyBundle?.attendance_policy ?? {};
-  const holidays = policyBundle?.holidays ?? [];
+  const holidays = holidaysForEmployee(policyBundle?.holidays, employee?.state);
   const period = getCalendarMonthPeriod(monthYm);
   const existing = new Set((existingMarks ?? []).map((m) => parseIso(m.mark_date)).filter(Boolean));
   const holidayMap = new Map();

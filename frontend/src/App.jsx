@@ -25,6 +25,7 @@ import SuperAdminDashboardHome from './pages/SuperAdminDashboardHome';
 import SuperAdminClientsPage from './pages/SuperAdminClientsPage';
 import SuperAdminActivityPage from './pages/SuperAdminActivityPage';
 import SuperAdminSalaryConfigPage from './pages/SuperAdminSalaryConfigPage';
+import SuperAdminHolidayCalendarPage from './pages/SuperAdminHolidayCalendarPage';
 import SuperAdminRegionZonesPage from './pages/SuperAdminRegionZonesPage';
 import SuperAdminTaskRemindersPage from './pages/SuperAdminTaskRemindersPage';
 import SuperAdminStaffAccountsPage from './pages/SuperAdminStaffAccountsPage';
@@ -147,6 +148,7 @@ export default function App() {
         </Route>
         <Route path="activity" element={<SuperAdminActivityPage />} />
         <Route path="salary-config" element={<SuperAdminSalaryConfigPage />} />
+        <Route path="holiday-calendar" element={<SuperAdminHolidayCalendarPage />} />
         <Route path="region-zones" element={<SuperAdminRegionZonesPage />} />
         <Route path="task-reminders" element={<SuperAdminTaskRemindersPage />} />
         <Route path="staff-accounts" element={<SuperAdminStaffAccountsPage />} />

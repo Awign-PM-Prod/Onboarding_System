@@ -23,7 +23,8 @@ function applyClientPolicyState(found, setters) {
     setDesignations,
     setAttendancePolicy,
     setLeaveAllowances,
-    setHolidays
+    setHolidays,
+    setHolidaySource
   } = setters;
   setClient(found);
   // Include designations found on the client's employees so every employee in
@@ -38,6 +39,9 @@ function applyClientPolicyState(found, setters) {
     buildLeaveAllowancesForDesignations(mergedDesignations, found.leave_allowances ?? [])
   );
   setHolidays(found.holidays ?? []);
+  if (typeof setHolidaySource === 'function') {
+    setHolidaySource(found.holiday_source === 'default' ? 'default' : 'custom');
+  }
 }
 
 async function fetchClientForPolicy(id) {
@@ -59,6 +63,7 @@ export default function PayrollClientPolicyPage() {
   const [attendancePolicy, setAttendancePolicy] = useState({ ...DEFAULT_ATTENDANCE_POLICY });
   const [leaveAllowances, setLeaveAllowances] = useState([]);
   const [holidays, setHolidays] = useState([]);
+  const [holidaySource, setHolidaySource] = useState('custom');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -80,7 +85,8 @@ export default function PayrollClientPolicyPage() {
         setDesignations,
         setAttendancePolicy,
         setLeaveAllowances,
-        setHolidays
+        setHolidays,
+        setHolidaySource
       });
     } catch (err) {
       setError(err.message);
@@ -135,6 +141,7 @@ export default function PayrollClientPolicyPage() {
         attendance_policy: policyPayload,
         leave_allowances: leaveAllowances,
         holidays: holidays.filter((h) => h.holiday_date),
+        holiday_source: holidaySource === 'default' ? 'default' : 'custom',
         effective_from_month: effectiveFromMonth
       };
 
@@ -174,7 +181,8 @@ export default function PayrollClientPolicyPage() {
         setDesignations,
         setAttendancePolicy,
         setLeaveAllowances,
-        setHolidays
+        setHolidays,
+        setHolidaySource
       });
       emitClientPolicyUpdated(client.id);
       // Always reload from server so the form matches persisted DB state.
@@ -297,6 +305,7 @@ export default function PayrollClientPolicyPage() {
           attendancePolicy={attendancePolicy}
           leaveAllowances={leaveAllowances}
           holidays={holidays}
+          holidaySource={holidaySource}
           fieldErrors={fieldErrors}
           designations={designations}
           showDesignations
@@ -304,6 +313,7 @@ export default function PayrollClientPolicyPage() {
           onAttendancePolicyChange={setAttendancePolicy}
           onLeaveAllowancesChange={setLeaveAllowances}
           onHolidaysChange={setHolidays}
+          onHolidaySourceChange={setHolidaySource}
         />
         <div className="mt-6 flex justify-end">
           <button

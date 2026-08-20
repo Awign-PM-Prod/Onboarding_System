@@ -10,14 +10,17 @@ export {
   datesInPeriod,
   validateAttendancePolicyPayload,
   validateLeaveAllowancesPayload,
-  validateHolidaysPayload
+  validateHolidaysPayload,
+  normalizeHolidaySource
 } from './clientPolicyCore.js';
 
 import { supabaseAdmin } from '../supabase.js';
 import {
   DEFAULT_ATTENDANCE_POLICY,
-  normalizeAttendancePolicy
+  normalizeAttendancePolicy,
+  normalizeHolidaySource
 } from './clientPolicyCore.js';
+import { listHolidayCalendars, normalizeHolidayName } from './holidayCalendar.js';
 import {
   BASELINE_POLICY_MONTH,
   bundleToPolicyJson,
@@ -28,13 +31,35 @@ import {
 
 export { BASELINE_POLICY_MONTH, monthYmToDate, selectPolicyBundleForMonth };
 
+async function applyDefaultCalendarHolidays(bundle, year) {
+  if (normalizeHolidaySource(bundle?.holiday_source) !== 'default') return bundle;
+  if (!year) {
+    return { ...bundle, holidays: [] };
+  }
+  const rows = await listHolidayCalendars({ year });
+  return {
+    ...bundle,
+    holidays: rows.map((h) => ({
+      id: h.id,
+      state: h.state || null,
+      holiday_date: h.holiday_date,
+      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
+      holiday_name: normalizeHolidayName(h.holiday_name)
+    }))
+  };
+}
+
 /**
  * Policy bundle effective for a given attendance month (YYYY-MM or YYYY-MM-DD).
  * Uses versioned snapshots; falls back to live tables when no version matches.
  */
 export async function fetchClientPolicyBundleForMonth(clientId, monthYm) {
   const monthDate = monthYmToDate(monthYm);
-  if (!monthDate) return fetchClientPolicyBundle(clientId);
+  const year = monthDate ? Number(String(monthDate).slice(0, 4)) : null;
+  if (!monthDate) {
+    const live = await fetchClientPolicyBundle(clientId);
+    return applyDefaultCalendarHolidays(live, year);
+  }
 
   const { data: versions, error: vErr } = await supabaseAdmin
     .from('client_policy_versions')
@@ -45,9 +70,10 @@ export async function fetchClientPolicyBundleForMonth(clientId, monthYm) {
   if (vErr) throw vErr;
 
   const bundle = selectPolicyBundleForMonth(versions ?? [], monthYm, normalizeAttendancePolicy);
-  if (bundle) return bundle;
+  if (bundle) return applyDefaultCalendarHolidays(bundle, year);
 
-  return fetchClientPolicyBundle(clientId);
+  const live = await fetchClientPolicyBundle(clientId);
+  return applyDefaultCalendarHolidays(live, year);
 }
 
 export async function insertClientPolicyVersion(clientId, effectiveFromMonth, bundle, actorUserId = null) {
@@ -114,10 +140,18 @@ export async function fetchClientPolicyBundle(clientId) {
 
   const { data: holidays, error: hErr } = await supabaseAdmin
     .from('client_holidays')
-    .select('id, holiday_date, holiday_type')
+    .select('id, holiday_date, holiday_type, state, holiday_name')
     .eq('client_id', clientId)
     .order('holiday_date', { ascending: true });
-  if (hErr) throw hErr;
+  if (hErr) {
+    const msg = String(hErr.message || '');
+    if (msg.includes('holiday_name')) {
+      throw new Error(
+        'Client holiday name column is missing. Run migration 20260820180000_client_holidays_name.sql in Supabase.'
+      );
+    }
+    throw hErr;
+  }
 
   return {
     attendance_policy: policy
@@ -134,9 +168,12 @@ export async function fetchClientPolicyBundle(clientId) {
     })),
     holidays: (holidays ?? []).map((h) => ({
       id: h.id,
+      state: String(h.state ?? '').trim() || null,
       holiday_date: String(h.holiday_date).slice(0, 10),
-      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH'
-    }))
+      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
+      holiday_name: normalizeHolidayName(h.holiday_name)
+    })),
+    holiday_source: normalizeHolidaySource(policy?.holiday_source)
   };
 }
 
@@ -160,6 +197,7 @@ export async function upsertClientPolicyBundle(clientId, body) {
     incentive_applicable: policy.incentive_applicable,
     incentive_min_days: policy.incentive_min_days,
     incentive_value: policy.incentive_value,
+    holiday_source: normalizeHolidaySource(body.holiday_source ?? body.attendance_policy?.holiday_source),
     updated_at: new Date().toISOString()
   };
   const { data: saved, error: pErr } = await supabaseAdmin
@@ -172,6 +210,16 @@ export async function upsertClientPolicyBundle(clientId, body) {
     if (msg.includes('incentive_')) {
       throw new Error(
         'Incentive policy columns are missing in the database. Run migration 20260727170000_client_incentive_policy.sql in Supabase.'
+      );
+    }
+    if (msg.includes('holiday_source')) {
+      throw new Error(
+        'Holiday calendar column is missing in the database. Run migration 20260820140000_holiday_calendars.sql in Supabase.'
+      );
+    }
+    if (msg.includes('client_holidays') && msg.includes('state')) {
+      throw new Error(
+        'Client holiday state column is missing. Run migration 20260820153000_client_holidays_state.sql in Supabase.'
       );
     }
     throw pErr;
@@ -193,14 +241,34 @@ export async function upsertClientPolicyBundle(clientId, body) {
   }
 
   await supabaseAdmin.from('client_holidays').delete().eq('client_id', clientId);
-  const holidayRows = (body.holidays ?? []).map((h) => ({
-    client_id: clientId,
-    holiday_date: String(h.holiday_date).slice(0, 10),
-    holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH'
-  }));
+  const holidaySource = normalizeHolidaySource(row.holiday_source);
+  const holidayRows = holidaySource === 'default'
+    ? []
+    : (body.holidays ?? [])
+      .filter((h) => String(h?.holiday_date ?? '').slice(0, 10))
+      .map((h) => ({
+        client_id: clientId,
+        state: String(h.state ?? '').trim() || null,
+        holiday_date: String(h.holiday_date).slice(0, 10),
+        holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
+        holiday_name: normalizeHolidayName(h.holiday_name)
+      }));
   if (holidayRows.length) {
     const { error: hErr } = await supabaseAdmin.from('client_holidays').insert(holidayRows);
-    if (hErr) throw hErr;
+    if (hErr) {
+      const msg = String(hErr.message || '');
+      if (msg.includes('column') && msg.includes('holiday_name')) {
+        throw new Error(
+          'Client holiday name column is missing. Run migration 20260820180000_client_holidays_name.sql in Supabase.'
+        );
+      }
+      if (msg.includes('column') && msg.includes('state')) {
+        throw new Error(
+          'Client holiday state column is missing. Run migration 20260820153000_client_holidays_state.sql in Supabase.'
+        );
+      }
+      throw hErr;
+    }
   }
 
   return normalizeAttendancePolicy(saved);

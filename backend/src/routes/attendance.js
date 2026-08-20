@@ -10,6 +10,7 @@ import {
 import {
   fetchYtdTakenByEmployee,
   applyDefaultMarksForRow,
+  attachEmployeeStatesToRows,
   loadClientPolicyForResponse,
   recalculateAllAttendanceSheetsForClient,
   recalculateForwardYtdForEmployees,
@@ -455,16 +456,19 @@ async function fetchSheetBundle(sheetId) {
     .eq('sheet_id', sheetId);
   if (gErr) throw gErr;
 
+  const mapped = (rows ?? []).map((r) => ({
+    ...r,
+    day_marks: (marksByRow.get(r.id) ?? []).map((m) => ({
+      ...m,
+      mark_date: String(m.mark_date ?? '').slice(0, 10)
+    }))
+  }));
+  const withState = await attachEmployeeStatesToRows(mapped);
+
   return {
     sheet,
     grant_user_ids: (grants ?? []).map((g) => g.user_id),
-    rows: (rows ?? []).map((r) => ({
-      ...r,
-      day_marks: (marksByRow.get(r.id) ?? []).map((m) => ({
-        ...m,
-        mark_date: String(m.mark_date ?? '').slice(0, 10)
-      }))
-    }))
+    rows: withState
   };
 }
 
@@ -1348,6 +1352,8 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
         .maybeSingle();
       if (rowErr) throw rowErr;
       if (!row) continue;
+      const [rowWithState] = await attachEmployeeStatesToRows([row]);
+      Object.assign(row, rowWithState);
 
       const beforeFields = {
         status_label: row.status_label,
@@ -1515,7 +1521,7 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
         allMarks ?? [],
         client_policy,
         monthYmVal,
-        { doj: row.doj, lwd: effectiveLwd }
+        { doj: row.doj, lwd: effectiveLwd, state: row.state }
       );
 
       const ytdMap = row.employee_id
@@ -1685,6 +1691,8 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
       .maybeSingle();
     if (rowErr) throw rowErr;
     if (!row) return res.status(404).json({ error: 'Row not found' });
+    const [rowWithState] = await attachEmployeeStatesToRows([row]);
+    Object.assign(row, rowWithState);
 
     if (isAfterLwd(markDate, row.lwd)) {
       return res.status(400).json({ error: 'Cannot mark attendance after last working date.' });
@@ -1738,7 +1746,7 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
       allMarks ?? [],
       client_policy,
       monthYmVal,
-      { doj: row.doj, lwd: row.lwd }
+      { doj: row.doj, lwd: row.lwd, state: row.state }
     );
 
     const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();

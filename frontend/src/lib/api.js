@@ -596,6 +596,26 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ items })
     }),
+  listSuperAdminHolidayCalendars: ({ year, state } = {}) => {
+    const q = new URLSearchParams();
+    if (year) q.set('year', String(year));
+    if (state) q.set('state', state);
+    const qs = q.toString();
+    return request(`/api/super-admin/holiday-calendars${qs ? `?${qs}` : ''}`);
+  },
+  saveSuperAdminHolidayCalendars: (items) =>
+    request('/api/super-admin/holiday-calendars', {
+      method: 'PUT',
+      body: JSON.stringify({ items })
+    }),
+  downloadHolidayCalendarTemplate: () =>
+    fileRequest('/api/super-admin/holiday-calendars/template'),
+  listHolidayCalendars: ({ state, year } = {}) => {
+    const q = new URLSearchParams();
+    if (state) q.set('state', state);
+    if (year) q.set('year', String(year));
+    return request(`/api/holiday-calendars?${q.toString()}`);
+  },
   listRegionZones: (state) => {
     const q = new URLSearchParams();
     if (state) q.set('state', state);

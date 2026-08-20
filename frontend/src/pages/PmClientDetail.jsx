@@ -1448,11 +1448,12 @@ export default function PmClientDetail() {
   return (
     <main className="min-h-full">
         {client && activeTab !== 'attendance' && (
-          <header className="sticky top-0 z-[60] isolate border-b border-slate-200 bg-white shadow-sm">
-            <div className="mx-auto w-[98%] px-6 pb-4 pt-5">
+          <header className="border-b border-slate-200 bg-white shadow-sm">
+            <div className="mx-auto w-[98%] px-6 py-3">
               <ClientProjectMetaHeader
                 title={client.client_name}
                 contractCode={client.contract_code}
+                showProgramManagerName={false}
                 contractStartDate={client.contract_start_date}
                 contractEndDate={client.contract_end_date}
                 openEndedContract={Boolean(client.open_ended_contract)}
@@ -1463,11 +1464,11 @@ export default function PmClientDetail() {
                 plRejectedCount={plRejectedRows.length}
                 insuranceApplicable={Boolean(client.insurance_applicable)}
               >
-                <nav className="mt-4 flex flex-wrap items-center gap-2" aria-label="Client views">
+                <nav className="mt-2.5 flex flex-wrap items-center gap-2" aria-label="Client views">
                   <NavLink
                     to={pmClientTabUrl(id, 'client_dashboard')}
                     className={({ isActive }) =>
-                      `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      `rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
                         isActive
                           ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
                           : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
@@ -1479,7 +1480,7 @@ export default function PmClientDetail() {
                   <NavLink
                     to={pmClientTabUrl(id, 'testing')}
                     className={({ isActive }) =>
-                      `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      `rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
                         isActive
                           ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200/80'
                           : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'

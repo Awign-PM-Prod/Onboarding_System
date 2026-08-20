@@ -20,6 +20,14 @@ function formatIncentive(policy) {
   return `₹${policy.incentive_value} at ${policy.incentive_min_days}+ consecutive present days`;
 }
 
+function formatHolidayChange(key) {
+  const pipe = String(key).indexOf('|');
+  const rest = pipe >= 0 ? key.slice(pipe + 1) : key;
+  const stateLabel = pipe >= 0 ? `${key.slice(0, pipe)} ` : '';
+  const [date, type] = rest.split(':');
+  return `${stateLabel}${date} (${type})`;
+}
+
 function holidayKeys(holidays) {
   return new Set(
     (holidays ?? [])
@@ -27,7 +35,8 @@ function holidayKeys(holidays) {
         const date = String(h.holiday_date ?? '').slice(0, 10);
         if (!date) return null;
         const type = h.holiday_type === 'FH' ? 'FH' : 'NH';
-        return `${date}:${type}`;
+        const state = String(h.state ?? '').trim();
+        return state ? `${state}|${date}:${type}` : `${date}:${type}`;
       })
       .filter(Boolean)
   );
@@ -215,18 +224,22 @@ export function diffClientPolicyBundles(before, after) {
     changes.push(`Incentive: ${bIncentive} → ${aIncentive}`);
   }
 
+  const bSource = String(before?.holiday_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
+  const aSource = String(after?.holiday_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
+  if (bSource !== aSource) {
+    changes.push(`Holiday calendar: ${bSource} → ${aSource}`);
+  }
+
   const bHolidays = holidayKeys(before?.holidays);
   const aHolidays = holidayKeys(after?.holidays);
   for (const key of aHolidays) {
     if (!bHolidays.has(key)) {
-      const [date, type] = key.split(':');
-      changes.push(`Holiday added: ${date} (${type})`);
+      changes.push(`Holiday added: ${formatHolidayChange(key)}`);
     }
   }
   for (const key of bHolidays) {
     if (!aHolidays.has(key)) {
-      const [date, type] = key.split(':');
-      changes.push(`Holiday removed: ${date} (${type})`);
+      changes.push(`Holiday removed: ${formatHolidayChange(key)}`);
     }
   }
 

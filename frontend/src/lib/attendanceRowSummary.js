@@ -31,7 +31,8 @@ export function previewRowSummary(row, clientPolicy, monthYm) {
       designation: row.designation,
       gender: row.gender,
       doj: row.doj,
-      lwd: row.lwd
+      lwd: row.lwd,
+      state: row.state
     },
     monthYm: month,
     ytdTaken: ytdTakenBeforeCurrentPeriod(row)

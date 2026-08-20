@@ -100,7 +100,7 @@ export default function EmployeeTable({
   }
 
   return (
-    <div className="max-h-[70vh] overflow-auto rounded-lg border border-slate-200 bg-white">
+    <div className="max-h-[min(36rem,calc(100dvh-18rem))] overflow-x-auto overflow-y-scroll overscroll-contain rounded-lg border border-slate-200 bg-white [scrollbar-gutter:stable]">
       <table className="min-w-[1200px] w-full border-separate border-spacing-0 text-sm">
         <thead className="bg-slate-50 text-slate-600">
           <tr>

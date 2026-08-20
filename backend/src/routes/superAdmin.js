@@ -16,6 +16,9 @@ import { buildLoginLink, buildPasswordResetEmail } from '../utils/staffInvite.js
 import { createStaffInviteUser } from '../utils/createStaffInviteUser.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
 import { unlockExpiresAtFromNow } from '../utils/unlockTtl.js';
+import { listHolidayCalendars, replaceHolidayCalendars, findDefaultCalendarClientIds } from '../utils/holidayCalendar.js';
+import { buildHolidayCalendarTemplateCsv } from '../utils/holidayCalendarCsv.js';
+import { recalculateAllAttendanceSheetsForClient } from '../utils/attendanceRecalc.js';
 
 const router = Router();
 
@@ -1377,6 +1380,78 @@ router.post('/joining-status-change-requests/:id/review', async (req, res, next)
 
     return res.json({ request: updatedReq });
   } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/super-admin/holiday-calendars?year=&state=
+router.get('/holiday-calendars', async (req, res, next) => {
+  try {
+    const items = await listHolidayCalendars({
+      state: req.query.state,
+      year: req.query.year
+    });
+    res.json(items);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// GET /api/super-admin/holiday-calendars/template
+router.get('/holiday-calendars/template', (_req, res) => {
+  const csv = buildHolidayCalendarTemplateCsv();
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="holiday-calendar-template.csv"');
+  return res.send(csv);
+});
+
+// PUT /api/super-admin/holiday-calendars — replace each (state, year) present in items
+router.put('/holiday-calendars', async (req, res, next) => {
+  try {
+    const rawItems = Array.isArray(req.body?.items) ? req.body.items : null;
+    if (!rawItems) {
+      return res.status(400).json({ error: 'items array is required' });
+    }
+
+    const { items, replaced } = await replaceHolidayCalendars(rawItems);
+
+    let sheetsRecalculated = 0;
+    const recalcErrors = [];
+    try {
+      const clientIds = await findDefaultCalendarClientIds();
+      const years = [...new Set((replaced ?? []).map((p) => p.year).filter(Boolean))];
+      for (const year of years) {
+        for (const clientId of clientIds) {
+          const result = await recalculateAllAttendanceSheetsForClient(clientId, { year });
+          sheetsRecalculated += Number(result?.sheets_recalculated) || 0;
+        }
+      }
+    } catch (recalcErr) {
+      recalcErrors.push(recalcErr?.message || String(recalcErr));
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'HOLIDAY_CALENDAR_UPDATED',
+      entityType: 'holiday_calendars',
+      summary: `Updated holiday calendar for ${replaced.length} state-year set(s) (${items.length} date(s))`,
+      metadata: {
+        replaced,
+        item_count: items.length,
+        sheets_recalculated: sheetsRecalculated
+      }
+    });
+
+    res.json({
+      items,
+      replaced,
+      sheets_recalculated: sheetsRecalculated,
+      recalc_errors: recalcErrors
+    });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message, details: err.details });
+    }
     next(err);
   }
 });

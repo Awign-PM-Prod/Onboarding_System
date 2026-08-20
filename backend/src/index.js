@@ -16,6 +16,7 @@ import payrollHeadRouter from './routes/payrollHead.js';
 import superAdminRouter from './routes/superAdmin.js';
 import salaryMinimumsRouter from './routes/salaryMinimums.js';
 import regionZonesRouter from './routes/regionZones.js';
+import holidayCalendarsRouter from './routes/holidayCalendars.js';
 import attendanceRouter from './routes/attendance.js';
 import { startSupabaseKeepAlive } from './jobs/supabaseKeepAlive.js';
 
@@ -57,6 +58,7 @@ app.use('/api/admin', requireAuth, payrollHeadRouter);
 app.use('/api/super-admin', requireAuth, superAdminRouter);
 app.use('/api/salary-minimums', requireAuth, salaryMinimumsRouter);
 app.use('/api/region-zones', requireAuth, regionZonesRouter);
+app.use('/api/holiday-calendars', requireAuth, holidayCalendarsRouter);
 
 app.use((err, _req, res, _next) => {
   console.error('[api error]', err);

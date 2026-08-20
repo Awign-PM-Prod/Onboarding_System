@@ -15,6 +15,22 @@ function monthYm(dateOrYm) {
   return null;
 }
 
+export async function attachEmployeeStatesToRows(rows) {
+  const list = rows ?? [];
+  const ids = [...new Set(list.map((r) => r.employee_id).filter(Boolean))];
+  if (!ids.length) return list;
+  const { data, error } = await supabaseAdmin
+    .from('employees')
+    .select('id, state')
+    .in('id', ids);
+  if (error) throw error;
+  const byId = new Map((data ?? []).map((e) => [e.id, e.state ?? null]));
+  return list.map((r) => ({
+    ...r,
+    state: r.state ?? byId.get(r.employee_id) ?? null
+  }));
+}
+
 async function fetchSheetRowsWithMarks(sheetId) {
   const { data: rows, error: rowsErr } = await supabaseAdmin
     .from('attendance_rows')
@@ -41,22 +57,24 @@ async function fetchSheetRowsWithMarks(sheetId) {
     marksByRow.get(m.row_id).push(m);
   }
 
-  return (rows ?? []).map((r) => ({
+  const withMarks = (rows ?? []).map((r) => ({
     ...r,
     day_marks: (marksByRow.get(r.id) ?? []).map((m) => ({
       ...m,
       mark_date: String(m.mark_date ?? '').slice(0, 10)
     }))
   }));
+  return attachEmployeeStatesToRows(withMarks);
 }
 
 /**
  * Recalculate attendance sheets for a client after policy changes.
  * @param {string} clientId
- * @param {{ fromMonthYm?: string }} [options] - only sheets with attendance_month >= fromMonthYm
+ * @param {{ fromMonthYm?: string, year?: number }} [options] - only sheets with attendance_month >= fromMonthYm, optionally limited to a calendar year
  */
 export async function recalculateAllAttendanceSheetsForClient(clientId, options = {}) {
   const fromMonthDate = options.fromMonthYm ? monthYmToDate(options.fromMonthYm) : null;
+  const year = options.year != null && options.year !== '' ? Number(options.year) : null;
 
   let query = supabaseAdmin
     .from('attendance_sheets')
@@ -65,6 +83,9 @@ export async function recalculateAllAttendanceSheetsForClient(clientId, options 
     .order('attendance_month', { ascending: true });
   if (fromMonthDate) {
     query = query.gte('attendance_month', fromMonthDate);
+  }
+  if (Number.isInteger(year) && year >= 1900 && year <= 2100) {
+    query = query.gte('attendance_month', `${year}-01-01`).lte('attendance_month', `${year}-12-31`);
   }
   const { data: sheets, error } = await query;
   if (error) throw error;
@@ -162,7 +183,7 @@ export async function applyDefaultMarksForRows(rowsWithMarks, policyBundle, mont
 
   let applied = 0;
   for (const row of rowsWithMarks) {
-    const employee = { doj: row.doj, lwd: row.lwd };
+    const employee = { doj: row.doj, lwd: row.lwd, state: row.state };
     const suggestions = suggestDefaultMarks(policyBundle, monthYmVal, row.day_marks ?? [], employee);
     if (!suggestions.length) continue;
 
@@ -237,7 +258,8 @@ export async function recalculateRowSummary({
       designation: row.designation,
       gender: row.gender,
       doj: row.doj,
-      lwd: row.lwd
+      lwd: row.lwd,
+      state: row.state
     },
     monthYm: monthYmParam,
     ytdTaken: ytdTaken ?? mergeYtdTaken([])

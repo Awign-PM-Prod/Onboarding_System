@@ -9,7 +9,8 @@ import {
   monthYmToDate,
   validateAttendancePolicyPayload,
   validateHolidaysPayload,
-  validateLeaveAllowancesPayload
+  validateLeaveAllowancesPayload,
+  normalizeHolidaySource
 } from '../utils/clientPolicy.js';
 import { normalizeAttendancePolicy } from '../utils/clientPolicyCore.js';
 import { recalculateAllAttendanceSheetsForClient } from '../utils/attendanceRecalc.js';
@@ -265,7 +266,11 @@ function validateClientPayload(body) {
   if (designationNames.length) {
     validateLeaveAllowancesPayload(body.leave_allowances, designationNames, errors);
   }
-  validateHolidaysPayload(body.holidays, errors);
+  const holidaySource = normalizeHolidaySource(body.holiday_source ?? body.attendance_policy?.holiday_source);
+  body.holiday_source = holidaySource;
+  if (holidaySource === 'custom') {
+    validateHolidaysPayload(body.holidays, errors);
+  }
 
   return errors;
 }
@@ -936,7 +941,12 @@ router.put('/:id/policy', async (req, res, next) => {
     if (designationNames.length) {
       validateLeaveAllowancesPayload(req.body?.leave_allowances, designationNames, errors);
     }
-    validateHolidaysPayload(req.body?.holidays, errors);
+    req.body.holiday_source = normalizeHolidaySource(
+      req.body?.holiday_source ?? req.body?.attendance_policy?.holiday_source
+    );
+    if (req.body.holiday_source === 'custom') {
+      validateHolidaysPayload(req.body?.holidays, errors);
+    }
     const effectiveFrom = req.body?.effective_from_month ?? req.body?.effectiveFromMonth;
     if (effectiveFrom && !monthYmToDate(effectiveFrom)) {
       errors.effective_from_month = 'must be YYYY-MM';

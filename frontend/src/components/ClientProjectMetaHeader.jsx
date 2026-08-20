@@ -8,7 +8,7 @@ function MetaItem({ label, children }) {
   return (
     <div className="min-w-0">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{label}</p>
-      <div className="mt-1 text-sm font-semibold text-indigo-950">{children}</div>
+      <div className="mt-0.5 text-sm font-semibold leading-snug text-indigo-950">{children}</div>
     </div>
   );
 }
@@ -21,6 +21,7 @@ export default function ClientProjectMetaHeader({
   title,
   contractCode,
   programManagerName,
+  showProgramManagerName = true,
   contractStartDate,
   contractEndDate,
   openEndedContract = false,
@@ -60,7 +61,7 @@ export default function ClientProjectMetaHeader({
   return (
     <div className={className}>
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="min-w-0 break-words text-xl font-semibold tracking-tight text-indigo-950 sm:text-2xl">
+        <h1 className="min-w-0 break-words text-lg font-semibold tracking-tight text-indigo-950 sm:text-xl">
           {title || 'Client Dashboard'}
         </h1>
         {insuranceApplicable && (
@@ -70,14 +71,16 @@ export default function ClientProjectMetaHeader({
         )}
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 xl:items-start xl:gap-x-8">
+      <div className="mt-2.5 grid grid-cols-1 gap-x-8 gap-y-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 xl:items-start">
         <MetaItem label="Contract Code">
           <span className="font-mono">{contractCode || '—'}</span>
         </MetaItem>
 
-        <MetaItem label="Undertaking PM Name">
-          {programManagerName || '—'}
-        </MetaItem>
+        {showProgramManagerName && (
+          <MetaItem label="Undertaking PM Name">
+            {programManagerName || '—'}
+          </MetaItem>
+        )}
 
         {(entity || state) && (
           <MetaItem label="Entity / State">
@@ -131,7 +134,7 @@ export default function ClientProjectMetaHeader({
       </div>
 
       {typeof onMonthChange === 'function' && (
-        <div className="mt-5 flex flex-wrap items-center gap-3">
+        <div className="mt-3 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-3 text-sm font-medium text-indigo-950">
             Attendance Month
             <input

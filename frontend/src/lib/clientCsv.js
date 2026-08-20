@@ -50,6 +50,7 @@ export const CLIENT_CSV_HEADERS = [
   'leave_paternity_days',
   'leave_earned_days',
   'leave_allowances_detail',
+  'holiday_source',
   'holidays'
 ];
 
@@ -85,7 +86,10 @@ function encodeHolidays(holidays) {
       const date = String(h?.holiday_date ?? '').slice(0, 10);
       if (!date) return null;
       const type = h?.holiday_type === 'FH' ? 'FH' : 'NH';
-      return `${date}:${type}`;
+      const state = String(h?.state ?? '').trim();
+      const name = String(h?.holiday_name ?? '').trim();
+      const base = state ? `${state}:${date}:${type}` : `${date}:${type}`;
+      return name ? `${base}:${name}` : base;
     })
     .filter(Boolean)
     .join(';');
@@ -101,6 +105,10 @@ function cell(row, key) {
   const v = row?.[key];
   if (v == null) return '';
   return String(v).trim();
+}
+
+function parseHolidaySource(raw) {
+  return String(raw ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom';
 }
 
 function parseBool(raw, defaultValue = false) {
@@ -155,11 +163,18 @@ function encodeDesignations(designations) {
 function parseHolidays(raw) {
   return splitList(raw, ';')
     .map((part) => {
-      const [datePart, typePart] = part.split(':').map((s) => s.trim());
-      if (!datePart) return null;
+      const bits = part.split(':').map((s) => s.trim());
+      const dateIdx = bits.findIndex((b) => /^\d{4}-\d{2}-\d{2}$/.test(String(b).slice(0, 10)));
+      if (dateIdx < 0) return null;
+      const datePart = bits[dateIdx].slice(0, 10);
+      const typePart = bits[dateIdx + 1];
+      const state = bits.slice(0, dateIdx).join(':');
+      const name = bits.slice(dateIdx + 2).join(':');
       return {
-        holiday_date: datePart.slice(0, 10),
-        holiday_type: typePart === 'FH' ? 'FH' : 'NH'
+        state: state || null,
+        holiday_date: datePart,
+        holiday_type: typePart === 'FH' ? 'FH' : 'NH',
+        holiday_name: name || null
       };
     })
     .filter(Boolean);
@@ -298,6 +313,7 @@ export function csvRowToClientForm(row, programManagers = []) {
     designations,
     attendance_policy,
     leave_allowances: buildLeaveAllowances(designations, row),
+    holiday_source: parseHolidaySource(cell(row, 'holiday_source')),
     holidays: parseHolidays(cell(row, 'holidays'))
   };
 }
@@ -344,7 +360,8 @@ export function buildClientTemplateCsv() {
     leave_paternity_days: '15',
     leave_earned_days: '18',
     leave_allowances_detail: 'Technician:6|12|180|15|18;Supervisor:6|12|180|15|18',
-    holidays: '2026-01-26:NH;2026-08-15:NH;2026-10-02:FH'
+    holiday_source: 'custom',
+    holidays: 'Maharashtra:2026-01-26:NH:Republic Day;Karnataka:2026-08-15:NH:Independence Day;2026-10-02:FH'
   };
   return Papa.unparse({
     fields: CLIENT_CSV_HEADERS,
@@ -416,6 +433,7 @@ export function clientToExportRow(client, programManagerEmail = '') {
     leave_paternity_days: firstLeaveValue(leaveAllowances, 'paternity_days'),
     leave_earned_days: firstLeaveValue(leaveAllowances, 'earned_days'),
     leave_allowances_detail: encodeLeaveAllowancesDetail(leaveAllowances),
+    holiday_source: client?.holiday_source === 'default' ? 'default' : 'custom',
     holidays: encodeHolidays(holidays),
     created_at: client?.created_at ?? ''
   };
