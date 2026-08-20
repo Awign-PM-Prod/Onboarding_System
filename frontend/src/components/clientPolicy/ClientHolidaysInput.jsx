@@ -51,6 +51,38 @@ function allDatedHolidaysAreYear(holidays, y) {
   return dated.every((h) => holidayYear(h) === y);
 }
 
+function stateKeyOf(h) {
+  return String(h?.state ?? '').trim();
+}
+
+function hasHolidayDate(h) {
+  return Boolean(String(h?.holiday_date ?? '').trim());
+}
+
+/** Drop custom states that have no dated holidays, except those in keepStates. */
+function pruneUndatedOnlyStates(holidays, keepStates = []) {
+  const keep = new Set((keepStates ?? []).filter(Boolean));
+  const dated = new Set();
+  for (const h of holidays ?? []) {
+    const st = stateKeyOf(h);
+    if (st && hasHolidayDate(h)) dated.add(st);
+  }
+  return (holidays ?? []).filter((h) => {
+    const st = stateKeyOf(h);
+    if (!st) return hasHolidayDate(h);
+    if (keep.has(st)) return true;
+    return dated.has(st);
+  });
+}
+
+function dropUndatedOnlyState(holidays, state) {
+  const st = String(state ?? '').trim();
+  if (!st) return holidays ?? [];
+  const dated = (holidays ?? []).some((h) => stateKeyOf(h) === st && hasHolidayDate(h));
+  if (dated) return holidays ?? [];
+  return (holidays ?? []).filter((h) => stateKeyOf(h) !== st);
+}
+
 function groupByState(rows, yearFilter) {
   const byState = new Map();
   for (const h of rows ?? []) {
@@ -207,6 +239,15 @@ export default function ClientHolidaysInput({
     return INDIAN_STATES.filter((s) => s.toLowerCase().includes(q));
   }, [search]);
 
+  useEffect(() => {
+    if (source !== 'custom') return;
+    if (!customEditedRef.current) return;
+    const keep = matchedState ? [matchedState] : [];
+    const next = pruneUndatedOnlyStates(holidays, keep);
+    if (next.length === holidays.length) return;
+    onChangeRef.current(next);
+  }, [source, holidays, matchedState]);
+
   const addRow = (state) => {
     customEditedRef.current = true;
     onChange([
@@ -228,10 +269,22 @@ export default function ClientHolidaysInput({
   const pickState = (state) => {
     setSearch(state);
     setStateMenuOpen(false);
-    if (source === 'custom' && !statesInList.has(state)) {
-      addRow(state);
+    if (source !== 'custom') {
+      setExpanded((prev) => ({ ...prev, [state]: true }));
       return;
     }
+    const pruned = pruneUndatedOnlyStates(holidays, [state]);
+    const already = pruned.some((h) => stateKeyOf(h) === state);
+    if (already) {
+      if (pruned.length !== holidays.length) onChange(pruned);
+      setExpanded((prev) => ({ ...prev, [state]: true }));
+      return;
+    }
+    customEditedRef.current = true;
+    onChange([
+      ...pruned,
+      { state, holiday_date: '', holiday_type: 'NH', holiday_name: '' }
+    ]);
     setExpanded((prev) => ({ ...prev, [state]: true }));
   };
 
@@ -248,7 +301,8 @@ export default function ClientHolidaysInput({
 
   const removeAtAbsoluteIndex = (absIndex) => {
     customEditedRef.current = true;
-    onChange(holidays.filter((_, i) => i !== absIndex));
+    const next = holidays.filter((_, i) => i !== absIndex);
+    onChange(pruneUndatedOnlyStates(next, matchedState ? [matchedState] : []));
   };
 
   const indexOfRow = (row) => holidays.indexOf(row);
@@ -390,7 +444,17 @@ export default function ClientHolidaysInput({
             <div key={key} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
               <button
                 type="button"
-                onClick={() => setExpanded((prev) => ({ ...prev, [key]: !open }))}
+                onClick={() => {
+                  const nextOpen = !open;
+                  setExpanded((prev) => ({ ...prev, [key]: nextOpen }));
+                  if (source === 'custom' && open && !nextOpen && group.state) {
+                    const next = dropUndatedOnlyState(holidays, group.state);
+                    if (next.length !== holidays.length) {
+                      customEditedRef.current = true;
+                      onChange(next);
+                    }
+                  }
+                }}
                 className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-50"
               >
                 <span className="text-sm font-semibold text-slate-900">{label}</span>
