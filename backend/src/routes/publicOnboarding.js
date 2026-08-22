@@ -3,6 +3,10 @@ import multer from 'multer';
 import { supabaseAdmin } from '../supabase.js';
 import { compressKycImageBuffer } from '../utils/kycImageCompress.js';
 import { namesLikelyMatch } from '../utils/nameMatch.js';
+import {
+  clientTypeOrDefault,
+  isNonComplianceClient
+} from '../utils/clientType.js';
 
 const router = Router();
 
@@ -985,17 +989,19 @@ async function fetchClientOnboardingFlags(clientId) {
     return {
       require_license_upload: true,
       require_qualification_certificate_upload: true,
+      client_type: 'COMPLIANCE',
     };
   }
   const { data, error } = await supabaseAdmin
     .from('clients')
-    .select('require_license_upload, require_qualification_certificate_upload')
+    .select('require_license_upload, require_qualification_certificate_upload, client_type')
     .eq('id', id)
     .maybeSingle();
   if (error) throw error;
   return {
     require_license_upload: data?.require_license_upload !== false,
     require_qualification_certificate_upload: data?.require_qualification_certificate_upload !== false,
+    client_type: clientTypeOrDefault(data?.client_type),
   };
 }
 
@@ -1006,6 +1012,7 @@ async function formWithClientFlags(form) {
     ...form,
     require_license_upload: flags.require_license_upload,
     require_qualification_certificate_upload: flags.require_qualification_certificate_upload,
+    client_type: flags.client_type,
   };
 }
 
@@ -2837,53 +2844,63 @@ router.patch('/job-app-form', async (req, res, next) => {
         return res.status(400).json({ error: 'Passport size photo is required.' });
       }
 
-      const esic = String(body.bp_esic_number ?? '').trim() || null;
-      const pfUanRaw = String(body.bp_pf_uan_number ?? '').replace(/\s/g, '');
-      if (!/^\d{12}$/.test(pfUanRaw)) {
-        return res.status(400).json({ error: 'PF UAN number is required and must be exactly 12 digits.' });
-      }
-      const pfUan = pfUanRaw;
+      const skipStatutory = isNonComplianceClient(clientOnboardingFlags.client_type);
+      const esic = skipStatutory ? null : (String(body.bp_esic_number ?? '').trim() || null);
+      let pfUan = null;
+      let pfUanFaceAuthUrl = null;
+      let policeUrl = null;
+      let nomineeName = null;
+      let nomineeRelation = null;
+      let nomineeMobile = '';
 
-      const pfUanFaceAuthUrl = String(body.bp_pf_uan_face_auth_screenshot_url ?? '').trim();
-      if (!pfUanFaceAuthUrl) {
-        return res.status(400).json({
-          error: 'PF UAN face authentication screenshot is required when you have a PF UAN number.',
-        });
-      }
-
-      const policeRaw = String(body.bp_police_verification_url ?? '').trim();
-      const policeUrl = policeRaw.length > 0 ? policeRaw : null;
-
-      const nomineeNameIn = String(body.bp_nominee_name ?? '').trim();
-      const nomineeRelationIn = String(body.bp_nominee_relation ?? '').trim();
-      const nomineeMobileIn = normalizeMobile(body.bp_nominee_mobile);
-      const nomineeName =
-        correctionMode && !editableFields.has('bp_nominee_name')
-          ? String(formCurrent.bp_nominee_name ?? '').trim()
-          : nomineeNameIn;
-      const nomineeRelation =
-        correctionMode && !editableFields.has('bp_nominee_relation')
-          ? String(formCurrent.bp_nominee_relation ?? '').trim()
-          : nomineeRelationIn;
-      const nomineeMobile =
-        correctionMode && !editableFields.has('bp_nominee_mobile')
-          ? normalizeMobile(formCurrent.bp_nominee_mobile)
-          : nomineeMobileIn;
-
-      const requireNominee =
-        !correctionMode ||
-        editableFields.has('bp_nominee_name') ||
-        editableFields.has('bp_nominee_relation') ||
-        editableFields.has('bp_nominee_mobile');
-      if (requireNominee) {
-        if (nomineeName.length < 2) {
-          return res.status(400).json({ error: 'Nominee name is required.' });
+      if (!skipStatutory) {
+        const pfUanRaw = String(body.bp_pf_uan_number ?? '').replace(/\s/g, '');
+        if (!/^\d{12}$/.test(pfUanRaw)) {
+          return res.status(400).json({ error: 'PF UAN number is required and must be exactly 12 digits.' });
         }
-        if (nomineeRelation.length < 2) {
-          return res.status(400).json({ error: 'Nominee relation is required.' });
+        pfUan = pfUanRaw;
+
+        pfUanFaceAuthUrl = String(body.bp_pf_uan_face_auth_screenshot_url ?? '').trim();
+        if (!pfUanFaceAuthUrl) {
+          return res.status(400).json({
+            error: 'PF UAN face authentication screenshot is required when you have a PF UAN number.',
+          });
         }
-        if (!TEN_DIGIT_REGEX.test(nomineeMobile)) {
-          return res.status(400).json({ error: 'Nominee mobile number must be 10 digits.' });
+
+        const policeRaw = String(body.bp_police_verification_url ?? '').trim();
+        policeUrl = policeRaw.length > 0 ? policeRaw : null;
+
+        const nomineeNameIn = String(body.bp_nominee_name ?? '').trim();
+        const nomineeRelationIn = String(body.bp_nominee_relation ?? '').trim();
+        const nomineeMobileIn = normalizeMobile(body.bp_nominee_mobile);
+        nomineeName =
+          correctionMode && !editableFields.has('bp_nominee_name')
+            ? String(formCurrent.bp_nominee_name ?? '').trim()
+            : nomineeNameIn;
+        nomineeRelation =
+          correctionMode && !editableFields.has('bp_nominee_relation')
+            ? String(formCurrent.bp_nominee_relation ?? '').trim()
+            : nomineeRelationIn;
+        nomineeMobile =
+          correctionMode && !editableFields.has('bp_nominee_mobile')
+            ? normalizeMobile(formCurrent.bp_nominee_mobile)
+            : nomineeMobileIn;
+
+        const requireNominee =
+          !correctionMode ||
+          editableFields.has('bp_nominee_name') ||
+          editableFields.has('bp_nominee_relation') ||
+          editableFields.has('bp_nominee_mobile');
+        if (requireNominee) {
+          if (nomineeName.length < 2) {
+            return res.status(400).json({ error: 'Nominee name is required.' });
+          }
+          if (nomineeRelation.length < 2) {
+            return res.status(400).json({ error: 'Nominee relation is required.' });
+          }
+          if (!TEN_DIGIT_REGEX.test(nomineeMobile)) {
+            return res.status(400).json({ error: 'Nominee mobile number must be 10 digits.' });
+          }
         }
       }
 

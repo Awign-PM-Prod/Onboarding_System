@@ -2,6 +2,10 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import UanWorkflowGuide from '../components/UanWorkflowGuide';
 import { api } from '../lib/api';
+import {
+  clientRequiresStatutoryCompliance,
+  isStatutoryOnboardingField
+} from '../lib/clientType';
 
 const MOBILE_DIGITS_REGEX = /\D/g;
 const TEN_DIGIT_REGEX = /^\d{10}$/;
@@ -151,6 +155,10 @@ function clientRequiresLicenseUpload(form) {
 
 function clientRequiresQualificationCertificateUpload(form) {
   return form?.require_qualification_certificate_upload !== false;
+}
+
+function clientShowsStatutoryCompliance(form) {
+  return clientRequiresStatutoryCompliance(form);
 }
 
 function cityFromJobForm(f) {
@@ -2096,9 +2104,14 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     }
   };
 
-  const shouldShow = (field) => !correction?.active || correction.visibleFields.has(field);
-  const isRequired = (field, fallbackRequired = false) =>
-    correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
+  const shouldShow = (field) => {
+    if (isStatutoryOnboardingField(field) && !clientShowsStatutoryCompliance(jobForm)) return false;
+    return !correction?.active || correction.visibleFields.has(field);
+  };
+  const isRequired = (field, fallbackRequired = false) => {
+    if (isStatutoryOnboardingField(field) && !clientShowsStatutoryCompliance(jobForm)) return false;
+    return correction?.active ? correction.requiredFields.has(field) : fallbackRequired;
+  };
   const canSubmit =
     (!isRequired('bp_passport_photo_url', true) || Boolean(String(photoUrl).trim())) &&
     (!isRequired('bp_nominee_name', true) || String(nomineeName).trim().length >= 2) &&
@@ -2106,11 +2119,12 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     (!isRequired('bp_nominee_mobile', true) || TEN_DIGIT_REGEX.test(normalizeMobile(nomineeMobile)));
   const pfUanRequired = isRequired('bp_pf_uan_number', true);
   const showPfUanWorkflow =
-    hasPfUan === 'yes' ||
-    hasPfUan === 'no' ||
-    (correction?.active &&
-      (correction.visibleFields.has('bp_pf_uan_number') ||
-        correction.visibleFields.has('bp_pf_uan_face_auth_screenshot_url')));
+    clientShowsStatutoryCompliance(jobForm) &&
+    (hasPfUan === 'yes' ||
+      hasPfUan === 'no' ||
+      (correction?.active &&
+        (correction.visibleFields.has('bp_pf_uan_number') ||
+          correction.visibleFields.has('bp_pf_uan_face_auth_screenshot_url'))));
   const hasPfUanChoiceError =
     pfUanRequired && !hasPfUan ? 'Please select whether you already have a PF UAN number.' : '';
   const pfUanError =
@@ -3691,7 +3705,7 @@ export default function OnboardingForm() {
         requiredFields.add('pd_current_address');
       }
     }
-    if (step === 'photo') {
+    if (step === 'photo' && clientShowsStatutoryCompliance(jobFormRow)) {
       const hasPfUanNumber = TWELVE_DIGIT_REGEX.test(String(jobFormRow?.bp_pf_uan_number ?? ''));
       if (!hasPfUanNumber) {
         visibleFields.add('bp_pf_uan_number');
@@ -3704,8 +3718,22 @@ export default function OnboardingForm() {
       }
     }
     for (const optionalField of STEP_OPTIONAL_FIELDS[step] || []) {
+      if (
+        isStatutoryOnboardingField(optionalField) &&
+        !clientShowsStatutoryCompliance(jobFormRow)
+      ) {
+        continue;
+      }
       if (isEmptyForCorrection(jobFormRow?.[optionalField])) {
         visibleFields.add(optionalField);
+      }
+    }
+    if (!clientShowsStatutoryCompliance(jobFormRow)) {
+      for (const field of requiredFields) {
+        if (isStatutoryOnboardingField(field)) requiredFields.delete(field);
+      }
+      for (const field of visibleFields) {
+        if (isStatutoryOnboardingField(field)) visibleFields.delete(field);
       }
     }
     return { active: true, visibleFields, requiredFields };

@@ -28,6 +28,12 @@ import {
 } from '../lib/wageConfig';
 import ConfigureRegionZonesModal from '../components/ConfigureRegionZonesModal';
 import { countConfiguredStates } from '../components/RegionZonesEditor';
+import {
+  CLIENT_TYPE_COMPLIANCE,
+  CLIENT_TYPE_NON_COMPLIANCE,
+  CLIENT_TYPE_LABELS,
+  clientTypeOrDefault
+} from '../lib/clientType';
 
 const emptyForm = {
   client_name: '',
@@ -38,6 +44,7 @@ const emptyForm = {
   contract_end_date: '',
   open_ended_contract: false,
   program_manager_id: '',
+  client_type: CLIENT_TYPE_COMPLIANCE,
   insurance_applicable: false,
   insurance_name: '',
   insurance_amount: '',
@@ -129,6 +136,7 @@ export default function ClientForm() {
           contract_end_date: found.contract_end_date ?? '',
           open_ended_contract: Boolean(found.open_ended_contract),
           program_manager_id: found.program_manager_id,
+          client_type: clientTypeOrDefault(found.client_type),
           insurance_applicable: found.insurance_applicable,
           insurance_name: found.insurance_name ?? '',
           insurance_amount: found.insurance_amount != null
@@ -191,6 +199,9 @@ export default function ClientForm() {
       }
     }
     if (!form.program_manager_id) errs.program_manager_id = 'Required';
+    if (form.client_type !== CLIENT_TYPE_COMPLIANCE && form.client_type !== CLIENT_TYPE_NON_COMPLIANCE) {
+      errs.client_type = 'Required';
+    }
     if (form.insurance_applicable && !form.insurance_name.trim()) {
       errs.insurance_name = 'Required when insurance is applicable';
     }
@@ -534,6 +545,32 @@ export default function ClientForm() {
               </select>
             </Field>
           </div>
+
+          <Field label="Client type" error={fieldErrors.client_type}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:gap-6 text-sm">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="client_type"
+                  checked={form.client_type === CLIENT_TYPE_COMPLIANCE}
+                  onChange={() => set({ client_type: CLIENT_TYPE_COMPLIANCE })}
+                />
+                {CLIENT_TYPE_LABELS.COMPLIANCE}
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="client_type"
+                  checked={form.client_type === CLIENT_TYPE_NON_COMPLIANCE}
+                  onChange={() => set({ client_type: CLIENT_TYPE_NON_COMPLIANCE })}
+                />
+                {CLIENT_TYPE_LABELS.NON_COMPLIANCE}
+              </label>
+            </div>
+            <p className="mt-1.5 text-xs text-slate-500">
+              Non-compliance hides ESIC, UAN, police verification, and e-nomination on the employee form.
+            </p>
+          </Field>
 
           <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
             <Field label="Contract Period">

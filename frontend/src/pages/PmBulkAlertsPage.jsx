@@ -14,6 +14,33 @@ const MODES = [
   { value: 'bulk', label: 'Bulk CSV' }
 ];
 
+function formatSentAt(iso) {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '—';
+  return d.toLocaleString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+}
+
+function IconChevron({ open, className }) {
+  return (
+    <svg
+      className={`${className} transition-transform ${open ? 'rotate-180' : ''}`}
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.5}
+      stroke="currentColor"
+      aria-hidden
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+    </svg>
+  );
+}
+
 export default function PmBulkAlertsPage() {
   const [mode, setMode] = useState('single');
   const [clients, setClients] = useState([]);
@@ -33,6 +60,24 @@ export default function PmBulkAlertsPage() {
   const [error, setError] = useState('');
   const [formError, setFormError] = useState('');
   const [result, setResult] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const rows = await api.listPmBulkAlertHistory();
+      setHistory(Array.isArray(rows) ? rows : []);
+    } catch (err) {
+      setHistory([]);
+      setHistoryError(err.message || 'Could not load activity log.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +98,10 @@ export default function PmBulkAlertsPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (historyOpen) loadHistory();
+  }, [historyOpen]);
 
   useEffect(() => {
     if (!clientId) {
@@ -231,6 +280,7 @@ export default function PmBulkAlertsPage() {
     try {
       const data = await api.sendPmBulkAlert(payload);
       setResult(data);
+      if (historyOpen) await loadHistory();
       if (mode === 'single') {
         setEmployeeId('');
         setMessage('');
@@ -270,6 +320,137 @@ export default function PmBulkAlertsPage() {
           Email updates to a specific employee or a list from CSV. Messages are sent via Resend.
         </p>
       </div>
+
+      <button
+        type="button"
+        aria-expanded={historyOpen}
+        onClick={() => setHistoryOpen((open) => !open)}
+        className={`mb-6 w-full rounded-xl border px-4 py-3.5 text-left shadow-sm transition ${
+          historyOpen
+            ? 'border-blue-600 bg-blue-50/50'
+            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-slate-900">Activity log</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {historyOpen ? 'Click to hide sent alerts' : 'Click to view sent alerts'}
+            </p>
+          </div>
+          <IconChevron open={historyOpen} className="h-4 w-4 shrink-0 text-slate-500" />
+        </div>
+      </button>
+
+      {historyOpen && (
+        <section className="mb-6">
+          {historyLoading && (
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+              Loading activity…
+            </div>
+          )}
+          {!historyLoading && historyError && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+              {historyError}
+            </div>
+          )}
+          {!historyLoading && !historyError && history.length === 0 && (
+            <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
+              No alerts sent yet.
+            </div>
+          )}
+          {!historyLoading && !historyError && history.length > 0 && (
+            <div
+              className={`space-y-4 ${
+                history.length > 10 ? 'max-h-[70vh] overflow-y-auto pr-1' : ''
+              }`}
+            >
+              {history.map((entry) => {
+                const people = Array.isArray(entry.recipients) ? entry.recipients : [];
+                const isBulk = entry.mode === 'bulk';
+                if (!isBulk) {
+                  const person = people[0] || {};
+                  return (
+                    <div
+                      key={entry.id}
+                      className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm"
+                    >
+                      <table className="min-w-full text-left text-sm">
+                        <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          <tr>
+                            <th className="px-4 py-2.5">Name</th>
+                            <th className="px-4 py-2.5">Email</th>
+                            <th className="px-4 py-2.5">Date sent</th>
+                            <th className="px-4 py-2.5">Message</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="px-4 py-3 align-top text-slate-800">
+                              {person.name || '—'}
+                            </td>
+                            <td className="px-4 py-3 align-top text-slate-800">
+                              {person.email || '—'}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 align-top text-slate-600">
+                              {formatSentAt(entry.created_at)}
+                            </td>
+                            <td className="px-4 py-3 align-top whitespace-pre-wrap text-slate-800">
+                              {entry.message || '—'}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={entry.id}
+                    className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
+                  >
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Name &amp; email
+                        </p>
+                        <ul className="mt-2 space-y-1.5 text-sm text-slate-800">
+                          {people.length === 0 && <li>—</li>}
+                          {people.map((p, idx) => (
+                            <li key={`${p.email}-${idx}`}>
+                              <span className="font-medium">{p.name || '—'}</span>
+                              <span className="text-slate-500"> · {p.email || '—'}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Date sent
+                          </p>
+                          <p className="mt-1 text-sm text-slate-800">
+                            {formatSentAt(entry.created_at)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Message
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">
+                            {entry.message || '—'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
       {error && (
         <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">

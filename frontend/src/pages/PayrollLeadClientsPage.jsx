@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 import { ACTION_BTN_PRIMARY, ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
 import { formatContractPeriod } from '../lib/clientCsv';
+import { CLIENT_TYPE_LABELS, clientTypeOrDefault } from '../lib/clientType';
 import ClientCsvImportModal from '../components/ClientCsvImportModal';
 
 function downloadBlob(blob, filename) {
@@ -272,6 +273,7 @@ export default function PayrollLeadClientsPage() {
                   <th className="px-4 py-2.5 text-left font-medium">Client</th>
                   <th className="px-4 py-2.5 text-left font-medium">Entity</th>
                   <th className="px-4 py-2.5 text-left font-medium">State</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Type</th>
                   <th className="px-4 py-2.5 text-left font-medium">Contract Code</th>
                   <th className="px-4 py-2.5 text-left font-medium">Program Manager</th>
                   <SortableColumnHeader
@@ -326,6 +328,17 @@ export default function PayrollLeadClientsPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-700">{c.entity || '—'}</td>
                     <td className="px-4 py-3 text-slate-700">{c.state || '—'}</td>
+                    <td className="px-4 py-3">
+                      {clientTypeOrDefault(c.client_type) === 'NON_COMPLIANCE' ? (
+                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-500/20">
+                          {CLIENT_TYPE_LABELS.NON_COMPLIANCE}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+                          {CLIENT_TYPE_LABELS.COMPLIANCE}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-700">
                       {c.contract_code || '—'}
                     </td>

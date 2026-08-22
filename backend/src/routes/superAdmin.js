@@ -15,6 +15,7 @@ import { invokeResendEmail } from '../utils/sendEmail.js';
 import { buildLoginLink, buildPasswordResetEmail } from '../utils/staffInvite.js';
 import { createStaffInviteUser } from '../utils/createStaffInviteUser.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
+import { isNonComplianceClient } from '../utils/clientType.js';
 import { unlockExpiresAtFromNow } from '../utils/unlockTtl.js';
 import {
   listHolidayCalendars,
@@ -118,7 +119,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
 
     let clientsQuery = supabaseAdmin
       .from('clients')
-      .select('id, client_name, contract_code')
+      .select('id, client_name, contract_code, client_type')
       .order('client_name', { ascending: true });
     if (filterClientId) {
       clientsQuery = clientsQuery.eq('id', filterClientId);
@@ -150,6 +151,9 @@ router.get('/dashboard-stats', async (req, res, next) => {
 
     const clientIds = clientRows.map((c) => c.id);
     const clientIdSet = new Set(clientIds);
+    const nonComplianceClientIds = new Set(
+      clientRows.filter((c) => isNonComplianceClient(c)).map((c) => c.id)
+    );
 
     // When a date range is set, filter by created_at first (cohort of employees added
     // in that period). Avoid chaining a huge .in(client_id) with date bounds.
@@ -211,7 +215,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
       if (form?.submission_status === 'Submitted') compliance.form_submitted += 1;
 
       const monthlyCTC = effectiveMonthlyCTC(employee.ctc_type, employee.ctc_value);
-      if (monthlyCTC !== null) {
+      if (monthlyCTC !== null && !nonComplianceClientIds.has(employee.client_id)) {
         const hasUan =
           typeof employee.payroll_pf_uan_number === 'string' &&
           employee.payroll_pf_uan_number.trim() !== '';

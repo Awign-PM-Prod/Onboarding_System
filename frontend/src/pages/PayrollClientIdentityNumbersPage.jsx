@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
+import { isNonComplianceClient } from '../lib/clientType';
 
 export default function PayrollClientIdentityNumbersPage() {
   const { id } = useParams();
@@ -35,6 +36,7 @@ export default function PayrollClientIdentityNumbersPage() {
   }, [id]);
 
   const client = useMemo(() => clients.find((c) => c.id === id) || null, [clients, id]);
+  const statutoryRequired = !isNonComplianceClient(client);
   const joinedRows = useMemo(
     () =>
       employees.filter((row) => {
@@ -62,8 +64,9 @@ export default function PayrollClientIdentityNumbersPage() {
         const dirtyUan = needUan && String(draftUan ?? '').trim() !== assignedUan;
         const dirtyEsic = needEsic && String(draftEsic ?? '').trim() !== assignedEsic;
         const hasUnsavedEdits = dirtyUan || dirtyEsic;
-        const requiredFieldsFilled =
-          (!needUan || String(draftUan ?? '').trim()) && (!needEsic || String(draftEsic ?? '').trim());
+        const requiredFieldsFilled = statutoryRequired
+          ? (!needUan || String(draftUan ?? '').trim()) && (!needEsic || String(draftEsic ?? '').trim())
+          : true;
         const readyToSave = hasUnsavedEdits && requiredFieldsFilled;
 
         return {
@@ -80,11 +83,13 @@ export default function PayrollClientIdentityNumbersPage() {
           ready_to_save: readyToSave
         };
       }),
-    [joinedRows, draftById]
+    [joinedRows, draftById, statutoryRequired]
   );
 
   const pendingAssignmentCount = rowsWithNeeds.filter(
-    (r) => (r.need_uan && !r.effective_uan) || (r.need_esic && !r.effective_esic)
+    (r) =>
+      statutoryRequired &&
+      ((r.need_uan && !r.effective_uan) || (r.need_esic && !r.effective_esic))
   ).length;
 
   const unsavedCount = rowsWithNeeds.filter((r) => r.has_unsaved_edits).length;
@@ -104,12 +109,14 @@ export default function PayrollClientIdentityNumbersPage() {
   const saveAllChanges = async () => {
     if (saveableRows.length === 0) return;
 
-    const incomplete = rowsWithNeeds.filter(
-      (r) =>
-        r.has_unsaved_edits &&
-        ((r.need_uan && !String(r.draft_uan ?? '').trim()) ||
-          (r.need_esic && !String(r.draft_esic ?? '').trim()))
-    );
+    const incomplete = statutoryRequired
+      ? rowsWithNeeds.filter(
+          (r) =>
+            r.has_unsaved_edits &&
+            ((r.need_uan && !String(r.draft_uan ?? '').trim()) ||
+              (r.need_esic && !String(r.draft_esic ?? '').trim()))
+        )
+      : [];
     if (incomplete.length > 0) {
       setError(
         `Fill required UAN/ESIC for: ${incomplete
@@ -215,6 +222,11 @@ export default function PayrollClientIdentityNumbersPage() {
           <p className="mt-1 text-sm text-slate-500">
             {client?.client_name || 'Client'}: payroll setup for employees who joined.
           </p>
+          {isNonComplianceClient(client) && (
+            <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              This is a non-compliance client. UAN and ESIC numbers are not required. You can still enter them optionally.
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <input

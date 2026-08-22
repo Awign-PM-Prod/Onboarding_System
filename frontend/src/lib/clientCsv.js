@@ -8,12 +8,14 @@ import {
   normalizeCushionType,
   normalizeSkillLevel
 } from './wageConfig';
+import { clientTypeOrDefault } from './clientType';
 
 export const CLIENT_CSV_HEADERS = [
   'client_name',
   'contract_code',
   'entity',
   'state',
+  'client_type',
   'contract_start_date',
   'contract_end_date',
   'open_ended_contract',
@@ -283,6 +285,7 @@ export function csvRowToClientForm(row, programManagers = []) {
     contract_code: cell(row, 'contract_code'),
     entity: cell(row, 'entity'),
     state: cell(row, 'state'),
+    client_type: clientTypeOrDefault(cell(row, 'client_type')),
     contract_start_date: cell(row, 'contract_start_date'),
     contract_end_date: openEnded ? '' : cell(row, 'contract_end_date'),
     open_ended_contract: openEnded,
@@ -324,6 +327,7 @@ export function buildClientTemplateCsv() {
     contract_code: 'CTR-2026-001',
     entity: 'Acme Group',
     state: 'Maharashtra',
+    client_type: 'COMPLIANCE',
     contract_start_date: '2026-04-01',
     contract_end_date: '2027-03-31',
     open_ended_contract: 'false',
@@ -382,6 +386,7 @@ export function clientToExportRow(client, programManagerEmail = '') {
     contract_code: client?.contract_code ?? '',
     entity: client?.entity ?? '',
     state: client?.state ?? '',
+    client_type: clientTypeOrDefault(client?.client_type),
     contract_start_date: client?.contract_start_date ?? '',
     contract_end_date: openEnded ? '' : (client?.contract_end_date ?? ''),
     open_ended_contract: boolStr(openEnded),

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import ModalOverlay from './ModalOverlay';
 import { Z_MODAL_NESTED } from '../lib/zIndex';
+import { isNonComplianceClient, isStatutoryOnboardingField } from '../lib/clientType';
 
 const HIDDEN_KEYS = new Set([
   'id',
@@ -10,7 +11,10 @@ const HIDDEN_KEYS = new Set([
   'updated_at',
   'designation',
   'submission_status',
-  'aad_name'
+  'aad_name',
+  'client_type',
+  'require_license_upload',
+  'require_qualification_certificate_upload'
 ]);
 
 /** Strip DB column prefixes used on job_app_form so labels read naturally in the PM view */
@@ -243,7 +247,8 @@ function sectionNameForField(key) {
 function sortedFormKeys(form) {
   const base = ORDERED_FIELDS.filter((k) => !HIDDEN_KEYS.has(k));
   if (!form || typeof form !== 'object') return base;
-  return base;
+  if (!isNonComplianceClient(form)) return base;
+  return base.filter((k) => !isStatutoryOnboardingField(k));
 }
 
 function inferImageMimeFromBase64(value) {
@@ -368,6 +373,7 @@ export default function EmployeeFormResponseModal({
     if (!form || typeof form !== 'object') return [];
     const tabs = [];
     for (const def of DOCUMENT_TAB_DEFINITIONS) {
+      if (isNonComplianceClient(form) && isStatutoryOnboardingField(def.key)) continue;
       const urls = normalizeDocumentUrls(def.key, form[def.key]);
       const suffixNeeded = urls.length > 1;
       urls.forEach((url, index) => {

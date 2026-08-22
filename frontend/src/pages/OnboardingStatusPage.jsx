@@ -1,10 +1,20 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { isNonComplianceClient, isStatutoryOnboardingField } from '../lib/clientType';
 
 const TEN_DIGIT_REGEX = /^\d{10}$/;
 const SIX_DIGIT_REGEX = /^\d{6}$/;
-const HIDDEN_FIELDS = new Set(['id', 'employee_id', 'client_id', 'created_at', 'updated_at']);
+const HIDDEN_FIELDS = new Set([
+  'id',
+  'employee_id',
+  'client_id',
+  'created_at',
+  'updated_at',
+  'client_type',
+  'require_license_upload',
+  'require_qualification_certificate_upload'
+]);
 const ORDERED_FIELDS = [
   'name',
   'mobile',
@@ -183,8 +193,16 @@ function sectionNameForField(key) {
 
 function sortedFormKeys(form) {
   if (!form || typeof form !== 'object') return [];
-  const known = ORDERED_FIELDS.filter((k) => !HIDDEN_FIELDS.has(k));
-  const extra = Object.keys(form).filter((k) => !HIDDEN_FIELDS.has(k) && !known.includes(k));
+  const skipStatutory = isNonComplianceClient(form);
+  const known = ORDERED_FIELDS.filter(
+    (k) => !HIDDEN_FIELDS.has(k) && !(skipStatutory && isStatutoryOnboardingField(k))
+  );
+  const extra = Object.keys(form).filter(
+    (k) =>
+      !HIDDEN_FIELDS.has(k) &&
+      !known.includes(k) &&
+      !(skipStatutory && isStatutoryOnboardingField(k))
+  );
   return [...known, ...extra];
 }
 

@@ -11,6 +11,11 @@ import { applyCushion, normalizeRegionName, normalizeWageZone } from '../utils/w
 import { listAccessibleClientIds } from '../utils/roleAccess.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
 import {
+  clientTypeOrDefault,
+  isNonComplianceClient,
+  isStatutoryOnboardingField
+} from '../utils/clientType.js';
+import {
   SALARY_CHANGE_BUCKET,
   SALARY_CHANGE_SIGNED_URL_SECONDS,
   cancelPendingSalaryChangeRequests,
@@ -288,7 +293,7 @@ async function fetchOwnedClient(req, clientId) {
 
   const { data, error } = await supabaseAdmin
     .from('clients')
-    .select('id, program_manager_id, created_by')
+    .select('id, program_manager_id, created_by, client_type')
     .eq('id', clientId)
     .maybeSingle();
   if (error) throw error;
@@ -309,7 +314,7 @@ async function fetchPayrollLeadOwnedClient(req, clientId) {
   if (userRow?.role !== 'PAYROLL_LEAD' && userRow?.role !== 'SUPER_ADMIN') return null;
   const { data, error } = await supabaseAdmin
     .from('clients')
-    .select('id, created_by')
+    .select('id, created_by, client_type')
     .eq('id', clientId)
     .maybeSingle();
   if (error) throw error;
@@ -3363,7 +3368,10 @@ router.post('/identity-numbers/import', upload.single('file'), async (req, res, 
       const nextPayrollEsic = formEsic ? (existingPayrollEsic || null) : (csvEsic || existingPayrollEsic || null);
       const effectiveUan = formUan || nextPayrollUan;
       const effectiveEsic = formEsic || nextPayrollEsic;
-      if (!effectiveUan || !effectiveEsic) {
+      if (
+        !isNonComplianceClient(ownedPl.client_type) &&
+        (!effectiveUan || !effectiveEsic)
+      ) {
         failed.push({
           row: i + 2,
           employee_id: employeeId,
@@ -3441,7 +3449,10 @@ router.post('/:id/payroll-identity-numbers', async (req, res, next) => {
     const formEsic = String(form.bp_esic_number ?? '').trim();
     const effectivePfUan = formPfUan || payrollPfUan || null;
     const effectiveEsic = formEsic || payrollEsic || null;
-    if (!effectivePfUan || !effectiveEsic) {
+    if (
+      !isNonComplianceClient(ownedPl.client_type) &&
+      (!effectivePfUan || !effectiveEsic)
+    ) {
       return res.status(400).json({
         error: 'Both UAN and ESIC are required. Provide missing values if employee has not supplied them.'
       });
@@ -3545,7 +3556,10 @@ router.get('/:id/job-app-form', async (req, res, next) => {
 
     res.json({
       employee: { id: emp.id, name: emp.name },
-      form,
+      form: {
+        ...form,
+        client_type: clientTypeOrDefault(owned.client_type)
+      },
       previous_correction_rejected_fields: previousCorrectionRejectedFields,
       pm_approver: pmApprover
     });
@@ -3615,10 +3629,14 @@ router.post('/:id/form-review', async (req, res, next) => {
       return res.status(400).json({ error: 'Application is already approved.' });
     }
 
+    const skipStatutory = isNonComplianceClient(owned.client_type);
     const markErrors = [];
     const incorrectFromMarks = [];
     const requiredMarkedFields = REVIEWABLE_JOB_FORM_FIELDS.filter(
-      (key) => CORRECTION_EDITABLE_FIELDS.has(key) && hasProvidedReviewValue(form[key])
+      (key) =>
+        CORRECTION_EDITABLE_FIELDS.has(key) &&
+        hasProvidedReviewValue(form[key]) &&
+        !(skipStatutory && isStatutoryOnboardingField(key))
     );
     for (const key of requiredMarkedFields) {
       const mark = String(fieldMarks[key] ?? '').trim().toLowerCase();
@@ -3641,7 +3659,9 @@ router.post('/:id/form-review', async (req, res, next) => {
       rejectedFieldsInput.length > 0
         ? rejectedFieldsInput
         : incorrectFromMarks;
-    const correctionEligibleRejectedFields = rejectedFields.filter((f) => CORRECTION_EDITABLE_FIELDS.has(f));
+    const correctionEligibleRejectedFields = rejectedFields.filter(
+      (f) => CORRECTION_EDITABLE_FIELDS.has(f) && !(skipStatutory && isStatutoryOnboardingField(f))
+    );
 
     if (decisionStatus === 'APPROVED') {
       if (incorrectFromMarks.length > 0) {
@@ -3838,10 +3858,14 @@ router.post('/:id/payroll-form-review', async (req, res, next) => {
       return res.status(400).json({ error: 'Reason is required when rejecting an application.' });
     }
 
+    const skipStatutory = isNonComplianceClient(ownedPl.client_type);
     const markErrors = [];
     const incorrectFromMarks = [];
     const requiredMarkedFields = REVIEWABLE_JOB_FORM_FIELDS.filter(
-      (key) => CORRECTION_EDITABLE_FIELDS.has(key) && hasProvidedReviewValue(formFull[key])
+      (key) =>
+        CORRECTION_EDITABLE_FIELDS.has(key) &&
+        hasProvidedReviewValue(formFull[key]) &&
+        !(skipStatutory && isStatutoryOnboardingField(key))
     );
     if (decisionStatus === 'APPROVED') {
       for (const key of requiredMarkedFields) {

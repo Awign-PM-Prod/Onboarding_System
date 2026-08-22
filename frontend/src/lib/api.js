@@ -276,6 +276,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  listPmBulkAlertHistory: () => request('/api/pm/alerts/history'),
   requestDojExtend: ({ clientId, employeeId, reason }) =>
     request(`/api/employees/${encodeURIComponent(employeeId)}/doj-extend-request`, {
       method: 'POST',

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { fetchAllRows, fetchAllRowsByIds } from '../utils/supabasePaginate.js';
+import { isNonComplianceClient } from '../utils/clientType.js';
 
 const router = Router();
 
@@ -73,6 +74,18 @@ router.get('/compliance-stats', async (req, res, next) => {
     );
 
     const employeeIds = employeeRows.map((e) => e.id);
+    const clientIds = Array.from(new Set(employeeRows.map((e) => e.client_id).filter(Boolean)));
+    const nonComplianceClientIds = new Set();
+    if (clientIds.length > 0) {
+      const clientTypeRows = await fetchAllRowsByIds(
+        (idChunk) =>
+          supabaseAdmin.from('clients').select('id, client_type').in('id', idChunk),
+        clientIds
+      );
+      for (const row of clientTypeRows) {
+        if (isNonComplianceClient(row)) nonComplianceClientIds.add(row.id);
+      }
+    }
 
     // 2. Fetch job_app_form data for those employees.
     const formMap = new Map();
@@ -109,9 +122,9 @@ router.get('/compliance-stats', async (req, res, next) => {
       // Section 1: submitted form (first submit tracked via submission_status = 'Submitted').
       if (form?.submission_status === 'Submitted') formSubmitted += 1;
 
-      // UAN / ESIC are meaningful for employees with assigned CTC.
+      // UAN / ESIC are meaningful for employees with assigned CTC on compliance clients.
       const monthlyCTC = effectiveMonthlyCTC(emp.ctc_type, emp.ctc_value);
-      if (monthlyCTC !== null) {
+      if (monthlyCTC !== null && !nonComplianceClientIds.has(emp.client_id)) {
         const hasUan =
           typeof emp.payroll_pf_uan_number === 'string' &&
           emp.payroll_pf_uan_number.trim() !== '';

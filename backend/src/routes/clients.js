@@ -30,6 +30,7 @@ import {
 } from '../utils/wageConfig.js';
 import { canAccessClientAsLead, isSuperAdminRole, loadUserRole } from '../utils/roleAccess.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
+import { CLIENT_TYPES, normalizeClientType } from '../utils/clientType.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -200,6 +201,9 @@ function validateClientPayload(body) {
   if (typeof body.require_license_upload !== 'boolean') {
     errors.require_license_upload = 'must be boolean';
   }
+  if (normalizeClientType(body.client_type) === undefined) {
+    errors.client_type = `must be one of ${CLIENT_TYPES.join(', ')}`;
+  }
   if (typeof body.require_qualification_certificate_upload !== 'boolean') {
     errors.require_qualification_certificate_upload = 'must be boolean';
   }
@@ -286,6 +290,7 @@ function buildClientCorePayload(body, { includeCreatedBy = false, createdBy } = 
     contract_end_date: openEnded ? null : body.contract_end_date,
     open_ended_contract: openEnded,
     program_manager_id: body.program_manager_id,
+    client_type: normalizeClientType(body.client_type),
     insurance_applicable: body.insurance_applicable,
     insurance_name: body.insurance_applicable ? String(body.insurance_name).trim() : null,
     insurance_amount: body.insurance_applicable

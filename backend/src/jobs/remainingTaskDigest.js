@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../supabase.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
+import { isNonComplianceClient } from '../utils/clientType.js';
 
 const FRONTEND_URL = String(process.env.FRONTEND_URL || 'http://localhost:8088').trim() || 'http://localhost:8088';
 
@@ -290,7 +291,7 @@ async function buildPlDigests(users) {
 
   const clients = await fetchInBatches(
     'clients',
-    'id, client_name, created_by',
+    'id, client_name, created_by, client_type',
     'created_by',
     plUsers.map((u) => u.id)
   );
@@ -321,6 +322,10 @@ async function buildPlDigests(users) {
     (q) => q.eq('unlock_request_status', 'PENDING')
   );
 
+  const nonComplianceClientIds = new Set(
+    clients.filter((c) => isNonComplianceClient(c)).map((c) => c.id)
+  );
+
   const byPl = new Map();
   for (const client of clients) {
     if (!byPl.has(client.created_by)) byPl.set(client.created_by, new Map());
@@ -341,7 +346,13 @@ async function buildPlDigests(users) {
 
     const joining = String(emp.joining_status ?? '').trim().toUpperCase();
     const uan = String(emp.payroll_pf_uan_number ?? '').trim();
-    if (JOINED_STATUSES.has(joining) && !uan) bucket.missing_uan += 1;
+    if (
+      JOINED_STATUSES.has(joining) &&
+      !uan &&
+      !nonComplianceClientIds.has(emp.client_id)
+    ) {
+      bucket.missing_uan += 1;
+    }
   }
 
   for (const sheet of sheets) {

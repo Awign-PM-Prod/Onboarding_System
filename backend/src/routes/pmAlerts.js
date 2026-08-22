@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { invokeResendEmailBatch } from '../utils/sendEmail.js';
+import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 
 const router = Router();
 
@@ -112,6 +113,76 @@ function normalizeBulkRecipients(rawList) {
   return { recipients, details };
 }
 
+const HISTORY_SEND_LIMIT = 50;
+const RECIPIENT_STATUSES = new Set(['sent', 'failed', 'skipped']);
+
+function countByStatus(details) {
+  const rows = Array.isArray(details) ? details : [];
+  return {
+    sent: rows.filter((d) => d.status === 'sent').length,
+    failed: rows.filter((d) => d.status === 'failed').length,
+    skipped: rows.filter((d) => d.status === 'skipped').length
+  };
+}
+
+async function persistAlertHistory({
+  req,
+  mode,
+  subject,
+  message,
+  clientId,
+  employeeId,
+  details
+}) {
+  try {
+    const counts = countByStatus(details);
+    const { data: sendRow, error: sendErr } = await supabaseAdmin
+      .from('pm_bulk_alert_sends')
+      .insert({
+        sender_user_id: req.user.id,
+        mode,
+        subject,
+        message,
+        client_id: clientId || null,
+        employee_id: employeeId || null,
+        sent_count: counts.sent,
+        failed_count: counts.failed,
+        skipped_count: counts.skipped
+      })
+      .select('id')
+      .single();
+    if (sendErr) throw sendErr;
+
+    const recipientRows = (Array.isArray(details) ? details : []).map((d) => ({
+      send_id: sendRow.id,
+      employee_id: mode === 'single' ? employeeId || null : null,
+      name: String(d.name ?? '').trim(),
+      email: String(d.email ?? '').trim(),
+      status: RECIPIENT_STATUSES.has(d.status) ? d.status : 'skipped',
+      error: String(d.error || d.reason || '').trim() || null
+    }));
+    if (recipientRows.length > 0) {
+      const { error: recErr } = await supabaseAdmin
+        .from('pm_bulk_alert_recipients')
+        .insert(recipientRows);
+      if (recErr) throw recErr;
+    }
+
+    logOrgActivityFromReq(req, {
+      action: 'PM_BULK_ALERT_SENT',
+      entityType: 'pm_bulk_alert_send',
+      entityId: sendRow.id,
+      clientId: clientId || null,
+      summary: `Sent ${counts.sent}, failed ${counts.failed}, skipped ${counts.skipped} — ${subject}`,
+      metadata: { mode, sent: counts.sent, failed: counts.failed, skipped: counts.skipped, subject }
+    }).catch((err) => {
+      console.error('[pm-bulk-alert] org activity log failed', err?.message || err);
+    });
+  } catch (err) {
+    console.error('[pm-bulk-alert] persist history failed', err?.message || err);
+  }
+}
+
 router.post('/send', async (req, res, next) => {
   try {
     const mode = String(req.body?.mode ?? '').trim().toLowerCase();
@@ -133,9 +204,11 @@ router.post('/send', async (req, res, next) => {
 
     let toSend = [];
     const preDetails = [];
+    let clientId = null;
+    let employeeId = null;
 
     if (mode === 'single') {
-      const employeeId = String(req.body?.employee_id ?? '').trim();
+      employeeId = String(req.body?.employee_id ?? '').trim();
       if (!employeeId) {
         return res.status(400).json({ error: 'employee_id is required for single mode' });
       }
@@ -159,6 +232,7 @@ router.post('/send', async (req, res, next) => {
       if (!client || client.program_manager_id !== req.user.id) {
         return res.status(403).json({ error: 'Not authorized for this employee' });
       }
+      clientId = client.id;
 
       const email = normalizeEmail(employee.email);
       if (!email || !isValidEmail(email)) {
@@ -254,10 +328,20 @@ router.post('/send', async (req, res, next) => {
           reason: result.reason || 'skipped'
         });
       }
+      const skipped = details.filter((d) => d.status === 'skipped').length;
+      await persistAlertHistory({
+        req,
+        mode,
+        subject,
+        message,
+        clientId,
+        employeeId,
+        details
+      });
       return res.json({
         sent: 0,
         failed: 0,
-        skipped: details.filter((d) => d.status === 'skipped').length,
+        skipped,
         details
       });
     }
@@ -288,7 +372,61 @@ router.post('/send', async (req, res, next) => {
     const failed = details.filter((d) => d.status === 'failed').length;
     const skipped = details.filter((d) => d.status === 'skipped').length;
 
+    await persistAlertHistory({
+      req,
+      mode,
+      subject,
+      message,
+      clientId,
+      employeeId,
+      details
+    });
+
     return res.json({ sent, failed, skipped, details });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/history', async (req, res, next) => {
+  try {
+    const { data: sends, error: sendErr } = await supabaseAdmin
+      .from('pm_bulk_alert_sends')
+      .select('id, created_at, mode, message')
+      .eq('sender_user_id', req.user.id)
+      .order('created_at', { ascending: false })
+      .limit(HISTORY_SEND_LIMIT);
+    if (sendErr) throw sendErr;
+
+    const sendRows = sends ?? [];
+    if (sendRows.length === 0) return res.json([]);
+
+    const sendIds = sendRows.map((s) => s.id);
+    const { data: recipients, error: recErr } = await supabaseAdmin
+      .from('pm_bulk_alert_recipients')
+      .select('send_id, name, email, status')
+      .in('send_id', sendIds);
+    if (recErr) throw recErr;
+
+    const bySend = new Map();
+    for (const row of recipients ?? []) {
+      if (!bySend.has(row.send_id)) bySend.set(row.send_id, []);
+      bySend.get(row.send_id).push({
+        name: row.name || '',
+        email: row.email || '',
+        status: row.status
+      });
+    }
+
+    return res.json(
+      sendRows.map((s) => ({
+        id: s.id,
+        created_at: s.created_at,
+        mode: s.mode,
+        message: s.message,
+        recipients: bySend.get(s.id) ?? []
+      }))
+    );
   } catch (err) {
     next(err);
   }

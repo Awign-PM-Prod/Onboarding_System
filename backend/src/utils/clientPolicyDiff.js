@@ -89,6 +89,12 @@ export function diffClientCoreFields(before, after) {
   push('Contract code', String(before?.contract_code ?? ''), String(after?.contract_code ?? ''));
   push('Entity', String(before?.entity ?? ''), String(after?.entity ?? ''));
   push('State', String(before?.state ?? ''), String(after?.state ?? ''));
+  const fmtClientType = (v) => {
+    const raw = String(v ?? '').trim().toUpperCase();
+    if (raw === 'NON_COMPLIANCE') return 'Non-compliance';
+    return 'Compliance';
+  };
+  push('Client type', fmtClientType(before?.client_type), fmtClientType(after?.client_type));
   push('Contract start', fmtDate(before?.contract_start_date), fmtDate(after?.contract_start_date));
 
   const bOpen = Boolean(before?.open_ended_contract);

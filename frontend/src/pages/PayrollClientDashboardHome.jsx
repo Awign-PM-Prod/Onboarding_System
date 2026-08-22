@@ -9,6 +9,7 @@ import {
   isPlApprovedReview,
   isPlRejectedReview
 } from '../lib/employeeStatusBadge';
+import { isNonComplianceClient } from '../lib/clientType';
 
 const LEAVE_CODES = ['EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO'];
 const RECORDS_PREVIEW_COUNT = 5;
@@ -178,16 +179,18 @@ export default function PayrollClientDashboardHome() {
         isPlRejectedReview(e) || String(e.form_review_status ?? '').trim().toUpperCase() === 'REJECTED'
     ).length;
 
-    const pendingIdentity = employees.filter((e) => {
-      if (!isPlApprovedReview(e)) return false;
-      const joiningStatus = String(e.joining_status ?? '').trim();
-      if (joiningStatus !== 'JOINED' && joiningStatus !== 'JOINED_OTHER_DATE') return false;
-      const formUan = String(e.form_bp_pf_uan_number ?? '').trim();
-      const formEsic = String(e.form_bp_esic_number ?? '').trim();
-      const assignedUan = String(e.payroll_pf_uan_number ?? '').trim();
-      const assignedEsic = String(e.payroll_esic_number ?? '').trim();
-      return (!formUan && !assignedUan) || (!formEsic && !assignedEsic);
-    }).length;
+    const pendingIdentity = isNonComplianceClient(client)
+      ? 0
+      : employees.filter((e) => {
+          if (!isPlApprovedReview(e)) return false;
+          const joiningStatus = String(e.joining_status ?? '').trim();
+          if (joiningStatus !== 'JOINED' && joiningStatus !== 'JOINED_OTHER_DATE') return false;
+          const formUan = String(e.form_bp_pf_uan_number ?? '').trim();
+          const formEsic = String(e.form_bp_esic_number ?? '').trim();
+          const assignedUan = String(e.payroll_pf_uan_number ?? '').trim();
+          const assignedEsic = String(e.payroll_esic_number ?? '').trim();
+          return (!formUan && !assignedUan) || (!formEsic && !assignedEsic);
+        }).length;
 
     let totalPaidDays = 0;
     let totalLeaves = 0;
@@ -204,7 +207,7 @@ export default function PayrollClientDashboardHome() {
       totalPaidDays,
       totalLeaves
     };
-  }, [employees, attendance.rows]);
+  }, [employees, attendance.rows, client]);
 
   const payrollRecords = useMemo(() => {
     const sheetPm = String(attendance.sheet?.project_manager_name ?? '').trim();
