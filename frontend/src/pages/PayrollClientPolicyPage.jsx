@@ -24,7 +24,9 @@ function applyClientPolicyState(found, setters) {
     setAttendancePolicy,
     setLeaveAllowances,
     setHolidays,
-    setHolidaySource
+    setHolidaySource,
+    setHolidayCalendarId,
+    setCreateHolidayCalendar
   } = setters;
   setClient(found);
   // Include designations found on the client's employees so every employee in
@@ -39,8 +41,15 @@ function applyClientPolicyState(found, setters) {
     buildLeaveAllowancesForDesignations(mergedDesignations, found.leave_allowances ?? [])
   );
   setHolidays(found.holidays ?? []);
+  const calendarId = found.holiday_calendar_id || null;
+  if (typeof setHolidayCalendarId === 'function') {
+    setHolidayCalendarId(calendarId);
+  }
   if (typeof setHolidaySource === 'function') {
-    setHolidaySource(found.holiday_source === 'default' ? 'default' : 'custom');
+    setHolidaySource(calendarId ? 'custom' : 'default');
+  }
+  if (typeof setCreateHolidayCalendar === 'function') {
+    setCreateHolidayCalendar(false);
   }
 }
 
@@ -63,7 +72,9 @@ export default function PayrollClientPolicyPage() {
   const [attendancePolicy, setAttendancePolicy] = useState({ ...DEFAULT_ATTENDANCE_POLICY });
   const [leaveAllowances, setLeaveAllowances] = useState([]);
   const [holidays, setHolidays] = useState([]);
-  const [holidaySource, setHolidaySource] = useState('custom');
+  const [holidaySource, setHolidaySource] = useState('default');
+  const [holidayCalendarId, setHolidayCalendarId] = useState(null);
+  const [createHolidayCalendar, setCreateHolidayCalendar] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -86,7 +97,9 @@ export default function PayrollClientPolicyPage() {
         setAttendancePolicy,
         setLeaveAllowances,
         setHolidays,
-        setHolidaySource
+        setHolidaySource,
+        setHolidayCalendarId,
+        setCreateHolidayCalendar
       });
     } catch (err) {
       setError(err.message);
@@ -141,7 +154,9 @@ export default function PayrollClientPolicyPage() {
         attendance_policy: policyPayload,
         leave_allowances: leaveAllowances,
         holidays: holidays.filter((h) => h.holiday_date),
-        holiday_source: holidaySource === 'default' ? 'default' : 'custom',
+        holiday_source: holidayCalendarId || createHolidayCalendar ? 'custom' : 'default',
+        holiday_calendar_id: holidayCalendarId || null,
+        create_holiday_calendar: Boolean(createHolidayCalendar) && !holidayCalendarId,
         effective_from_month: effectiveFromMonth
       };
 
@@ -182,7 +197,9 @@ export default function PayrollClientPolicyPage() {
         setAttendancePolicy,
         setLeaveAllowances,
         setHolidays,
-        setHolidaySource
+        setHolidaySource,
+        setHolidayCalendarId,
+        setCreateHolidayCalendar
       });
       emitClientPolicyUpdated(client.id);
       // Always reload from server so the form matches persisted DB state.
@@ -305,14 +322,26 @@ export default function PayrollClientPolicyPage() {
           attendancePolicy={attendancePolicy}
           leaveAllowances={leaveAllowances}
           holidays={holidays}
+          holidayCalendarId={holidayCalendarId}
           holidaySource={holidaySource}
+          createHolidayCalendar={createHolidayCalendar}
           fieldErrors={fieldErrors}
           designations={designations}
+          clientId={id}
+          clientName={client?.client_name ?? ''}
           showDesignations
           onDesignationsChange={onDesignationsChange}
           onAttendancePolicyChange={setAttendancePolicy}
           onLeaveAllowancesChange={setLeaveAllowances}
           onHolidaysChange={setHolidays}
+          onHolidayCalendarIdChange={setHolidayCalendarId}
+          onCreateHolidayCalendarChange={(createNew) => {
+            setCreateHolidayCalendar(createNew);
+            if (createNew) {
+              setHolidayCalendarId(null);
+              setHolidaySource('custom');
+            }
+          }}
           onHolidaySourceChange={setHolidaySource}
         />
         <div className="mt-6 flex justify-end">

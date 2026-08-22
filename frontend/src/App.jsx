@@ -18,6 +18,7 @@ import PayrollClientIdentityNumbersPage from './pages/PayrollClientIdentityNumbe
 import PayrollClientAttendancePage from './pages/PayrollClientAttendancePage';
 import PayrollClientPolicyPage from './pages/PayrollClientPolicyPage';
 import PayrollClientAssignPmPage from './pages/PayrollClientAssignPmPage';
+import PayrollClientSalaryChangesPage from './pages/PayrollClientSalaryChangesPage';
 import PayrollHeadDashboardHome from './pages/PayrollHeadDashboardHome';
 import PayrollHeadClientsPage from './pages/PayrollHeadClientsPage';
 import SuperAdminLayout from './components/SuperAdminLayout';
@@ -85,6 +86,7 @@ export default function App() {
           <Route path="attendance" element={<PayrollClientAttendancePage />} />
           <Route path="policy" element={<PayrollClientPolicyPage />} />
           <Route path="assign-pm" element={<PayrollClientAssignPmPage />} />
+          <Route path="salary-changes" element={<PayrollClientSalaryChangesPage />} />
         </Route>
       </Route>
 
@@ -145,6 +147,7 @@ export default function App() {
           <Route path="attendance" element={<PayrollClientAttendancePage />} />
           <Route path="policy" element={<PayrollClientPolicyPage />} />
           <Route path="assign-pm" element={<PayrollClientAssignPmPage />} />
+          <Route path="salary-changes" element={<PayrollClientSalaryChangesPage />} />
         </Route>
         <Route path="activity" element={<SuperAdminActivityPage />} />
         <Route path="salary-config" element={<SuperAdminSalaryConfigPage />} />

@@ -51,7 +51,9 @@ const emptyForm = {
   attendance_policy: { ...DEFAULT_ATTENDANCE_POLICY },
   leave_allowances: [],
   holidays: [],
-  holiday_source: 'default'
+  holiday_source: 'default',
+  holiday_calendar_id: null,
+  create_holiday_calendar: false
 };
 
 function downloadBlob(blob, filename) {
@@ -147,7 +149,9 @@ export default function ClientForm() {
             ? found.leave_allowances
             : buildLeaveAllowancesForDesignations(found.designations ?? [])),
           holidays: found.holidays ?? [],
-          holiday_source: found.holiday_source === 'default' ? 'default' : 'custom'
+          holiday_source: found.holiday_calendar_id ? 'custom' : 'default',
+          holiday_calendar_id: found.holiday_calendar_id || null,
+          create_holiday_calendar: false
         });
       })
       .catch(err => setError(err.message))
@@ -341,7 +345,9 @@ export default function ClientForm() {
         cushion_type: form.cushion_enabled ? form.cushion_type : null,
         cushion_value: form.cushion_enabled ? Number(form.cushion_value) : null,
         holidays: (form.holidays ?? []).filter((h) => h.holiday_date),
-        holiday_source: form.holiday_source === 'default' ? 'default' : 'custom'
+        holiday_source: form.holiday_calendar_id || form.create_holiday_calendar ? 'custom' : 'default',
+        holiday_calendar_id: form.holiday_calendar_id || null,
+        create_holiday_calendar: Boolean(form.create_holiday_calendar) && !form.holiday_calendar_id
       };
       delete payload.cushion_enabled;
       if (isEdit) {
@@ -486,23 +492,24 @@ export default function ClientForm() {
       )}
 
         <form onSubmit={onSubmit} className="bg-white border border-slate-200 rounded-lg p-6 space-y-5">
-          <Field label="Client Name" error={fieldErrors.client_name}>
-            <input
-              type="text"
-              value={form.client_name}
-              onChange={e => set({ client_name: e.target.value })}
-              className="input"
-            />
-          </Field>
-
-          <Field label="Contract Code" error={fieldErrors.contract_code}>
-            <input
-              type="text"
-              value={form.contract_code}
-              onChange={e => set({ contract_code: e.target.value })}
-              className="input"
-            />
-          </Field>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Client Name" error={fieldErrors.client_name}>
+              <input
+                type="text"
+                value={form.client_name}
+                onChange={e => set({ client_name: e.target.value })}
+                className="input"
+              />
+            </Field>
+            <Field label="Contract Code" error={fieldErrors.contract_code}>
+              <input
+                type="text"
+                value={form.contract_code}
+                onChange={e => set({ contract_code: e.target.value })}
+                className="input"
+              />
+            </Field>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Field label="Entity" error={fieldErrors.entity}>
@@ -577,6 +584,13 @@ export default function ClientForm() {
             </select>
           </Field>
 
+          <Field label="Designations" error={fieldErrors.designations}>
+            <DesignationsInput
+              value={form.designations}
+              onChange={onDesignationsChange}
+            />
+          </Field>
+
           <Field label="Insurance Applicable">
             <div className="flex gap-4 text-sm">
               <label className="inline-flex items-center gap-2">
@@ -629,13 +643,6 @@ export default function ClientForm() {
               </Field>
             </div>
           )}
-
-          <Field label="Designations" error={fieldErrors.designations}>
-            <DesignationsInput
-              value={form.designations}
-              onChange={onDesignationsChange}
-            />
-          </Field>
 
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 space-y-5">
             <h2 className="text-base font-semibold text-slate-900">Wage settings</h2>
@@ -778,12 +785,25 @@ export default function ClientForm() {
               attendancePolicy={form.attendance_policy}
               leaveAllowances={form.leave_allowances}
               holidays={form.holidays}
+              holidayCalendarId={form.holiday_calendar_id}
               holidaySource={form.holiday_source}
+              createHolidayCalendar={form.create_holiday_calendar}
               fieldErrors={fieldErrors}
               designations={form.designations}
+              clientId={isEdit ? id : null}
+              clientName={form.client_name}
               onAttendancePolicyChange={(attendance_policy) => set({ attendance_policy })}
               onLeaveAllowancesChange={(leave_allowances) => set({ leave_allowances })}
               onHolidaysChange={(holidays) => set({ holidays })}
+              onHolidayCalendarIdChange={(holiday_calendar_id) => set({
+                holiday_calendar_id
+              })}
+              onCreateHolidayCalendarChange={(create_holiday_calendar) => set({
+                create_holiday_calendar,
+                ...(create_holiday_calendar
+                  ? { holiday_calendar_id: null, holiday_source: 'custom' }
+                  : {})
+              })}
               onHolidaySourceChange={(holiday_source) => set({ holiday_source })}
             />
           </div>

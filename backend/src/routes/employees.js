@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import multer from 'multer';
 import Papa from 'papaparse';
@@ -9,6 +10,19 @@ import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 import { applyCushion, normalizeRegionName, normalizeWageZone } from '../utils/wageConfig.js';
 import { listAccessibleClientIds } from '../utils/roleAccess.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
+import {
+  SALARY_CHANGE_BUCKET,
+  SALARY_CHANGE_SIGNED_URL_SECONDS,
+  cancelPendingSalaryChangeRequests,
+  describeSalary,
+  emptySalaryChangeFlags,
+  fetchJobAppReviewStatus,
+  hasExistingPayFields,
+  inspectSalaryAttachment,
+  isPmApprovedReviewStatus,
+  salaryFieldsChanged,
+  validateSalaryFields
+} from '../utils/salaryChange.js';
 import {
   DOJ_UNLOCK_CLEAR,
   JOINING_STATUS_UNLOCK_CLEAR,
@@ -479,6 +493,33 @@ async function assertCtcMeetsWageMinimum(roleDetails, skillLevel, { cushionType 
     return `Monthly CTC must be at least ${floor} for ${state} / ${zone} / ${skill_level} (got effective monthly ${monthly})`;
   }
   return null;
+}
+
+async function assertSalaryMeetsWageMinimumForEmployee(employee, salaryFields) {
+  const designationMap = await fetchClientDesignationMap(employee.client_id);
+  const wageSettings = await fetchClientWageSettings(employee.client_id);
+  const desigMeta = designationMap.get(String(employee.designation ?? '').toLowerCase());
+  return assertCtcMeetsWageMinimum(
+    {
+      ...salaryFields,
+      state: employee.state,
+      zone: employee.zone || 'zone1'
+    },
+    desigMeta?.skill_level || 'UNSKILLED',
+    { cushionType: wageSettings.cushionType, cushionValue: wageSettings.cushionValue }
+  );
+}
+
+function salaryAttachmentUpload(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Attachment must be 5 MB or smaller' });
+      }
+      return res.status(400).json({ error: err.message || 'Could not upload file' });
+    }
+    next();
+  });
 }
 
 const REVIEWABLE_JOB_FORM_FIELDS = [
@@ -1100,6 +1141,38 @@ router.get('/', async (req, res, next) => {
         }
       }
 
+      try {
+        const { data: pendingSalaryReqs, error: pendingSalaryErr } = await supabaseAdmin
+          .from('employee_salary_change_requests')
+          .select(
+            'id, employee_id, reason, created_at, to_pay_type, to_ctc_type, to_ctc_value'
+          )
+          .in('employee_id', employeeIds)
+          .eq('status', 'PENDING');
+        if (pendingSalaryErr) throw pendingSalaryErr;
+        const pendingSalaryByEmployee = new Map(
+          (pendingSalaryReqs ?? []).map((r) => [r.employee_id, r])
+        );
+        for (const row of out) {
+          const pending = pendingSalaryByEmployee.get(row.id);
+          row.salary_change_request_pending = Boolean(pending);
+          row.salary_change_request_id = pending?.id ?? null;
+          row.salary_change_request_reason = pending?.reason ?? null;
+          row.salary_change_to_pay_type = pending?.to_pay_type ?? null;
+          row.salary_change_to_ctc_type = pending?.to_ctc_type ?? null;
+          row.salary_change_to_ctc_value = pending?.to_ctc_value ?? null;
+          row.salary_change_requested_at = pending?.created_at ?? null;
+        }
+      } catch (pendingSalaryLoadErr) {
+        console.warn(
+          '[employees] employee_salary_change_requests enrich skipped:',
+          pendingSalaryLoadErr?.message || pendingSalaryLoadErr
+        );
+        for (const row of out) {
+          Object.assign(row, emptySalaryChangeFlags());
+        }
+      }
+
       // Lazy-expire unused unlocks so list reflects locked state.
       for (const row of out) {
         if (row.doj_extend_unlock) {
@@ -1123,10 +1196,445 @@ router.get('/', async (req, res, next) => {
         row.joining_status_change_request_pending = false;
         row.joining_status_change_request_id = null;
         row.joining_status_change_request_reason = null;
+        Object.assign(row, emptySalaryChangeFlags());
       }
     }
 
     res.json(out);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/salary-change-requests', async (req, res, next) => {
+  try {
+    const clientId = String(req.query.client_id ?? '').trim();
+    if (!clientId) return res.status(400).json({ error: 'client_id query param required' });
+    const owned = await fetchOwnedClient(req, clientId);
+    if (!owned) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const statusFilter = String(req.query.status ?? 'PENDING').trim().toUpperCase();
+    const allowedStatus = new Set(['PENDING', 'APPROVED', 'REJECTED', 'CANCELED']);
+    if (!allowedStatus.has(statusFilter)) {
+      return res.status(400).json({ error: 'status must be PENDING, APPROVED, REJECTED, or CANCELED' });
+    }
+
+    const { data: requests, error } = await supabaseAdmin
+      .from('employee_salary_change_requests')
+      .select(
+        'id, employee_id, client_id, requested_by, from_pay_type, from_ctc_type, from_ctc_value, to_pay_type, to_ctc_type, to_ctc_value, reason, document_name, document_mime, status, reviewed_by, reviewed_at, review_note, created_at, updated_at'
+      )
+      .eq('client_id', clientId)
+      .eq('status', statusFilter)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    const rows = requests ?? [];
+    const employeeIds = [...new Set(rows.map((r) => r.employee_id).filter(Boolean))];
+    const userIds = [
+      ...new Set(rows.flatMap((r) => [r.requested_by, r.reviewed_by]).filter(Boolean))
+    ];
+
+    let employeeById = new Map();
+    if (employeeIds.length > 0) {
+      const { data: employees, error: empErr } = await supabaseAdmin
+        .from('employees')
+        .select('id, name, emp_code, reference_id, designation, pay_type, ctc_type, ctc_value')
+        .in('id', employeeIds);
+      if (empErr) throw empErr;
+      employeeById = new Map((employees ?? []).map((e) => [e.id, e]));
+    }
+
+    let userById = new Map();
+    if (userIds.length > 0) {
+      const { data: users, error: userErr } = await supabaseAdmin
+        .from('users')
+        .select('id, name')
+        .in('id', userIds);
+      if (userErr) throw userErr;
+      userById = new Map((users ?? []).map((u) => [u.id, u.name ?? null]));
+    }
+
+    res.json(
+      rows.map((row) => {
+        const employee = employeeById.get(row.employee_id);
+        return {
+          ...row,
+          employee_name: employee?.name ?? null,
+          employee_emp_code: employee?.emp_code ?? null,
+          employee_reference_id: employee?.reference_id ?? null,
+          employee_designation: employee?.designation ?? null,
+          current_pay_type: employee?.pay_type ?? row.from_pay_type,
+          current_ctc_type: employee?.ctc_type ?? row.from_ctc_type,
+          current_ctc_value: employee?.ctc_value ?? row.from_ctc_value,
+          requested_by_name: userById.get(row.requested_by) ?? null,
+          reviewed_by_name: row.reviewed_by ? userById.get(row.reviewed_by) ?? null : null
+        };
+      })
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/salary-change-requests/:requestId/document', async (req, res, next) => {
+  try {
+    const requestId = String(req.params.requestId ?? '').trim();
+    const { data: row, error } = await supabaseAdmin
+      .from('employee_salary_change_requests')
+      .select('id, client_id, document_path, document_name, document_mime')
+      .eq('id', requestId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!row) return res.status(404).json({ error: 'Salary change request not found' });
+
+    const owned = await fetchOwnedClient(req, row.client_id);
+    if (!owned) return res.status(403).json({ error: 'Not authorized for this request' });
+
+    const { data: signed, error: signErr } = await supabaseAdmin.storage
+      .from(SALARY_CHANGE_BUCKET)
+      .createSignedUrl(row.document_path, SALARY_CHANGE_SIGNED_URL_SECONDS);
+    if (signErr) throw signErr;
+    if (!signed?.signedUrl) {
+      return res.status(500).json({ error: 'Could not create document link' });
+    }
+
+    res.json({
+      url: signed.signedUrl,
+      document_name: row.document_name,
+      document_mime: row.document_mime
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/salary-change-requests/:requestId/review', async (req, res, next) => {
+  try {
+    const requestId = String(req.params.requestId ?? '').trim();
+    const decision = String(req.body?.decision_status ?? '').trim().toUpperCase();
+    const reviewNote = String(req.body?.review_note ?? '').trim();
+    if (!['APPROVED', 'REJECTED'].includes(decision)) {
+      return res.status(400).json({ error: 'decision_status must be APPROVED or REJECTED' });
+    }
+    if (decision === 'REJECTED' && !reviewNote) {
+      return res.status(400).json({ error: 'review_note is required when rejecting' });
+    }
+
+    const { data: row, error: rowErr } = await supabaseAdmin
+      .from('employee_salary_change_requests')
+      .select('*')
+      .eq('id', requestId)
+      .maybeSingle();
+    if (rowErr) throw rowErr;
+    if (!row) return res.status(404).json({ error: 'Salary change request not found' });
+    if (row.status !== 'PENDING') {
+      return res.status(400).json({ error: 'Only pending salary change requests can be reviewed' });
+    }
+
+    const ownedPl = await fetchPayrollLeadOwnedClient(req, row.client_id);
+    if (!ownedPl) return res.status(403).json({ error: 'Not authorized for this client' });
+
+    const now = new Date().toISOString();
+    if (decision === 'APPROVED') {
+      const { data: employee, error: empErr } = await supabaseAdmin
+        .from('employees')
+        .select('id, client_id, name, designation, pay_type, ctc_type, ctc_value, state, zone')
+        .eq('id', row.employee_id)
+        .maybeSingle();
+      if (empErr) throw empErr;
+      if (!employee) return res.status(404).json({ error: 'Employee not found' });
+
+      const salaryFields = {
+        pay_type: row.to_pay_type,
+        ctc_type: row.to_ctc_type,
+        ctc_value: Number(row.to_ctc_value)
+      };
+      const minErr = await assertSalaryMeetsWageMinimumForEmployee(employee, salaryFields);
+      if (minErr) return res.status(400).json({ error: minErr, details: [minErr] });
+
+      const { error: empUpdateErr } = await supabaseAdmin
+        .from('employees')
+        .update(salaryFields)
+        .eq('id', employee.id);
+      if (empUpdateErr) throw empUpdateErr;
+    }
+
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from('employee_salary_change_requests')
+      .update({
+        status: decision,
+        reviewed_by: req.user.id,
+        reviewed_at: now,
+        review_note: reviewNote || null,
+        updated_at: now
+      })
+      .eq('id', requestId)
+      .eq('status', 'PENDING')
+      .select('*')
+      .maybeSingle();
+    if (updErr) throw updErr;
+    if (!updated) {
+      return res.status(409).json({ error: 'Salary change request was already reviewed' });
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: decision === 'APPROVED' ? 'SALARY_CHANGE_APPROVED' : 'SALARY_CHANGE_REJECTED',
+      entityType: 'employee',
+      entityId: row.employee_id,
+      clientId: row.client_id,
+      summary:
+        decision === 'APPROVED'
+          ? `Approved salary change to ${describeSalary(row.to_pay_type, row.to_ctc_type, row.to_ctc_value)}`
+          : `Rejected salary change request (${reviewNote})`,
+      metadata: {
+        request_id: requestId,
+        from_pay_type: row.from_pay_type,
+        from_ctc_type: row.from_ctc_type,
+        from_ctc_value: row.from_ctc_value,
+        to_pay_type: row.to_pay_type,
+        to_ctc_type: row.to_ctc_type,
+        to_ctc_value: row.to_ctc_value,
+        review_note: reviewNote || null
+      }
+    });
+
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/salary-change-requests/:requestId/cancel', async (req, res, next) => {
+  try {
+    const requestId = String(req.params.requestId ?? '').trim();
+    const { data: row, error: rowErr } = await supabaseAdmin
+      .from('employee_salary_change_requests')
+      .select('id, client_id, employee_id, requested_by, status, to_pay_type, to_ctc_type, to_ctc_value')
+      .eq('id', requestId)
+      .maybeSingle();
+    if (rowErr) throw rowErr;
+    if (!row) return res.status(404).json({ error: 'Salary change request not found' });
+    if (row.status !== 'PENDING') {
+      return res.status(400).json({ error: 'Only pending salary change requests can be canceled' });
+    }
+
+    const owned = await fetchOwnedClient(req, row.client_id);
+    if (!owned) return res.status(403).json({ error: 'Not authorized for this request' });
+
+    const now = new Date().toISOString();
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from('employee_salary_change_requests')
+      .update({
+        status: 'CANCELED',
+        reviewed_by: req.user.id,
+        reviewed_at: now,
+        review_note: 'Canceled by requester',
+        updated_at: now
+      })
+      .eq('id', requestId)
+      .eq('status', 'PENDING')
+      .select('*')
+      .maybeSingle();
+    if (updErr) throw updErr;
+    if (!updated) {
+      return res.status(409).json({ error: 'Salary change request was already reviewed' });
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'SALARY_CHANGE_REQUESTED',
+      entityType: 'employee',
+      entityId: row.employee_id,
+      clientId: row.client_id,
+      summary: `Canceled salary change request for ${describeSalary(row.to_pay_type, row.to_ctc_type, row.to_ctc_value)}`,
+      metadata: { request_id: requestId, canceled: true }
+    });
+
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/:id/salary', async (req, res, next) => {
+  try {
+    const employeeId = req.params.id;
+    const { data: row, error: rowErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, designation, pay_type, ctc_type, ctc_value, state, zone, onboarding_status')
+      .eq('id', employeeId)
+      .maybeSingle();
+    if (rowErr) throw rowErr;
+    if (!row) return res.status(404).json({ error: 'Employee not found' });
+
+    const owned = await fetchOwnedClient(req, row.client_id);
+    if (!owned) return res.status(403).json({ error: 'Not authorized for this employee' });
+    if (!hasExistingPayFields(row)) {
+      return res.status(400).json({ error: 'Set role details before editing salary' });
+    }
+
+    const reviewStatus = await fetchJobAppReviewStatus(employeeId);
+    if (isPmApprovedReviewStatus(reviewStatus)) {
+      return res.status(400).json({
+        error: 'Salary changes after PM approval require a Payroll Lead request with a supporting attachment'
+      });
+    }
+
+    const validation = validateSalaryFields(req.body || {});
+    if (validation.errors) {
+      return res.status(400).json({ error: 'Validation failed', details: validation.errors });
+    }
+    if (!salaryFieldsChanged(row, validation.salaryFields)) {
+      return res.status(400).json({ error: 'New salary must differ from the current salary' });
+    }
+
+    const minErr = await assertSalaryMeetsWageMinimumForEmployee(row, validation.salaryFields);
+    if (minErr) return res.status(400).json({ error: minErr, details: [minErr] });
+
+    const { data: updated, error } = await supabaseAdmin
+      .from('employees')
+      .update(validation.salaryFields)
+      .eq('id', employeeId)
+      .select('*')
+      .maybeSingle();
+    if (error) throw error;
+
+    await logOrgActivityFromReq(req, {
+      action: 'SALARY_UPDATED',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId: row.client_id,
+      summary: `Updated salary for ${updated?.name || row.name || employeeId} to ${describeSalary(
+        validation.salaryFields.pay_type,
+        validation.salaryFields.ctc_type,
+        validation.salaryFields.ctc_value
+      )}`,
+      metadata: {
+        from_pay_type: row.pay_type,
+        from_ctc_type: row.ctc_type,
+        from_ctc_value: row.ctc_value,
+        to_pay_type: validation.salaryFields.pay_type,
+        to_ctc_type: validation.salaryFields.ctc_type,
+        to_ctc_value: validation.salaryFields.ctc_value
+      }
+    });
+
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/salary-change-request', salaryAttachmentUpload, async (req, res, next) => {
+  try {
+    const employeeId = req.params.id;
+    const { data: row, error: rowErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, designation, pay_type, ctc_type, ctc_value, state, zone')
+      .eq('id', employeeId)
+      .maybeSingle();
+    if (rowErr) throw rowErr;
+    if (!row) return res.status(404).json({ error: 'Employee not found' });
+
+    const owned = await fetchOwnedClient(req, row.client_id);
+    if (!owned) return res.status(403).json({ error: 'Not authorized for this employee' });
+    if (!hasExistingPayFields(row)) {
+      return res.status(400).json({ error: 'Set role details before requesting a salary change' });
+    }
+
+    const reviewStatus = await fetchJobAppReviewStatus(employeeId);
+    if (!isPmApprovedReviewStatus(reviewStatus)) {
+      return res.status(400).json({
+        error: 'Salary can be edited directly until the application is PM approved'
+      });
+    }
+
+    const { data: existingPending, error: pendingErr } = await supabaseAdmin
+      .from('employee_salary_change_requests')
+      .select('id')
+      .eq('employee_id', employeeId)
+      .eq('status', 'PENDING')
+      .maybeSingle();
+    if (pendingErr) throw pendingErr;
+    if (existingPending) {
+      return res.status(409).json({ error: 'A salary change request is already pending for this employee' });
+    }
+
+    const validation = validateSalaryFields(req.body || {});
+    if (validation.errors) {
+      return res.status(400).json({ error: 'Validation failed', details: validation.errors });
+    }
+    if (!salaryFieldsChanged(row, validation.salaryFields)) {
+      return res.status(400).json({ error: 'New salary must differ from the current salary' });
+    }
+
+    const minErr = await assertSalaryMeetsWageMinimumForEmployee(row, validation.salaryFields);
+    if (minErr) return res.status(400).json({ error: minErr, details: [minErr] });
+
+    const attachment = inspectSalaryAttachment(req.file);
+    if (attachment.error) return res.status(400).json({ error: attachment.error });
+
+    const reason = String(req.body?.reason ?? '').trim() || null;
+    const requestId = randomUUID();
+    const objectPath = `${row.client_id}/${employeeId}/${requestId}/${attachment.safeName}`;
+
+    const { error: upErr } = await supabaseAdmin.storage
+      .from(SALARY_CHANGE_BUCKET)
+      .upload(objectPath, req.file.buffer, {
+        contentType: attachment.mime,
+        upsert: false
+      });
+    if (upErr) throw upErr;
+
+    const { data: created, error: insertErr } = await supabaseAdmin
+      .from('employee_salary_change_requests')
+      .insert({
+        id: requestId,
+        employee_id: employeeId,
+        client_id: row.client_id,
+        requested_by: req.user.id,
+        from_pay_type: row.pay_type,
+        from_ctc_type: row.ctc_type,
+        from_ctc_value: row.ctc_value,
+        to_pay_type: validation.salaryFields.pay_type,
+        to_ctc_type: validation.salaryFields.ctc_type,
+        to_ctc_value: validation.salaryFields.ctc_value,
+        reason,
+        document_path: objectPath,
+        document_name: attachment.originalName,
+        document_mime: attachment.mime,
+        status: 'PENDING'
+      })
+      .select('*')
+      .maybeSingle();
+    if (insertErr) {
+      await supabaseAdmin.storage.from(SALARY_CHANGE_BUCKET).remove([objectPath]);
+      throw insertErr;
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'SALARY_CHANGE_REQUESTED',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId: row.client_id,
+      summary: `Requested salary change for ${row.name || employeeId} to ${describeSalary(
+        validation.salaryFields.pay_type,
+        validation.salaryFields.ctc_type,
+        validation.salaryFields.ctc_value
+      )}`,
+      metadata: {
+        request_id: requestId,
+        from_pay_type: row.pay_type,
+        from_ctc_type: row.ctc_type,
+        from_ctc_value: row.ctc_value,
+        to_pay_type: validation.salaryFields.pay_type,
+        to_ctc_type: validation.salaryFields.ctc_type,
+        to_ctc_value: validation.salaryFields.ctc_value,
+        document_name: attachment.originalName
+      }
+    });
+
+    res.status(201).json(created);
   } catch (err) {
     next(err);
   }
@@ -1724,6 +2232,11 @@ router.post('/:id/transfer-project', async (req, res, next) => {
         .eq('id', formRow.id);
       if (resetFormErr) throw resetFormErr;
     }
+
+    await cancelPendingSalaryChangeRequests(employeeId, {
+      reviewedBy: req.user.id,
+      reviewNote: 'Canceled because the employee was transferred to another project'
+    });
 
     return res.json({
       employee: updatedEmployee,

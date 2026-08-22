@@ -28,6 +28,8 @@ export async function invokeResendEmail({
   subject,
   html,
   text,
+  cc,
+  bcc,
   edgeFunction = DEFAULT_ATTENDANCE_EMAIL_EDGE,
   logLabel = 'resend-email'
 } = {}) {
@@ -35,7 +37,7 @@ export async function invokeResendEmail({
 
   const batch = await invokeResendEmailBatch({
     subject,
-    recipients: [{ name: toName || '', email: toEmail, html, text }],
+    recipients: [{ name: toName || '', email: toEmail, html, text, cc, bcc }],
     edgeFunction,
     logLabel
   });
@@ -54,7 +56,7 @@ export async function invokeResendEmail({
 
 /**
  * Send many recipients via the Resend edge mailer in chunks.
- * @param {{ subject?: string, recipients?: Array<{ name?: string, email?: string, html?: string, text?: string }>, edgeFunction?: string, logLabel?: string, chunkSize?: number }} opts
+ * @param {{ subject?: string, recipients?: Array<{ name?: string, email?: string, html?: string, text?: string, cc?: string[], bcc?: string[] }>, edgeFunction?: string, logLabel?: string, chunkSize?: number }} opts
  */
 export async function invokeResendEmailBatch({
   subject,
@@ -81,7 +83,13 @@ export async function invokeResendEmailBatch({
       name: String(raw?.name ?? '').trim(),
       email: String(raw?.email ?? '').trim(),
       html: String(raw?.html ?? '').trim(),
-      text: String(raw?.text ?? '').trim()
+      text: String(raw?.text ?? '').trim(),
+      cc: Array.isArray(raw?.cc)
+        ? raw.cc.map((item) => String(item ?? '').trim()).filter(Boolean)
+        : [],
+      bcc: Array.isArray(raw?.bcc)
+        ? raw.bcc.map((item) => String(item ?? '').trim()).filter(Boolean)
+        : []
     }))
     .filter((r) => r.email);
 

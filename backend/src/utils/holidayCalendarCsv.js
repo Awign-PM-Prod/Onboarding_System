@@ -16,20 +16,6 @@ const SAMPLE_ROWS = [
     day: 'Monday',
     'NH/FH': 'NH',
     'Holiday Name': 'Republic Day'
-  },
-  {
-    state: 'Maharashtra',
-    date: '2026-08-15',
-    day: 'Saturday',
-    'NH/FH': 'NH',
-    'Holiday Name': 'Independence Day'
-  },
-  {
-    state: 'Karnataka',
-    date: '2026-11-01',
-    day: 'Sunday',
-    'NH/FH': 'FH',
-    'Holiday Name': 'Kannada Rajyotsava'
   }
 ];
 
@@ -113,7 +99,7 @@ export function parseHolidayCalendarCsvText(text) {
     }
     const holiday_date = parseHolidayDate(row.date);
     if (!holiday_date) {
-      errors.push(`Row ${line}: invalid date "${row.date ?? ''}" (use YYYY-MM-DD).`);
+      errors.push(`Row ${line}: invalid date "${row.date ?? ''}".`);
       continue;
     }
     const holiday_type = normalizeHolidayType(row.holiday_type);

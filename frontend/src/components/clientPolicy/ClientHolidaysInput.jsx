@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
-import { formatHolidayDisplayDate, normalizeHolidayName, weekdayFromIsoDate } from '../../lib/holidayCalendarCsv';
+import { formatHolidayDisplayDate, normalizeHolidayName, parseHolidayCalendarCsvText, weekdayFromIsoDate } from '../../lib/holidayCalendarCsv';
 import { INDIAN_STATES } from '../../lib/indianStates';
 
 const HOLIDAY_TYPES = [
@@ -25,6 +25,21 @@ function yearOptions() {
   return out;
 }
 
+function IconChevron({ open, className }) {
+  return (
+    <svg
+      className={`${className} transition-transform ${open ? 'rotate-180' : ''}`}
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.5}
+      stroke="currentColor"
+      aria-hidden
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+    </svg>
+  );
+}
+
 function masterToRows(items) {
   return (items ?? []).map((h) => ({
     state: String(h.state ?? '').trim() || null,
@@ -34,21 +49,11 @@ function masterToRows(items) {
   }));
 }
 
-function hasDatedHolidays(holidays) {
-  return (holidays ?? []).some((h) => String(h?.holiday_date ?? '').trim());
-}
-
 function holidayYear(h) {
   const d = String(h?.holiday_date ?? '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
   const y = Number(d.slice(0, 4));
   return Number.isInteger(y) && y >= 1900 ? y : null;
-}
-
-function allDatedHolidaysAreYear(holidays, y) {
-  const dated = (holidays ?? []).filter((h) => holidayYear(h) != null);
-  if (!dated.length) return false;
-  return dated.every((h) => holidayYear(h) === y);
 }
 
 function stateKeyOf(h) {
@@ -59,20 +64,8 @@ function hasHolidayDate(h) {
   return Boolean(String(h?.holiday_date ?? '').trim());
 }
 
-/** Drop custom states that have no dated holidays, except those in keepStates. */
-function pruneUndatedOnlyStates(holidays, keepStates = []) {
-  const keep = new Set((keepStates ?? []).filter(Boolean));
-  const dated = new Set();
-  for (const h of holidays ?? []) {
-    const st = stateKeyOf(h);
-    if (st && hasHolidayDate(h)) dated.add(st);
-  }
-  return (holidays ?? []).filter((h) => {
-    const st = stateKeyOf(h);
-    if (!st) return hasHolidayDate(h);
-    if (keep.has(st)) return true;
-    return dated.has(st);
-  });
+function datedHolidaysOnly(holidays) {
+  return (holidays ?? []).filter(hasHolidayDate);
 }
 
 function dropUndatedOnlyState(holidays, state) {
@@ -111,26 +104,37 @@ function groupByState(rows, yearFilter) {
 export default function ClientHolidaysInput({
   value,
   onChange,
-  holidaySource = 'custom',
+  holidayCalendarId = null,
+  onHolidayCalendarIdChange,
+  holidaySource,
   onHolidaySourceChange,
+  createHolidayCalendar = false,
+  onCreateHolidayCalendarChange,
+  clientId = null,
+  clientName = '',
   error
 }) {
   const holidays = value ?? [];
-  const source = holidaySource === 'default' ? 'default' : 'custom';
-  const sourceName = useId();
+  const namedCalendarId = holidayCalendarId || null;
+  const pendingNewCalendar = Boolean(createHolidayCalendar) && !namedCalendarId;
+  const isDefault = !namedCalendarId && !pendingNewCalendar;
   const yearSelectId = useId();
   const searchId = useId();
+  const calendarSelectId = useId();
+  const csvInputId = useId();
   const [year, setYear] = useState(currentYear);
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState({});
+  const [defs, setDefs] = useState([]);
   const [masterHolidays, setMasterHolidays] = useState([]);
   const [masterLoading, setMasterLoading] = useState(false);
   const [masterError, setMasterError] = useState('');
   const [stateMenuOpen, setStateMenuOpen] = useState(false);
+  const [pinnedStates, setPinnedStates] = useState([]);
+  const [draftByState, setDraftByState] = useState({});
+  const [csvError, setCsvError] = useState('');
   const stateMenuRef = useRef(null);
-  const customEditedRef = useRef(false);
-  const skipSeedRef = useRef(false);
-  const prevYearRef = useRef(null);
+  const csvInputRef = useRef(null);
 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -153,6 +157,25 @@ export default function ClientHolidaysInput({
 
   useEffect(() => {
     let cancelled = false;
+    api
+      .listHolidayCalendarDefs({ forClientId: clientId || undefined })
+      .then((rows) => {
+        if (!cancelled) setDefs(Array.isArray(rows) ? rows : []);
+      })
+      .catch((err) => {
+        if (!cancelled) setMasterError(err.message || 'Could not load calendars.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId]);
+
+  useEffect(() => {
+    if (!isDefault) {
+      setMasterLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
     setMasterLoading(true);
     setMasterError('');
     api
@@ -172,50 +195,94 @@ export default function ClientHolidaysInput({
     return () => {
       cancelled = true;
     };
-  }, [year]);
+  }, [year, isDefault]);
 
-  useEffect(() => {
-    if (source !== 'custom') return;
-    if (customEditedRef.current || skipSeedRef.current) return;
-    if (masterLoading) return;
-
-    const empty = !hasDatedHolidays(holidays);
-    const looksLikePreviousSeed = prevYearRef.current != null
-      && prevYearRef.current !== year
-      && allDatedHolidaysAreYear(holidays, prevYearRef.current);
-
-    if (!empty && !looksLikePreviousSeed) {
-      if (allDatedHolidaysAreYear(holidays, year) && prevYearRef.current === year) {
-        return;
-      }
-      skipSeedRef.current = true;
-      prevYearRef.current = year;
-      return;
+  const notifyCalendarChange = (nextId, { createNew = false } = {}) => {
+    if (typeof onCreateHolidayCalendarChange === 'function') {
+      onCreateHolidayCalendarChange(createNew && !nextId);
     }
-
-    if (empty && prevYearRef.current === year) return;
-
-    prevYearRef.current = year;
-    onChangeRef.current(masterToRows(masterHolidays));
-  }, [source, year, masterHolidays, masterLoading, holidays]);
-
-  const setSource = (next) => {
-    if (typeof onHolidaySourceChange !== 'function') return;
-    if (next === source) return;
-    if (
-      next === 'custom'
-      && !skipSeedRef.current
-      && !customEditedRef.current
-      && !hasDatedHolidays(holidays)
-    ) {
-      prevYearRef.current = year;
-      onChange(masterToRows(masterHolidays));
+    if (typeof onHolidayCalendarIdChange === 'function') onHolidayCalendarIdChange(nextId);
+    if (typeof onHolidaySourceChange === 'function') {
+      onHolidaySourceChange(nextId || createNew ? 'custom' : 'default');
     }
-    onHolidaySourceChange(next);
   };
 
-  const displayRows = source === 'default' ? masterHolidays : holidays;
-  const yearGroups = useMemo(() => groupByState(displayRows, year), [displayRows, year]);
+  const setCalendar = (nextId) => {
+    const id = nextId || null;
+    if (id === '__pending__') return;
+    if ((id || null) === (namedCalendarId || null) && !pendingNewCalendar) return;
+    notifyCalendarChange(id, { createNew: false });
+    if (!id) {
+      onChangeRef.current([]);
+      return;
+    }
+    setMasterError('');
+    setCsvError('');
+    api
+      .listHolidayCalendars({ calendarId: id })
+      .then((rows) => {
+        onChangeRef.current(datedHolidaysOnly(masterToRows(rows)));
+      })
+      .catch((err) => {
+        setMasterError(err.message || 'Could not load calendar dates.');
+        onChangeRef.current([]);
+      });
+  };
+
+  const onPickCsv = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const name = (file.name || '').toLowerCase();
+    if (!name.endsWith('.csv') && file.type !== 'text/csv') {
+      setCsvError('Only .csv files are supported.');
+      return;
+    }
+    setCsvError('');
+    setMasterError('');
+    try {
+      const text = await file.text();
+      const { items, errors } = parseHolidayCalendarCsvText(text);
+      if (!items.length) {
+        setCsvError(errors[0] || 'The file has no valid holiday rows.');
+        return;
+      }
+      const rows = datedHolidaysOnly(masterToRows(items));
+      onChangeRef.current(rows);
+      if (isDefault) {
+        notifyCalendarChange(null, { createNew: true });
+      }
+      const years = [...new Set(rows.map((h) => holidayYear(h)).filter(Boolean))];
+      if (years.length === 1) setYear(years[0]);
+      if (errors.length) {
+        setCsvError(`${errors.length} row(s) skipped due to validation errors.`);
+      }
+    } catch (err) {
+      setCsvError(err.message || 'Could not read the CSV file.');
+    }
+  };
+
+  const displayRows = isDefault ? masterHolidays : datedHolidaysOnly(holidays);
+  const yearGroups = useMemo(() => {
+    const groups = groupByState(displayRows, year);
+    if (isDefault) return groups;
+    const seen = new Set(groups.map((g) => g.state));
+    const extras = pinnedStates
+      .filter((state) => state && !seen.has(state))
+      .map((state) => ({ state, holidays: [] }));
+    if (!extras.length) return groups;
+    const extraByState = new Map(extras.map((g) => [g.state, g]));
+    const ordered = [];
+    for (const state of INDIAN_STATES) {
+      const existing = groups.find((g) => g.state === state);
+      if (existing) ordered.push(existing);
+      else if (extraByState.has(state)) ordered.push(extraByState.get(state));
+    }
+    for (const g of groups) {
+      if (!ordered.includes(g)) ordered.push(g);
+    }
+    return ordered;
+  }, [displayRows, year, isDefault, pinnedStates]);
   const grouped = useMemo(() => {
     const q = search.trim().toLowerCase();
     return yearGroups.filter((g) => {
@@ -232,7 +299,7 @@ export default function ClientHolidaysInput({
   const matchedState = INDIAN_STATES.find(
     (s) => s.toLowerCase() === search.trim().toLowerCase()
   );
-  const canAddState = source === 'custom' && Boolean(matchedState) && !statesInList.has(matchedState);
+  const canAddState = !isDefault && Boolean(matchedState) && !statesInList.has(matchedState);
   const stateSuggestions = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return INDIAN_STATES;
@@ -240,100 +307,76 @@ export default function ClientHolidaysInput({
   }, [search]);
 
   useEffect(() => {
-    if (source !== 'custom') return;
-    if (!customEditedRef.current) return;
-    const keep = matchedState ? [matchedState] : [];
-    const next = pruneUndatedOnlyStates(holidays, keep);
+    if (isDefault) return;
+    const next = datedHolidaysOnly(holidays);
     if (next.length === holidays.length) return;
     onChangeRef.current(next);
-  }, [source, holidays, matchedState]);
+  }, [isDefault, holidays]);
 
-  const addRow = (state) => {
-    customEditedRef.current = true;
-    onChange([
-      ...holidays,
-      { state: state || null, holiday_date: '', holiday_type: 'NH', holiday_name: '' }
-    ]);
-    if (state) {
-      setExpanded((prev) => ({ ...prev, [state]: true }));
-      setSearch(state);
-    }
+  const addDraftRow = (state) => {
+    if (!state || draftByState[state]) return;
+    setDraftByState((prev) => ({
+      ...prev,
+      [state]: { state, holiday_date: '', holiday_type: 'NH', holiday_name: '' }
+    }));
+    setExpanded((prev) => ({ ...prev, [state]: true }));
+    setPinnedStates((prev) => (prev.includes(state) ? prev : [...prev, state]));
   };
 
   const addSearchedState = () => {
     if (!canAddState || !matchedState) return;
-    addRow(matchedState);
-    setStateMenuOpen(false);
+    pickState(matchedState);
   };
 
   const pickState = (state) => {
     setSearch(state);
     setStateMenuOpen(false);
-    if (source !== 'custom') {
-      setExpanded((prev) => ({ ...prev, [state]: true }));
-      return;
-    }
-    const pruned = pruneUndatedOnlyStates(holidays, [state]);
-    const already = pruned.some((h) => stateKeyOf(h) === state);
-    if (already) {
-      if (pruned.length !== holidays.length) onChange(pruned);
-      setExpanded((prev) => ({ ...prev, [state]: true }));
-      return;
-    }
-    customEditedRef.current = true;
-    onChange([
-      ...pruned,
-      { state, holiday_date: '', holiday_type: 'NH', holiday_name: '' }
-    ]);
     setExpanded((prev) => ({ ...prev, [state]: true }));
+    if (isDefault) return;
+    setPinnedStates((prev) => (prev.includes(state) ? prev : [...prev, state]));
+    const next = datedHolidaysOnly(holidays);
+    if (next.length !== holidays.length) onChange(next);
   };
 
   const updateRow = (index, patch) => {
-    customEditedRef.current = true;
-    onChange(
-      holidays.map((h, i) => {
-        if (i !== index) return h;
-        const next = { ...h, ...patch };
-        return { ...next, holiday_type: normalizeHolidayType(next.holiday_type) };
-      })
-    );
+    const next = holidays.map((h, i) => {
+      if (i !== index) return h;
+      return { ...h, ...patch, holiday_type: normalizeHolidayType(patch.holiday_type ?? h.holiday_type) };
+    });
+    onChange(datedHolidaysOnly(next));
+  };
+
+  const commitDraft = (state, patch) => {
+    const current = draftByState[state] || { state, holiday_date: '', holiday_type: 'NH', holiday_name: '' };
+    const nextDraft = {
+      ...current,
+      ...patch,
+      state,
+      holiday_type: normalizeHolidayType(patch.holiday_type ?? current.holiday_type)
+    };
+    if (hasHolidayDate(nextDraft)) {
+      onChange([...datedHolidaysOnly(holidays), nextDraft]);
+      setDraftByState((prev) => {
+        const copy = { ...prev };
+        delete copy[state];
+        return copy;
+      });
+      return;
+    }
+    setDraftByState((prev) => ({ ...prev, [state]: nextDraft }));
   };
 
   const removeAtAbsoluteIndex = (absIndex) => {
-    customEditedRef.current = true;
-    const next = holidays.filter((_, i) => i !== absIndex);
-    onChange(pruneUndatedOnlyStates(next, matchedState ? [matchedState] : []));
+    onChange(datedHolidaysOnly(holidays.filter((_, i) => i !== absIndex)));
   };
 
   const indexOfRow = (row) => holidays.indexOf(row);
 
   return (
     <div className="space-y-2">
-      <label className="block text-sm font-medium text-slate-700">
+      <label htmlFor={calendarSelectId} className="block text-sm font-medium text-slate-700">
         Client Holidays
       </label>
-      <div className="flex flex-wrap gap-4 text-sm">
-        <label className="inline-flex items-center gap-2">
-          <input
-            type="radio"
-            name={sourceName}
-            checked={source === 'default'}
-            onChange={() => setSource('default')}
-          />
-          Default calendar
-        </label>
-        <label className="inline-flex items-center gap-2">
-          <input
-            type="radio"
-            name={sourceName}
-            checked={source === 'custom'}
-            onChange={() => setSource('custom')}
-          />
-          Custom calendar
-        </label>
-      </div>
-      {error && <p className="text-xs text-red-600">{error}</p>}
-
       <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-900">
         <p className="font-medium">National and festival holidays</p>
         <ul className="mt-2 list-disc space-y-1 pl-5">
@@ -341,10 +384,54 @@ export default function ClientHolidaysInput({
             Attendance uses each hired employee&apos;s work state. This does not use the client&apos;s contract state.
           </li>
           <li>
-            Default follows the Super Admin calendar for all states. Custom starts from that list; add or delete dates per state.
+            New clients start on Default (read-only, all states). Pick an unassigned client calendar, or upload a CSV to create one on save.
           </li>
         </ul>
       </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          id={calendarSelectId}
+          value={pendingNewCalendar ? '__pending__' : (namedCalendarId || '')}
+          onChange={(e) => setCalendar(e.target.value || null)}
+          className="input w-full max-w-md"
+        >
+          <option value="">Default</option>
+          {pendingNewCalendar && (
+            <option value="__pending__">
+              {clientName.trim() ? `${clientName.trim()} calendar` : 'New calendar (from CSV)'}
+            </option>
+          )}
+          {defs.filter((d) => !d.is_default).map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.client_name ? `${d.name} (${d.client_name})` : `${d.name} (unassigned)`}
+            </option>
+          ))}
+        </select>
+        <input
+          id={csvInputId}
+          ref={csvInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={onPickCsv}
+        />
+        <button
+          type="button"
+          onClick={() => csvInputRef.current?.click()}
+          className="text-sm font-medium text-indigo-600 hover:text-indigo-800"
+        >
+          Upload CSV
+        </button>
+      </div>
+      {pendingNewCalendar && (
+        <p className="text-xs text-slate-500">
+          A new calendar
+          {clientName.trim() ? ` named “${clientName.trim()} calendar”` : ''}
+          {' '}will be created when you save this client. Super Admin will see it in Holiday Calendar.
+        </p>
+      )}
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      {csvError && <p className="text-xs text-amber-700">{csvError}</p>}
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
@@ -389,7 +476,7 @@ export default function ClientHolidaysInput({
                 }
                 if (e.key === 'Escape') setStateMenuOpen(false);
               }}
-              placeholder={source === 'custom' ? 'Search or add state...' : 'Search state...'}
+              placeholder={isDefault ? 'Search state...' : 'Search or add state...'}
               className="input w-full"
             />
             {stateMenuOpen && (
@@ -425,13 +512,15 @@ export default function ClientHolidaysInput({
       </div>
 
       {masterError && <p className="text-xs text-red-600">{masterError}</p>}
-      {source === 'default' && masterLoading && (
+      {isDefault && masterLoading && (
         <p className="text-xs text-slate-500">Loading default calendar…</p>
       )}
 
       {grouped.length === 0 && !masterLoading && (
         <p className="text-xs text-slate-500">
-          No holidays for {year}. Import a calendar in Super Admin → Holiday Calendar, or add dates on Custom.
+          {isDefault
+            ? `No holidays for ${year}. Import a calendar in Super Admin → Holiday Calendar.`
+            : `No holidays for ${year} on this calendar. Add a state and dates, or import in Super Admin.`}
         </p>
       )}
 
@@ -447,24 +536,31 @@ export default function ClientHolidaysInput({
                 onClick={() => {
                   const nextOpen = !open;
                   setExpanded((prev) => ({ ...prev, [key]: nextOpen }));
-                  if (source === 'custom' && open && !nextOpen && group.state) {
-                    const next = dropUndatedOnlyState(holidays, group.state);
-                    if (next.length !== holidays.length) {
-                      customEditedRef.current = true;
-                      onChange(next);
-                    }
+                  if (!isDefault && open && !nextOpen && group.state) {
+                    setPinnedStates((prev) => prev.filter((s) => s !== group.state));
+                    setDraftByState((prev) => {
+                      const copy = { ...prev };
+                      delete copy[group.state];
+                      return copy;
+                    });
+                    const next = datedHolidaysOnly(dropUndatedOnlyState(holidays, group.state));
+                    if (next.length !== holidays.length) onChange(next);
                   }
                 }}
-                className="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-slate-50"
+                aria-expanded={open}
+                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-slate-50"
               >
-                <span className="text-sm font-semibold text-slate-900">{label}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  <IconChevron open={open} className="h-4 w-4 shrink-0 text-slate-500" />
+                  <span className="text-sm font-semibold text-slate-900">{label}</span>
+                </span>
                 <span className="text-xs text-slate-500">
                   {group.holidays.length} holiday{group.holidays.length === 1 ? '' : 's'}
                 </span>
               </button>
               {open && (
                 <div className="border-t border-slate-100">
-                  {source === 'default' ? (
+                  {isDefault ? (
                     <table className="min-w-full text-sm">
                       <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                         <tr>
@@ -531,10 +627,55 @@ export default function ClientHolidaysInput({
                           </div>
                         );
                       })}
-                      {!group.legacy && (
+                      {draftByState[group.state] && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="date"
+                            value={draftByState[group.state].holiday_date ?? ''}
+                            onChange={(e) => commitDraft(group.state, { holiday_date: e.target.value })}
+                            className="input w-full min-w-0 sm:w-auto sm:shrink-0"
+                          />
+                          <input
+                            type="text"
+                            value={draftByState[group.state].holiday_name ?? ''}
+                            onChange={(e) => commitDraft(group.state, { holiday_name: e.target.value })}
+                            placeholder="Holiday name"
+                            maxLength={120}
+                            className="input min-w-0 flex-1 sm:min-w-[10rem]"
+                          />
+                          <span className="text-xs text-slate-500">
+                            {weekdayFromIsoDate(draftByState[group.state].holiday_date) || '—'}
+                          </span>
+                          <select
+                            value={normalizeHolidayType(draftByState[group.state].holiday_type)}
+                            onChange={(e) => commitDraft(group.state, { holiday_type: e.target.value })}
+                            className="input w-full min-w-0 sm:w-auto sm:min-w-[12rem] sm:shrink-0"
+                          >
+                            {HOLIDAY_TYPES.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDraftByState((prev) => {
+                                const copy = { ...prev };
+                                delete copy[group.state];
+                                return copy;
+                              });
+                            }}
+                            className="shrink-0 text-xs text-red-600 hover:text-red-800"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                      {!group.legacy && !draftByState[group.state] && (
                         <button
                           type="button"
-                          onClick={() => addRow(group.state)}
+                          onClick={() => addDraftRow(group.state)}
                           className="text-xs text-indigo-600 hover:text-indigo-800"
                         >
                           + Add holiday

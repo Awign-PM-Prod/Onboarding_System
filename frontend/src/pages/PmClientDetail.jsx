@@ -6,6 +6,7 @@ import EmployeeFormResponseModal from '../components/EmployeeFormResponseModal';
 import AddEmployeeModal from '../components/AddEmployeeModal';
 import BulkUploadModal from '../components/BulkUploadModal';
 import RoleDetailsModal from '../components/RoleDetailsModal';
+import SalaryEditModal from '../components/SalaryEditModal';
 import PmClientDashboard from '../components/PmClientDashboard';
 import AttendancePanel from '../components/AttendancePanel';
 import ClientProjectMetaHeader from '../components/ClientProjectMetaHeader';
@@ -16,6 +17,7 @@ import {
   formatDesignationLabel,
   formatEmployeeStatusLabel,
 } from '../lib/formatLabels';
+import { salaryActionForEmployee } from '../lib/formatPay';
 import {
   DIRECTORY_STATUS_OPTIONS,
   TESTING_FORM_STATUS_OPTIONS,
@@ -163,6 +165,9 @@ export default function PmClientDetail() {
   const testingBulkMenuRef = useRef(null);
   const [testingJoiningModalOpen, setTestingJoiningModalOpen] = useState(false);
   const [rowRoleModalEmployee, setRowRoleModalEmployee] = useState(null);
+  const [salaryModalEmployee, setSalaryModalEmployee] = useState(null);
+  const [salaryModalMode, setSalaryModalMode] = useState('direct');
+  const [salaryModalLoading, setSalaryModalLoading] = useState(false);
   const [responseModalOpen, setResponseModalOpen] = useState(false);
   const [responseModalEmployee, setResponseModalEmployee] = useState(null);
   const [responseModalForm, setResponseModalForm] = useState(null);
@@ -1120,6 +1125,54 @@ export default function PmClientDetail() {
     }
   };
 
+  const handleSalaryAction = async (row, action) => {
+    if (!row || !action) return;
+    if (action.mode === 'pending') {
+      if (!row.salary_change_request_id) return;
+      setSalaryModalLoading(true);
+      setError(null);
+      try {
+        await api.cancelSalaryChange(row.salary_change_request_id);
+        setToast(`Salary change request canceled for ${row.name}.`);
+        await loadAll();
+        setTimeout(() => setToast(null), 3500);
+      } catch (err) {
+        setError(err.message || 'Could not cancel salary change request.');
+      } finally {
+        setSalaryModalLoading(false);
+      }
+      return;
+    }
+    setSalaryModalMode(action.mode);
+    setSalaryModalEmployee(row);
+  };
+
+  const handleSalarySubmit = async (payload) => {
+    if (!salaryModalEmployee) return;
+    setSalaryModalLoading(true);
+    setError(null);
+    try {
+      if (salaryModalMode === 'request') {
+        await api.requestSalaryChange(salaryModalEmployee.id, payload);
+        setToast(`Salary change request sent for ${salaryModalEmployee.name}. Waiting for Payroll Lead.`);
+      } else {
+        await api.updateEmployeeSalary(salaryModalEmployee.id, {
+          pay_type: payload.pay_type,
+          ctc_type: payload.ctc_type,
+          ctc_value: payload.ctc_value
+        });
+        setToast(`Salary updated for ${salaryModalEmployee.name}.`);
+      }
+      setSalaryModalEmployee(null);
+      await loadAll();
+      setTimeout(() => setToast(null), 3500);
+    } catch (err) {
+      setError(err.message || 'Could not save salary.');
+    } finally {
+      setSalaryModalLoading(false);
+    }
+  };
+
   const handleSingleRoleDetails = async (payload) => {
     if (!rowRoleModalEmployee) return;
     setRoleDetailsLoading(true);
@@ -1257,94 +1310,95 @@ export default function PmClientDetail() {
       return d.toLocaleString();
     };
 
-    const extendControls = canRequestExtendContext ? (
-      <div className="mt-1.5 flex flex-col gap-1.5 border-t border-slate-100 pt-1.5">
-        {unlock ? (
-          <>
-            <label className="text-[11px] font-medium text-amber-800">Extended DOJ (editable once)</label>
-            <p className="text-[10px] text-amber-800">
-              Max allowed: {row.doj_extend_max_date || '—'}
-              {row.doj_extend_unlock_expires_at
-                ? ` · Expires ${formatExpiry(row.doj_extend_unlock_expires_at)}`
-                : ''}
-            </p>
-            <input
-              type="date"
-              max={row.doj_extend_max_date || undefined}
-              value={extendedDojDraftById[row.id] ?? ''}
-              onChange={(e) =>
-                setExtendedDojDraftById((prev) => ({ ...prev, [row.id]: e.target.value }))
-              }
-              className="w-full rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300"
-            />
-            <button
-              type="button"
-              onClick={() => saveExtendedDoj(row)}
-              disabled={extendedDojSavingId === row.id}
-              className="self-start rounded bg-amber-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-            >
-              {extendedDojSavingId === row.id ? 'Saving…' : 'Save Extended DOJ'}
-            </button>
-          </>
-        ) : pendingExtend ? (
-          <span className="inline-flex w-fit rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
-            Extend DOJ pending
+    const statusChangeControl =
+      canRequestExtendContext && status ? (
+        statusUnlock ? (
+          <span className="whitespace-nowrap text-[10px] text-emerald-800">
+            Status unlocked once
+            {row.joining_status_unlock_expires_at
+              ? ` · Expires ${formatExpiry(row.joining_status_unlock_expires_at)}`
+              : ''}
+          </span>
+        ) : pendingStatusChange ? (
+          <span className="inline-flex whitespace-nowrap rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
+            Status change pending
           </span>
         ) : (
           <button
             type="button"
             onClick={() => {
-              setExtendDojModalEmployee(row);
-              setExtendDojReason('');
+              setStatusChangeModalEmployee(row);
+              setStatusChangeReason('');
             }}
-            className="self-start rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+            className="shrink-0 rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
           >
-            Request Extend DOJ
+            Request status change
           </button>
-        )}
-        {!unlock && (
-          <p className="text-[10px] text-slate-500">
-            Current DOJ: {row.date_of_joining || '—'}
-          </p>
-        )}
-      </div>
+        )
+      ) : null;
+
+    const extendControl = canRequestExtendContext ? (
+      unlock ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <label className="whitespace-nowrap text-[11px] font-medium text-amber-800">
+            Extended DOJ (editable once)
+          </label>
+          <span className="whitespace-nowrap text-[10px] text-amber-800">
+            Max allowed: {row.doj_extend_max_date || '—'}
+            {row.doj_extend_unlock_expires_at
+              ? ` · Expires ${formatExpiry(row.doj_extend_unlock_expires_at)}`
+              : ''}
+          </span>
+          <input
+            type="date"
+            max={row.doj_extend_max_date || undefined}
+            value={extendedDojDraftById[row.id] ?? ''}
+            onChange={(e) =>
+              setExtendedDojDraftById((prev) => ({ ...prev, [row.id]: e.target.value }))
+            }
+            className="w-[9.5rem] rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300"
+          />
+          <button
+            type="button"
+            onClick={() => saveExtendedDoj(row)}
+            disabled={extendedDojSavingId === row.id}
+            className="shrink-0 rounded bg-amber-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            {extendedDojSavingId === row.id ? 'Saving…' : 'Save Extended DOJ'}
+          </button>
+        </div>
+      ) : pendingExtend ? (
+        <span className="inline-flex whitespace-nowrap rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
+          Extend DOJ pending
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setExtendDojModalEmployee(row);
+            setExtendDojReason('');
+          }}
+          className="shrink-0 rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Request Extend DOJ
+        </button>
+      )
     ) : null;
 
-    const statusChangeControls =
-      canRequestExtendContext && status ? (
-        <div className="mt-1.5 flex flex-col gap-1 border-t border-slate-100 pt-1.5">
-          {statusUnlock ? (
-            <p className="text-[10px] text-emerald-800">
-              Status unlocked once
-              {row.joining_status_unlock_expires_at
-                ? ` · Expires ${formatExpiry(row.joining_status_unlock_expires_at)}`
-                : ''}
-            </p>
-          ) : pendingStatusChange ? (
-            <span className="inline-flex w-fit rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-800 ring-1 ring-sky-200">
-              Status change pending
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setStatusChangeModalEmployee(row);
-                setStatusChangeReason('');
-              }}
-              className="self-start rounded border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Request status change
-            </button>
-          )}
-        </div>
+    const currentDojLabel =
+      canRequestExtendContext && !unlock ? (
+        <span className="whitespace-nowrap text-[10px] text-slate-500">
+          Current DOJ: {row.date_of_joining || '—'}
+        </span>
       ) : null;
 
     if (!canInlineEdit) {
       return (
-        <div className="min-w-[220px]">
-          <div>{defaultLabel(row)}</div>
-          {statusChangeControls}
-          {extendControls}
+        <div className="flex min-w-[28rem] flex-nowrap items-center gap-2">
+          <span className="shrink-0">{defaultLabel(row)}</span>
+          {statusChangeControl}
+          {extendControl}
+          {currentDojLabel}
         </div>
       );
     }
@@ -1380,13 +1434,13 @@ export default function PmClientDetail() {
     };
 
     return (
-      <div className="flex min-w-[220px] flex-col gap-1.5">
+      <div className="flex min-w-[28rem] flex-nowrap items-center gap-2">
         <select
           value={currentValue || ''}
           onFocus={() => startInlineJoiningEdit(row)}
           onChange={(e) => handleInlineStatusChange(row, e.target.value)}
           disabled={joiningInlineLoading && joiningInlineEmployeeId === row.id}
-          className="w-full rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          className="w-[9.5rem] shrink-0 rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
         >
           {!status ? <option value="">Set joining status…</option> : null}
           {dedupedOptions.map((option) => (
@@ -1404,7 +1458,7 @@ export default function PmClientDetail() {
               setJoiningInlineStatus('JOINED_OTHER_DATE');
               setJoiningInlineDate(e.target.value);
             }}
-            className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+            className="w-[9.5rem] shrink-0 rounded border border-slate-300 px-2 py-1 text-xs"
           />
         ) : null}
         {needsEmpCodeForCurrent ? (
@@ -1417,7 +1471,7 @@ export default function PmClientDetail() {
               setJoiningInlineEmpCode(e.target.value);
             }}
             placeholder="Emp Code"
-            className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+            className="w-[7rem] shrink-0 rounded border border-slate-300 px-2 py-1 text-xs"
           />
         ) : null}
         {shouldShowJoinedSave ||
@@ -1428,13 +1482,14 @@ export default function PmClientDetail() {
             type="button"
             disabled={joiningInlineLoading && joiningInlineEmployeeId === row.id}
             onClick={() => saveInlineJoiningEdit(row)}
-            className="self-start rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            className="shrink-0 rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
             {joiningInlineLoading && joiningInlineEmployeeId === row.id ? 'Saving…' : 'Save'}
           </button>
         ) : null}
-        {statusChangeControls}
-        {extendControls}
+        {statusChangeControl}
+        {extendControl}
+        {currentDojLabel}
       </div>
     );
   };
@@ -2225,6 +2280,9 @@ export default function PmClientDetail() {
                 ? openTransferModal
                 : null
           }
+          showSalaryAction={activeTab !== 'pending'}
+          salaryActionForRow={salaryActionForEmployee}
+          onSalaryAction={handleSalaryAction}
         />
         )}
 
@@ -2373,6 +2431,19 @@ export default function PmClientDetail() {
             showSendOnboardingOption={!bulkRoleForceSendOnboarding}
             onClose={handleBulkRoleModalClose}
             onSubmit={handleBulkRoleDetailsFromModal}
+          />
+        )}
+        {salaryModalEmployee && (
+          <SalaryEditModal
+            mode={salaryModalMode}
+            employee={salaryModalEmployee}
+            designations={client?.designations ?? []}
+            zoneDependency={Boolean(client?.zone_dependency)}
+            cushionType={client?.cushion_type ?? null}
+            cushionValue={client?.cushion_value ?? null}
+            submitting={salaryModalLoading}
+            onClose={() => setSalaryModalEmployee(null)}
+            onSubmit={handleSalarySubmit}
           />
         )}
         {rowRoleModalEmployee && (

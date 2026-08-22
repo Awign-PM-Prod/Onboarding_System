@@ -48,6 +48,9 @@ export default function EmployeeTable({
   reviewCtaForSubmittedOnly = false,
   showPayrollReturnedActions = false,
   onSendBackToPayrollLead = null,
+  showSalaryAction = false,
+  onSalaryAction = null,
+  salaryActionForRow = null,
   showJoiningStatus = false,
   joiningStatusCellRenderer = null,
   showStatusColumn = true,
@@ -177,8 +180,13 @@ export default function EmployeeTable({
             {actionLabel && (
               <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Action</th>
             )}
+            {showSalaryAction && (
+              <th className={`${thSticky} min-w-[10rem] px-4 py-2 text-left font-medium`}>Salary</th>
+            )}
             {showJoiningStatus && (
-              <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Joining Status</th>
+              <th className={`${thSticky} min-w-[28rem] whitespace-nowrap px-4 py-2 text-left font-medium`}>
+                Joining Status
+              </th>
             )}
           </tr>
         </thead>
@@ -260,7 +268,14 @@ export default function EmployeeTable({
                 )}
                 {showJobColumns && (
                   <td className="min-w-[150px] whitespace-nowrap border-b border-slate-100 px-4 py-3 text-slate-700">
-                    {formatPayAmount(r.pay_type, r.ctc_type, r.ctc_value)}
+                    <div className="flex flex-col gap-1">
+                      <span>{formatPayAmount(r.pay_type, r.ctc_type, r.ctc_value)}</span>
+                      {r.salary_change_request_pending ? (
+                        <span className="inline-flex w-fit rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                          Salary change pending
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                 )}
                 {showJobColumns && (
@@ -361,8 +376,26 @@ export default function EmployeeTable({
                     </button>
                   </td>
                 )}
+                {showSalaryAction && (
+                  <td className="border-b border-slate-100 px-4 py-3">
+                    {(() => {
+                      const action =
+                        typeof salaryActionForRow === 'function' ? salaryActionForRow(r) : null;
+                      if (!action) return <span className="text-slate-400">-</span>;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => onSalaryAction?.(r, action)}
+                          className="rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                        >
+                          {action.label}
+                        </button>
+                      );
+                    })()}
+                  </td>
+                )}
                 {showJoiningStatus && (
-                  <td className="border-b border-slate-100 px-4 py-3 text-slate-700">
+                  <td className="whitespace-nowrap border-b border-slate-100 px-4 py-3 text-slate-700">
                     {joiningStatusCellRenderer
                       ? joiningStatusCellRenderer(r, joiningStatusLabel)
                       : joiningStatusLabel(r)}

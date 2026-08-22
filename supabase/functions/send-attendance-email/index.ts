@@ -26,6 +26,23 @@ function wrapHtml(inner: string) {
   `.trim();
 }
 
+function parseCopyEmails(raw: unknown, exclude: Set<string>): string[] {
+  const values = Array.isArray(raw)
+    ? raw
+    : String(raw ?? "")
+        .split(/[,;]+/)
+        .map((item) => item.trim());
+  const out: string[] = [];
+  const seen = new Set(exclude);
+  for (const value of values) {
+    const email = String(value ?? "").trim().toLowerCase();
+    if (!email || seen.has(email) || !email.includes("@")) continue;
+    seen.add(email);
+    out.push(email);
+  }
+  return out;
+}
+
 serve(async (req) => {
   if (req.method !== "POST") {
     return json(405, { error: "Method not allowed" });
@@ -53,12 +70,20 @@ serve(async (req) => {
   }
 
   const valid = recipients
-    .map((raw) => ({
-      name: String(raw?.name ?? "").trim(),
-      email: String(raw?.email ?? "").trim(),
-      html: String(raw?.html ?? "").trim(),
-      text: String(raw?.text ?? "").trim(),
-    }))
+    .map((raw) => {
+      const email = String(raw?.email ?? "").trim();
+      const exclude = new Set([email.toLowerCase()].filter(Boolean));
+      const cc = parseCopyEmails(raw?.cc, exclude);
+      for (const item of cc) exclude.add(item);
+      return {
+        name: String(raw?.name ?? "").trim(),
+        email,
+        html: String(raw?.html ?? "").trim(),
+        text: String(raw?.text ?? "").trim(),
+        cc,
+        bcc: parseCopyEmails(raw?.bcc, exclude),
+      };
+    })
     .filter((r) => r.email);
 
   if (valid.length === 0) {
@@ -74,19 +99,22 @@ serve(async (req) => {
         const htmlBody = recipient.html
           ? wrapHtml(recipient.html)
           : wrapHtml(`<p>Hi ${recipient.name || "there"},</p><p>${recipient.text || subject}</p>`);
+        const payload: Record<string, unknown> = {
+          from: FROM_EMAIL,
+          to: [recipient.email],
+          subject,
+          html: htmlBody,
+          text: recipient.text || subject,
+        };
+        if (recipient.cc.length > 0) payload.cc = recipient.cc;
+        if (recipient.bcc.length > 0) payload.bcc = recipient.bcc;
         const resp = await fetch(RESEND_API_URL, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            from: FROM_EMAIL,
-            to: [recipient.email],
-            subject,
-            html: htmlBody,
-            text: recipient.text || subject,
-          }),
+          body: JSON.stringify(payload),
         });
         const raw = await resp.text();
         let parsed: Record<string, unknown> | null = null;

@@ -20,7 +20,16 @@ import {
   normalizeAttendancePolicy,
   normalizeHolidaySource
 } from './clientPolicyCore.js';
-import { listHolidayCalendars, normalizeHolidayName } from './holidayCalendar.js';
+import {
+  assignHolidayCalendarToClient,
+  createHolidayCalendarDef,
+  getHolidayCalendarDef,
+  listHolidayCalendars,
+  normalizeHolidayCalendarId,
+  normalizeHolidayName,
+  replaceAllHolidayCalendars,
+  uniqueClientCalendarName
+} from './holidayCalendar.js';
 import {
   BASELINE_POLICY_MONTH,
   bundleToPolicyJson,
@@ -31,22 +40,49 @@ import {
 
 export { BASELINE_POLICY_MONTH, monthYmToDate, selectPolicyBundleForMonth };
 
-async function applyDefaultCalendarHolidays(bundle, year) {
-  if (normalizeHolidaySource(bundle?.holiday_source) !== 'default') return bundle;
+function mapCalendarHolidayRows(rows) {
+  return (rows ?? []).map((h) => ({
+    id: h.id,
+    state: h.state || null,
+    holiday_date: h.holiday_date,
+    holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
+    holiday_name: normalizeHolidayName(h.holiday_name)
+  }));
+}
+
+/** Overlay live calendar dates for Default or a named calendar. Legacy custom snapshots keep stored holidays. */
+async function applyAssignedCalendarHolidays(bundle, year) {
+  const calendarId = normalizeHolidayCalendarId(bundle?.holiday_calendar_id);
+  const source = normalizeHolidaySource(bundle?.holiday_source);
+  const useLive = Boolean(calendarId) || source === 'default';
+  if (!useLive) return bundle;
   if (!year) {
     return { ...bundle, holidays: [] };
   }
-  const rows = await listHolidayCalendars({ year });
+  const rows = await listHolidayCalendars({ year, calendarId });
   return {
     ...bundle,
-    holidays: rows.map((h) => ({
-      id: h.id,
-      state: h.state || null,
-      holiday_date: h.holiday_date,
-      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
-      holiday_name: normalizeHolidayName(h.holiday_name)
-    }))
+    holidays: mapCalendarHolidayRows(rows)
   };
+}
+
+export function applyHolidayCalendarPayload(body) {
+  if (!body || typeof body !== 'object') return body;
+  const createNew = body.create_holiday_calendar === true || body.create_holiday_calendar === 'true';
+  const calendarId = normalizeHolidayCalendarId(body.holiday_calendar_id ?? body.holidayCalendarId);
+  if (Array.isArray(body.holidays)) {
+    body.holidays = body.holidays.filter((h) => String(h?.holiday_date ?? '').trim());
+  }
+  if (createNew && !calendarId) {
+    body.holiday_calendar_id = null;
+    body.holiday_source = 'custom';
+    body.create_holiday_calendar = true;
+    return body;
+  }
+  body.create_holiday_calendar = false;
+  body.holiday_calendar_id = calendarId;
+  body.holiday_source = calendarId ? 'custom' : 'default';
+  return body;
 }
 
 /**
@@ -58,7 +94,7 @@ export async function fetchClientPolicyBundleForMonth(clientId, monthYm) {
   const year = monthDate ? Number(String(monthDate).slice(0, 4)) : null;
   if (!monthDate) {
     const live = await fetchClientPolicyBundle(clientId);
-    return applyDefaultCalendarHolidays(live, year);
+    return applyAssignedCalendarHolidays(live, year);
   }
 
   const { data: versions, error: vErr } = await supabaseAdmin
@@ -70,10 +106,10 @@ export async function fetchClientPolicyBundleForMonth(clientId, monthYm) {
   if (vErr) throw vErr;
 
   const bundle = selectPolicyBundleForMonth(versions ?? [], monthYm, normalizeAttendancePolicy);
-  if (bundle) return applyDefaultCalendarHolidays(bundle, year);
+  if (bundle) return applyAssignedCalendarHolidays(bundle, year);
 
   const live = await fetchClientPolicyBundle(clientId);
-  return applyDefaultCalendarHolidays(live, year);
+  return applyAssignedCalendarHolidays(live, year);
 }
 
 export async function insertClientPolicyVersion(clientId, effectiveFromMonth, bundle, actorUserId = null) {
@@ -138,19 +174,40 @@ export async function fetchClientPolicyBundle(clientId) {
     .order('designation', { ascending: true });
   if (aErr) throw aErr;
 
-  const { data: holidays, error: hErr } = await supabaseAdmin
-    .from('client_holidays')
-    .select('id, holiday_date, holiday_type, state, holiday_name')
-    .eq('client_id', clientId)
-    .order('holiday_date', { ascending: true });
-  if (hErr) {
-    const msg = String(hErr.message || '');
-    if (msg.includes('holiday_name')) {
-      throw new Error(
-        'Client holiday name column is missing. Run migration 20260820180000_client_holidays_name.sql in Supabase.'
-      );
+  const calendarId = normalizeHolidayCalendarId(policy?.holiday_calendar_id);
+  let calendarDef = null;
+  try {
+    calendarDef = await getHolidayCalendarDef(calendarId);
+  } catch (defErr) {
+    if (defErr?.status !== 404) throw defErr;
+  }
+  const namedId = calendarDef && !calendarDef.is_default ? calendarDef.id : null;
+
+  let holidays = [];
+  if (namedId) {
+    holidays = mapCalendarHolidayRows(await listHolidayCalendars({ calendarId: namedId }));
+  } else if (normalizeHolidaySource(policy?.holiday_source) !== 'default') {
+    const { data: legacyHolidays, error: hErr } = await supabaseAdmin
+      .from('client_holidays')
+      .select('id, holiday_date, holiday_type, state, holiday_name')
+      .eq('client_id', clientId)
+      .order('holiday_date', { ascending: true });
+    if (hErr) {
+      const msg = String(hErr.message || '');
+      if (msg.includes('holiday_name')) {
+        throw new Error(
+          'Client holiday name column is missing. Run migration 20260820180000_client_holidays_name.sql in Supabase.'
+        );
+      }
+      throw hErr;
     }
-    throw hErr;
+    holidays = (legacyHolidays ?? []).map((h) => ({
+      id: h.id,
+      state: String(h.state ?? '').trim() || null,
+      holiday_date: String(h.holiday_date).slice(0, 10),
+      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
+      holiday_name: normalizeHolidayName(h.holiday_name)
+    }));
   }
 
   return {
@@ -166,14 +223,10 @@ export async function fetchClientPolicyBundle(clientId) {
       paternity_days: Number(a.paternity_days) || 0,
       earned_days: Number(a.earned_days) || 0
     })),
-    holidays: (holidays ?? []).map((h) => ({
-      id: h.id,
-      state: String(h.state ?? '').trim() || null,
-      holiday_date: String(h.holiday_date).slice(0, 10),
-      holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
-      holiday_name: normalizeHolidayName(h.holiday_name)
-    })),
-    holiday_source: normalizeHolidaySource(policy?.holiday_source)
+    holidays,
+    holiday_source: namedId ? 'custom' : 'default',
+    holiday_calendar_id: namedId,
+    holiday_calendar_name: namedId ? calendarDef.name : (calendarDef?.name || 'Default')
   };
 }
 
@@ -198,8 +251,26 @@ export async function upsertClientPolicyBundle(clientId, body) {
     incentive_min_days: policy.incentive_min_days,
     incentive_value: policy.incentive_value,
     holiday_source: normalizeHolidaySource(body.holiday_source ?? body.attendance_policy?.holiday_source),
+    holiday_calendar_id: normalizeHolidayCalendarId(body.holiday_calendar_id),
     updated_at: new Date().toISOString()
   };
+
+  const createNew = body.create_holiday_calendar === true && !row.holiday_calendar_id;
+  if (createNew) {
+    const { data: clientRow, error: clientErr } = await supabaseAdmin
+      .from('clients')
+      .select('client_name')
+      .eq('id', clientId)
+      .maybeSingle();
+    if (clientErr) throw clientErr;
+    const name = await uniqueClientCalendarName(clientRow?.client_name, clientId);
+    const created = await createHolidayCalendarDef({ name });
+    row.holiday_calendar_id = await assignHolidayCalendarToClient(clientId, created.id);
+  } else {
+    row.holiday_calendar_id = await assignHolidayCalendarToClient(clientId, row.holiday_calendar_id);
+  }
+  row.holiday_source = row.holiday_calendar_id ? 'custom' : 'default';
+
   const { data: saved, error: pErr } = await supabaseAdmin
     .from('client_attendance_policies')
     .upsert(row, { onConflict: 'client_id' })
@@ -210,6 +281,11 @@ export async function upsertClientPolicyBundle(clientId, body) {
     if (msg.includes('incentive_')) {
       throw new Error(
         'Incentive policy columns are missing in the database. Run migration 20260727170000_client_incentive_policy.sql in Supabase.'
+      );
+    }
+    if (msg.includes('holiday_calendar_id') || msg.includes('holiday_calendar_defs')) {
+      throw new Error(
+        'Named holiday calendars are missing. Run migration 20260820200000_holiday_calendar_defs.sql in Supabase.'
       );
     }
     if (msg.includes('holiday_source')) {
@@ -241,34 +317,8 @@ export async function upsertClientPolicyBundle(clientId, body) {
   }
 
   await supabaseAdmin.from('client_holidays').delete().eq('client_id', clientId);
-  const holidaySource = normalizeHolidaySource(row.holiday_source);
-  const holidayRows = holidaySource === 'default'
-    ? []
-    : (body.holidays ?? [])
-      .filter((h) => String(h?.holiday_date ?? '').slice(0, 10))
-      .map((h) => ({
-        client_id: clientId,
-        state: String(h.state ?? '').trim() || null,
-        holiday_date: String(h.holiday_date).slice(0, 10),
-        holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
-        holiday_name: normalizeHolidayName(h.holiday_name)
-      }));
-  if (holidayRows.length) {
-    const { error: hErr } = await supabaseAdmin.from('client_holidays').insert(holidayRows);
-    if (hErr) {
-      const msg = String(hErr.message || '');
-      if (msg.includes('column') && msg.includes('holiday_name')) {
-        throw new Error(
-          'Client holiday name column is missing. Run migration 20260820180000_client_holidays_name.sql in Supabase.'
-        );
-      }
-      if (msg.includes('column') && msg.includes('state')) {
-        throw new Error(
-          'Client holiday state column is missing. Run migration 20260820153000_client_holidays_state.sql in Supabase.'
-        );
-      }
-      throw hErr;
-    }
+  if (row.holiday_calendar_id) {
+    await replaceAllHolidayCalendars(body.holidays ?? [], { calendarId: row.holiday_calendar_id });
   }
 
   return normalizeAttendancePolicy(saved);

@@ -7,12 +7,15 @@ import {
   IconClients,
   IconDashboard,
   IconOnboarding,
+  IconSalary,
   IconSettings
 } from './CollapsibleAppSidebar';
 import TwoPaneSidebar, {
   SidebarModulesPanel,
   writeSidebarPanelOpen
 } from './TwoPaneSidebar';
+import SalaryChangeNotice from './SalaryChangeNotice';
+import { usePendingSalaryChanges } from '../hooks/usePendingSalaryChanges';
 
 function IconMenu({ className }) {
   return (
@@ -94,6 +97,8 @@ function PayrollLeadLayoutInner() {
 
   const pathname = location.pathname;
   const clientId = paths.matchClientId(pathname);
+  const isSalaryChangesPage = pathname.includes('/salary-changes');
+  const pendingSalary = usePendingSalaryChanges(clientId);
   const isClientsListPage = pathname === paths.clients;
   const isClientFormPage = paths.isClientFormPath(pathname);
   const isProgramManagersPage = pathname.startsWith(paths.programManagers);
@@ -231,6 +236,14 @@ function PayrollLeadLayoutInner() {
           icon: <IconSettings className="h-full w-full" />
         },
         {
+          id: 'salary-changes',
+          to: paths.client(clientId, 'salary-changes'),
+          label: 'Salary Changes',
+          active: pathname.includes('/salary-changes'),
+          icon: <IconSalary className="h-full w-full" />,
+          badge: pendingSalary.count || null
+        },
+        {
           id: 'assign-pm',
           to: paths.client(clientId, 'assign-pm'),
           label: 'Re-Assign Program Manager',
@@ -331,6 +344,14 @@ function PayrollLeadLayoutInner() {
           <Outlet />
         </div>
       </div>
+
+      {clientId && !isSalaryChangesPage && pendingSalary.showNotice ? (
+        <SalaryChangeNotice
+          count={pendingSalary.count}
+          onOpen={() => navigate(paths.client(clientId, 'salary-changes'))}
+          onDismiss={pendingSalary.dismiss}
+        />
+      ) : null}
     </div>
   );
 }

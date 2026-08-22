@@ -129,6 +129,12 @@ function isAllowedQualificationMime(mime) {
   return false;
 }
 
+function isAllowedDocumentUpload(file) {
+  if (isAllowedQualificationMime(file?.mimetype)) return true;
+  const name = String(file?.originalname || '').toLowerCase();
+  return /\.(pdf|doc|docx|jpe?g|png|gif|webp|heic|heif|bmp)$/.test(name);
+}
+
 function extForQualificationFile(mime, originalname) {
   const m = String(mime || '').toLowerCase();
   if (m === 'application/pdf') return 'pdf';
@@ -138,6 +144,19 @@ function extForQualificationFile(mime, originalname) {
   if (fromMime !== 'img') return fromMime;
   const match = /\.([a-z0-9]+)$/i.exec(String(originalname || ''));
   return match ? match[1].toLowerCase().slice(0, 8) : 'bin';
+}
+
+function contentTypeForDocumentFile(mime, originalname) {
+  const m = String(mime || '').toLowerCase();
+  if (m && m !== 'application/octet-stream') return mime;
+  const ext = extForQualificationFile(mime, originalname);
+  if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'doc') return 'application/msword';
+  if (ext === 'docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'webp') return 'image/webp';
+  return mime || 'application/octet-stream';
 }
 
 const qualificationUpload = multer({
@@ -158,6 +177,18 @@ const kycImageOnlyUpload = multer({
   fileFilter: (_req, file, cb) => {
     if (!isAllowedOcrImageMime(file.mimetype)) {
       cb(new Error('Only JPG, JPEG, PNG, or WEBP images are allowed'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+const kycBankPassbookUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_KYC_IMAGE_DOCUMENT_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (!isAllowedDocumentUpload(file)) {
+      cb(new Error('File must be an image, PDF, or Word document (.doc / .docx)'));
       return;
     }
     cb(null, true);
@@ -2319,7 +2350,8 @@ router.post('/kyc-document-upload', (req, res, next) => {
       error: 'Invalid kind. Use ?kind=aadhaar_front, aadhaar_back, pan_card, or bank_passbook',
     });
   }
-  kycImageOnlyUpload.single('file')(req, res, (err) => {
+  const multerMw = kind === 'bank_passbook' ? kycBankPassbookUpload : kycImageOnlyUpload;
+  multerMw.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: 'File must be 5 MB or smaller' });
@@ -2373,21 +2405,37 @@ router.post('/kyc-document-upload', (req, res, next) => {
       }
     }
 
-    let compressed;
-    try {
-      compressed = await compressKycImageBuffer(req.file.buffer);
-    } catch (compressErr) {
-      return res.status(400).json({
-        error: compressErr.message || 'Could not process image. Try a clearer photo.',
-      });
+    const mime = String(req.file.mimetype || '').toLowerCase();
+    const originalName = String(req.file.originalname || '').toLowerCase();
+    const looksLikeImage = mime.startsWith('image/') || /\.(jpe?g|png|gif|webp|heic|heif|bmp)$/.test(originalName);
+    const storeAsDocument = kind === 'bank_passbook' && !looksLikeImage;
+    let storedBuffer;
+    let contentType;
+    let ext;
+    if (storeAsDocument) {
+      storedBuffer = req.file.buffer;
+      ext = extForQualificationFile(req.file.mimetype, req.file.originalname);
+      contentType = contentTypeForDocumentFile(req.file.mimetype, req.file.originalname);
+    } else {
+      let compressed;
+      try {
+        compressed = await compressKycImageBuffer(req.file.buffer);
+      } catch (compressErr) {
+        return res.status(400).json({
+          error: compressErr.message || 'Could not process image. Try a clearer photo.',
+        });
+      }
+      storedBuffer = compressed.buffer;
+      contentType = compressed.contentType;
+      ext = compressed.ext;
     }
 
-    const objectPath = `onboarding/${emp.id}/${kind}/${Date.now()}.${compressed.ext}`;
+    const objectPath = `onboarding/${emp.id}/${kind}/${Date.now()}.${ext}`;
 
     const { error: upErr } = await supabaseAdmin.storage
       .from(KYC_DOCUMENTS_BUCKET)
-      .upload(objectPath, compressed.buffer, {
-        contentType: compressed.contentType,
+      .upload(objectPath, storedBuffer, {
+        contentType,
         upsert: false,
       });
     if (upErr) throw upErr;

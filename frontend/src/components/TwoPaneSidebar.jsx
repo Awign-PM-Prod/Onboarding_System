@@ -256,13 +256,23 @@ export function SidebarModulesPanel({
             onClick={onNavigate}
           >
             <span
-              className={`flex shrink-0 items-center justify-center ${
+              className={`relative flex shrink-0 items-center justify-center ${
                 collapsed ? 'h-6 w-6' : 'h-5 w-5'
               }`}
             >
               {item.icon}
+              {collapsed && item.badge ? (
+                <span className="absolute -right-1.5 -top-1.5 min-w-[1rem] rounded-full bg-amber-400 px-1 text-center text-[10px] font-semibold leading-4 text-slate-900">
+                  {item.badge}
+                </span>
+              ) : null}
             </span>
-            {!collapsed && <span className="truncate">{item.label}</span>}
+            {!collapsed && <span className="min-w-0 truncate">{item.label}</span>}
+            {!collapsed && item.badge ? (
+              <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-slate-900">
+                {item.badge}
+              </span>
+            ) : null}
           </NavLink>
         ))}
       </nav>

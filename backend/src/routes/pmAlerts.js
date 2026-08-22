@@ -29,6 +29,40 @@ function isValidEmail(email) {
   return Boolean(email) && EMAIL_RE.test(email);
 }
 
+const MAX_COPY_EMAILS = 10;
+
+function parseEmailList(raw) {
+  if (Array.isArray(raw)) {
+    return raw.flatMap((item) => parseEmailList(item));
+  }
+  return String(raw ?? '')
+    .split(/[,;]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizeCopyEmails(raw, { exclude = [], label = 'address' } = {}) {
+  const excluded = new Set(
+    (Array.isArray(exclude) ? exclude : [exclude])
+      .map((item) => normalizeEmail(item))
+      .filter(Boolean)
+  );
+  const emails = [];
+  const seen = new Set(excluded);
+  for (const email of parseEmailList(raw)) {
+    if (seen.has(email)) continue;
+    if (!isValidEmail(email)) {
+      return { emails: [], error: `Invalid ${label}: ${email}` };
+    }
+    seen.add(email);
+    emails.push(email);
+    if (emails.length > MAX_COPY_EMAILS) {
+      return { emails: [], error: `${label} supports at most ${MAX_COPY_EMAILS} addresses` };
+    }
+  }
+  return { emails };
+}
+
 function buildAlertBodies({ name, message }) {
   const displayName = String(name || '').trim() || 'there';
   const safeName = escapeHtml(displayName);
@@ -58,8 +92,21 @@ function normalizeBulkRecipients(rawList) {
       details.push({ email, name, status: 'skipped', reason: 'duplicate_email' });
       continue;
     }
+    const ccResult = normalizeCopyEmails(raw?.cc, { exclude: [email], label: 'cc' });
+    if (ccResult.error) {
+      details.push({ email, name, status: 'skipped', reason: ccResult.error });
+      continue;
+    }
+    const bccResult = normalizeCopyEmails(raw?.bcc, {
+      exclude: [email, ...ccResult.emails],
+      label: 'bcc'
+    });
+    if (bccResult.error) {
+      details.push({ email, name, status: 'skipped', reason: bccResult.error });
+      continue;
+    }
     seen.add(email);
-    recipients.push({ name, email });
+    recipients.push({ name, email, cc: ccResult.emails, bcc: bccResult.emails });
   }
 
   return { recipients, details };
@@ -131,7 +178,24 @@ router.post('/send', async (req, res, next) => {
         });
       }
 
-      toSend = [{ name: String(employee.name ?? '').trim(), email }];
+      const ccResult = normalizeCopyEmails(req.body?.cc, { exclude: [email], label: 'cc' });
+      if (ccResult.error) {
+        return res.status(400).json({ error: ccResult.error });
+      }
+      const bccResult = normalizeCopyEmails(req.body?.bcc, {
+        exclude: [email, ...ccResult.emails],
+        label: 'bcc'
+      });
+      if (bccResult.error) {
+        return res.status(400).json({ error: bccResult.error });
+      }
+
+      toSend = [{
+        name: String(employee.name ?? '').trim(),
+        email,
+        cc: ccResult.emails,
+        bcc: bccResult.emails
+      }];
     } else {
       const { recipients, details } = normalizeBulkRecipients(req.body?.recipients);
       preDetails.push(...details);
@@ -159,7 +223,9 @@ router.post('/send', async (req, res, next) => {
         name: r.name,
         email: r.email,
         html: bodies.html,
-        text: bodies.text
+        text: bodies.text,
+        cc: Array.isArray(r.cc) ? r.cc : [],
+        bcc: Array.isArray(r.bcc) ? r.bcc : []
       };
     });
 

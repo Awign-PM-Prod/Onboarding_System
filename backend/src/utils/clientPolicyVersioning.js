@@ -31,9 +31,11 @@ export function normalizePolicyBundleFromJson(policyJson, normalizeAttendancePol
       holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
       holiday_name: String(h.holiday_name ?? '').trim() || null
     })),
-    holiday_source: String(raw.holiday_source ?? '').trim().toLowerCase() === 'default'
-      ? 'default'
-      : 'custom'
+    holiday_calendar_id: String(raw.holiday_calendar_id ?? '').trim() || null,
+    holiday_calendar_name: String(raw.holiday_calendar_name ?? '').trim() || null,
+    holiday_source: String(raw.holiday_calendar_id ?? '').trim()
+      ? 'custom'
+      : (String(raw.holiday_source ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom')
   };
 }
 
@@ -47,9 +49,11 @@ export function bundleToPolicyJson(bundle) {
       holiday_type: h.holiday_type === 'FH' ? 'FH' : 'NH',
       holiday_name: String(h.holiday_name ?? '').trim() || null
     })),
-    holiday_source: String(bundle.holiday_source ?? '').trim().toLowerCase() === 'default'
-      ? 'default'
-      : 'custom'
+    holiday_calendar_id: String(bundle.holiday_calendar_id ?? '').trim() || null,
+    holiday_calendar_name: String(bundle.holiday_calendar_name ?? '').trim() || null,
+    holiday_source: String(bundle.holiday_calendar_id ?? '').trim()
+      ? 'custom'
+      : (String(bundle.holiday_source ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom')
   };
 }
 

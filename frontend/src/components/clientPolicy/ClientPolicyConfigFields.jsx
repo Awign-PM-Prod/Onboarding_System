@@ -18,15 +18,21 @@ export default function ClientPolicyConfigFields({
   attendancePolicy,
   leaveAllowances,
   holidays,
-  holidaySource = 'custom',
+  holidayCalendarId = null,
+  holidaySource = 'default',
+  createHolidayCalendar = false,
   fieldErrors = {},
   onAttendancePolicyChange,
   onLeaveAllowancesChange,
   onHolidaysChange,
+  onHolidayCalendarIdChange,
   onHolidaySourceChange,
+  onCreateHolidayCalendarChange,
   designations = [],
   onDesignationsChange = null,
-  showDesignations = false
+  showDesignations = false,
+  clientId = null,
+  clientName = ''
 }) {
   const canEditDesignations = showDesignations && typeof onDesignationsChange === 'function';
 
@@ -92,9 +98,15 @@ export default function ClientPolicyConfigFields({
       <ClientHolidaysInput
         value={holidays}
         onChange={onHolidaysChange}
+        holidayCalendarId={holidayCalendarId}
+        onHolidayCalendarIdChange={onHolidayCalendarIdChange}
         holidaySource={holidaySource}
+        createHolidayCalendar={createHolidayCalendar}
         onHolidaySourceChange={onHolidaySourceChange}
-        error={fieldErrors.holiday_source || fieldErrors.holidays}
+        onCreateHolidayCalendarChange={onCreateHolidayCalendarChange}
+        clientId={clientId}
+        clientName={clientName}
+        error={fieldErrors.holiday_source || fieldErrors.holidays || fieldErrors.holiday_calendar_id}
       />
     </div>
   );

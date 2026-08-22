@@ -16,7 +16,13 @@ import { buildLoginLink, buildPasswordResetEmail } from '../utils/staffInvite.js
 import { createStaffInviteUser } from '../utils/createStaffInviteUser.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
 import { unlockExpiresAtFromNow } from '../utils/unlockTtl.js';
-import { listHolidayCalendars, replaceHolidayCalendars, findDefaultCalendarClientIds } from '../utils/holidayCalendar.js';
+import {
+  listHolidayCalendars,
+  replaceHolidayCalendars,
+  listHolidayCalendarDefs,
+  createHolidayCalendarDef,
+  findClientIdsForCalendarRecalc
+} from '../utils/holidayCalendar.js';
 import { buildHolidayCalendarTemplateCsv } from '../utils/holidayCalendarCsv.js';
 import { recalculateAllAttendanceSheetsForClient } from '../utils/attendanceRecalc.js';
 
@@ -1384,10 +1390,53 @@ router.post('/joining-status-change-requests/:id/review', async (req, res, next)
   }
 });
 
-// GET /api/super-admin/holiday-calendars?year=&state=
+// GET /api/super-admin/holiday-calendar-defs
+router.get('/holiday-calendar-defs', async (_req, res, next) => {
+  try {
+    const items = await listHolidayCalendarDefs({ includeAll: true });
+    res.json(items);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// POST /api/super-admin/holiday-calendar-defs
+router.post('/holiday-calendar-defs', async (req, res, next) => {
+  try {
+    const created = await createHolidayCalendarDef({
+      name: req.body?.name,
+      states: req.body?.states,
+      year: req.body?.year,
+      items: req.body?.items
+    });
+    const imported = Array.isArray(req.body?.items) ? req.body.items.length : 0;
+    await logOrgActivityFromReq(req, {
+      action: 'HOLIDAY_CALENDAR_CREATED',
+      entityType: 'holiday_calendar_defs',
+      entityId: created.id,
+      summary: imported
+        ? `Created holiday calendar ${created.name} from CSV (${imported} date(s))`
+        : `Created holiday calendar ${created.name}`,
+      metadata: {
+        calendar_id: created.id,
+        states: req.body?.states ?? [],
+        year: req.body?.year ?? null,
+        imported_count: imported
+      }
+    });
+    res.status(201).json(created);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, details: err.details });
+    next(err);
+  }
+});
+
+// GET /api/super-admin/holiday-calendars?year=&state=&calendar_id=
 router.get('/holiday-calendars', async (req, res, next) => {
   try {
     const items = await listHolidayCalendars({
+      calendarId: req.query.calendar_id ?? req.query.calendarId,
       state: req.query.state,
       year: req.query.year
     });
@@ -1414,12 +1463,15 @@ router.put('/holiday-calendars', async (req, res, next) => {
       return res.status(400).json({ error: 'items array is required' });
     }
 
-    const { items, replaced } = await replaceHolidayCalendars(rawItems);
+    const calendarId = req.body?.calendar_id ?? req.body?.calendarId ?? req.query.calendar_id;
+    const { items, replaced, calendar_id, is_default } = await replaceHolidayCalendars(rawItems, {
+      calendarId
+    });
 
     let sheetsRecalculated = 0;
     const recalcErrors = [];
     try {
-      const clientIds = await findDefaultCalendarClientIds();
+      const clientIds = await findClientIdsForCalendarRecalc(calendar_id);
       const years = [...new Set((replaced ?? []).map((p) => p.year).filter(Boolean))];
       for (const year of years) {
         for (const clientId of clientIds) {
@@ -1434,8 +1486,11 @@ router.put('/holiday-calendars', async (req, res, next) => {
     await logOrgActivityFromReq(req, {
       action: 'HOLIDAY_CALENDAR_UPDATED',
       entityType: 'holiday_calendars',
+      entityId: calendar_id,
       summary: `Updated holiday calendar for ${replaced.length} state-year set(s) (${items.length} date(s))`,
       metadata: {
+        calendar_id,
+        is_default,
         replaced,
         item_count: items.length,
         sheets_recalculated: sheetsRecalculated
@@ -1445,6 +1500,8 @@ router.put('/holiday-calendars', async (req, res, next) => {
     res.json({
       items,
       replaced,
+      calendar_id,
+      is_default,
       sheets_recalculated: sheetsRecalculated,
       recalc_errors: recalcErrors
     });

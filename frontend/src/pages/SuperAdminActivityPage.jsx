@@ -36,6 +36,10 @@ const ACTION_OPTIONS = [
   { value: 'ATTENDANCE_UPLOAD', label: 'Attendance upload' },
   { value: 'ATTENDANCE_SUBMIT', label: 'Attendance submit' },
   { value: 'ATTENDANCE_UNSUBMIT', label: 'Attendance unsubmit' },
+  { value: 'SALARY_UPDATED', label: 'Salary updated' },
+  { value: 'SALARY_CHANGE_REQUESTED', label: 'Salary change requested' },
+  { value: 'SALARY_CHANGE_APPROVED', label: 'Salary change approved' },
+  { value: 'SALARY_CHANGE_REJECTED', label: 'Salary change rejected' },
   { value: 'SALARY_MINIMUMS_UPDATED', label: 'Salary minimums updated' },
   { value: 'PASSWORD_RESET', label: 'Password reset' },
   { value: 'REMAINING_TASK_DIGEST_TRIGGERED', label: 'Task digest triggered' }

@@ -199,7 +199,14 @@ export default function PayrollClientFinalApprovedEmployeesPage() {
                 const statusLabel = resolveEmployeeStatusLabel(row);
                 return (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 text-slate-900">{row.name}</td>
+                  <td className="px-4 py-3 text-slate-900">
+                    <div>{row.name}</div>
+                    {row.salary_change_request_pending ? (
+                      <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                        Salary change pending
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="px-4 py-3 text-slate-700">{row.mobile}</td>
                   <td className="px-4 py-3 text-slate-700">{row.email || '-'}</td>
                   <td className="px-4 py-3 text-slate-700">{row.designation || '-'}</td>

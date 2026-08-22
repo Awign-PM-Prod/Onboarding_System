@@ -347,6 +347,37 @@ export const api = {
     request('/api/employees', { method: 'POST', body: JSON.stringify(payload) }),
   setEmployeeRoleDetails: (id, payload) =>
     request(`/api/employees/${id}/role-details`, { method: 'PUT', body: JSON.stringify(payload) }),
+  updateEmployeeSalary: (id, payload) =>
+    request(`/api/employees/${encodeURIComponent(id)}/salary`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  requestSalaryChange: (id, { pay_type, ctc_type, ctc_value, reason, file }) => {
+    const fd = new FormData();
+    fd.append('pay_type', pay_type);
+    if (ctc_type != null) fd.append('ctc_type', ctc_type);
+    fd.append('ctc_value', String(ctc_value));
+    if (reason) fd.append('reason', reason);
+    if (file) fd.append('file', file);
+    return uploadRequest(`/api/employees/${encodeURIComponent(id)}/salary-change-request`, fd);
+  },
+  listSalaryChangeRequests: (clientId, status = 'PENDING') => {
+    const q = new URLSearchParams();
+    q.set('client_id', clientId);
+    if (status) q.set('status', status);
+    return request(`/api/employees/salary-change-requests?${q.toString()}`);
+  },
+  reviewSalaryChange: (requestId, payload) =>
+    request(`/api/employees/salary-change-requests/${encodeURIComponent(requestId)}/review`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  cancelSalaryChange: (requestId) =>
+    request(`/api/employees/salary-change-requests/${encodeURIComponent(requestId)}/cancel`, {
+      method: 'POST'
+    }),
+  getSalaryChangeDocumentUrl: (requestId) =>
+    request(`/api/employees/salary-change-requests/${encodeURIComponent(requestId)}/document`),
   bulkSetRoleDetails: (employeeIds, payload) =>
     request('/api/employees/role-details', {
       method: 'POST',
@@ -596,24 +627,38 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ items })
     }),
-  listSuperAdminHolidayCalendars: ({ year, state } = {}) => {
+  listSuperAdminHolidayCalendarDefs: () => request('/api/super-admin/holiday-calendar-defs'),
+  createSuperAdminHolidayCalendarDef: ({ name, states, year, items } = {}) =>
+    request('/api/super-admin/holiday-calendar-defs', {
+      method: 'POST',
+      body: JSON.stringify({ name, states, year, items })
+    }),
+  listSuperAdminHolidayCalendars: ({ year, state, calendarId } = {}) => {
     const q = new URLSearchParams();
     if (year) q.set('year', String(year));
     if (state) q.set('state', state);
+    if (calendarId) q.set('calendar_id', calendarId);
     const qs = q.toString();
     return request(`/api/super-admin/holiday-calendars${qs ? `?${qs}` : ''}`);
   },
-  saveSuperAdminHolidayCalendars: (items) =>
+  saveSuperAdminHolidayCalendars: (items, { calendarId } = {}) =>
     request('/api/super-admin/holiday-calendars', {
       method: 'PUT',
-      body: JSON.stringify({ items })
+      body: JSON.stringify({ items, calendar_id: calendarId || undefined })
     }),
   downloadHolidayCalendarTemplate: () =>
     fileRequest('/api/super-admin/holiday-calendars/template'),
-  listHolidayCalendars: ({ state, year } = {}) => {
+  listHolidayCalendarDefs: ({ forClientId } = {}) => {
+    const q = new URLSearchParams();
+    if (forClientId) q.set('for_client_id', forClientId);
+    const qs = q.toString();
+    return request(`/api/holiday-calendars/defs${qs ? `?${qs}` : ''}`);
+  },
+  listHolidayCalendars: ({ state, year, calendarId } = {}) => {
     const q = new URLSearchParams();
     if (state) q.set('state', state);
     if (year) q.set('year', String(year));
+    if (calendarId) q.set('calendar_id', calendarId);
     return request(`/api/holiday-calendars?${q.toString()}`);
   },
   listRegionZones: (state) => {

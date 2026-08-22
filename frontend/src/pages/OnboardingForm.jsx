@@ -498,12 +498,13 @@ const STEP_ALL_FIELDS = {
 };
 
 function isAllowedQualificationFile(file) {
-  const m = String(file.type || '').toLowerCase();
+  const m = String(file?.type || '').toLowerCase();
   if (m.startsWith('image/')) return true;
   if (m === 'application/pdf') return true;
   if (m === 'application/msword') return true;
   if (m === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return true;
-  return false;
+  const name = String(file?.name || '').toLowerCase();
+  return /\.(pdf|doc|docx|jpe?g|png|gif|webp|heic|heif|bmp)$/.test(name);
 }
 
 function IconCheckCircle({ className }) {
@@ -1414,8 +1415,8 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!isAllowedOcrImageFile(file)) {
-      setPassErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
+    if (!isAllowedQualificationFile(file)) {
+      setPassErr('Use an image, PDF, or Word document (.doc / .docx).');
       return;
     }
     if (file.size > KYC_IMAGE_MAX_BYTES) {
@@ -1900,10 +1901,10 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
             label="Bank Passbook / Statement"
             required={isRequired('kyc_bank_passbook_url', true)}
             inputId="kyc-passbook"
-            accept="image/jpeg,image/jpg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+            accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             uploading={passUp}
             error={passErr}
-            hint={KYC_IMAGE_HINT}
+            hint="Max file size: 5MB. Supported: image, pdf, .docx"
             url={passbookUrl}
             uploadedFileName={passbookFileName}
             onRemove={() => handleRemoveKycDocument({

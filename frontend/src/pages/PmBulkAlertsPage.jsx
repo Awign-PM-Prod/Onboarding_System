@@ -3,7 +3,9 @@ import { api } from '../lib/api';
 import { ACTION_BTN_FILE, ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
 import {
   downloadBulkAlertTemplate,
+  formatEmailList,
   MAX_BULK_ALERT_ROWS,
+  normalizeCopyEmails,
   parseBulkAlertCsvText
 } from '../lib/bulkAlertCsv';
 
@@ -21,6 +23,8 @@ export default function PmBulkAlertsPage() {
   const [loadingClients, setLoadingClients] = useState(true);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [subject, setSubject] = useState('');
+  const [ccText, setCcText] = useState('');
+  const [bccText, setBccText] = useState('');
   const [message, setMessage] = useState('');
   const [csvRows, setCsvRows] = useState([]);
   const [csvErrors, setCsvErrors] = useState([]);
@@ -101,7 +105,10 @@ export default function PmBulkAlertsPage() {
   );
 
   const validCsvRecipients = useMemo(
-    () => csvRows.filter((r) => r.valid).map((r) => ({ name: r.name, email: r.email })),
+    () =>
+      csvRows
+        .filter((r) => r.valid)
+        .map((r) => ({ name: r.name, email: r.email, cc: r.cc ?? [], bcc: r.bcc ?? [] })),
     [csvRows]
   );
 
@@ -113,6 +120,8 @@ export default function PmBulkAlertsPage() {
     setEmployeeId('');
     setEmployees([]);
     setSubject('');
+    setCcText('');
+    setBccText('');
     setMessage('');
     setCsvRows([]);
     setCsvErrors([]);
@@ -151,17 +160,46 @@ export default function PmBulkAlertsPage() {
       return;
     }
 
+    const formCc = normalizeCopyEmails(ccText, { label: 'cc' });
+    if (formCc.error) {
+      setFormError(formCc.error);
+      return;
+    }
+    const formBcc = normalizeCopyEmails(bccText, { exclude: formCc.emails, label: 'bcc' });
+    if (formBcc.error) {
+      setFormError(formBcc.error);
+      return;
+    }
+
+    const mergeCopy = (rowCc = [], rowBcc = [], toEmail = '') => {
+      const cc = normalizeCopyEmails([...formCc.emails, ...rowCc], { exclude: [toEmail], label: 'cc' });
+      if (cc.error) return { error: cc.error };
+      const bcc = normalizeCopyEmails([...formBcc.emails, ...rowBcc], {
+        exclude: [toEmail, ...cc.emails],
+        label: 'bcc'
+      });
+      if (bcc.error) return { error: bcc.error };
+      return { cc: cc.emails, bcc: bcc.emails };
+    };
+
     let payload;
     if (mode === 'single') {
       if (!employeeId) {
         setFormError('Select an employee.');
         return;
       }
+      const copy = mergeCopy([], [], selectedEmployee?.email || '');
+      if (copy.error) {
+        setFormError(copy.error);
+        return;
+      }
       payload = {
         mode: 'single',
         employee_id: employeeId,
         message: trimmedMessage,
-        subject: subject.trim() || undefined
+        subject: subject.trim() || undefined,
+        cc: copy.cc,
+        bcc: copy.bcc
       };
     } else {
       if (validCsvRecipients.length === 0) {
@@ -172,9 +210,18 @@ export default function PmBulkAlertsPage() {
         setFormError(`Bulk send supports at most ${MAX_BULK_ALERT_ROWS} recipients.`);
         return;
       }
+      const recipients = [];
+      for (const row of validCsvRecipients) {
+        const copy = mergeCopy(row.cc, row.bcc, row.email);
+        if (copy.error) {
+          setFormError(`${row.email}: ${copy.error}`);
+          return;
+        }
+        recipients.push({ name: row.name, email: row.email, cc: copy.cc, bcc: copy.bcc });
+      }
       payload = {
         mode: 'bulk',
-        recipients: validCsvRecipients,
+        recipients,
         message: trimmedMessage,
         subject: subject.trim() || undefined
       };
@@ -188,12 +235,16 @@ export default function PmBulkAlertsPage() {
         setEmployeeId('');
         setMessage('');
         setSubject('');
+        setCcText('');
+        setBccText('');
       } else {
         setCsvRows([]);
         setCsvErrors([]);
         setCsvFileName('');
         setMessage('');
         setSubject('');
+        setCcText('');
+        setBccText('');
       }
     } catch (err) {
       setFormError(err.message || 'Could not send alerts.');
@@ -362,7 +413,9 @@ export default function PmBulkAlertsPage() {
                 </button>
                 <span className="text-xs text-slate-500">
                   Columns: <code className="rounded bg-slate-100 px-1">name</code>,{' '}
-                  <code className="rounded bg-slate-100 px-1">email</code>
+                  <code className="rounded bg-slate-100 px-1">email</code>, optional{' '}
+                  <code className="rounded bg-slate-100 px-1">cc</code>,{' '}
+                  <code className="rounded bg-slate-100 px-1">bcc</code>
                 </span>
               </div>
 
@@ -404,6 +457,8 @@ export default function PmBulkAlertsPage() {
                         <tr>
                           <th className="px-3 py-2">Name</th>
                           <th className="px-3 py-2">Email</th>
+                          <th className="px-3 py-2">CC</th>
+                          <th className="px-3 py-2">BCC</th>
                           <th className="px-3 py-2">Status</th>
                         </tr>
                       </thead>
@@ -412,6 +467,12 @@ export default function PmBulkAlertsPage() {
                           <tr key={`${row.email}-${idx}`} className="border-t border-slate-100">
                             <td className="px-3 py-2 text-slate-800">{row.name || '—'}</td>
                             <td className="px-3 py-2 text-slate-800">{row.email || '—'}</td>
+                            <td className="px-3 py-2 text-slate-800">
+                              {formatEmailList(row.cc) || '—'}
+                            </td>
+                            <td className="px-3 py-2 text-slate-800">
+                              {formatEmailList(row.bcc) || '—'}
+                            </td>
                             <td
                               className={`px-3 py-2 ${
                                 row.valid ? 'text-emerald-700' : 'text-rose-700'
@@ -449,6 +510,39 @@ export default function PmBulkAlertsPage() {
                 className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
               />
             </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor="alert-cc">
+                  CC <span className="font-normal text-slate-400">(optional)</span>
+                </label>
+                <input
+                  id="alert-cc"
+                  type="text"
+                  value={ccText}
+                  onChange={(e) => setCcText(e.target.value)}
+                  placeholder="cc@example.com, another@example.com"
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor="alert-bcc">
+                  BCC <span className="font-normal text-slate-400">(optional)</span>
+                </label>
+                <input
+                  id="alert-bcc"
+                  type="text"
+                  value={bccText}
+                  onChange={(e) => setBccText(e.target.value)}
+                  placeholder="bcc@example.com"
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-slate-500">
+              Separate multiple addresses with commas or semicolons. Bulk CSV can also include per-row{' '}
+              <code className="rounded bg-slate-100 px-1">cc</code> and{' '}
+              <code className="rounded bg-slate-100 px-1">bcc</code> columns.
+            </p>
             <div>
               <label className="block text-sm font-medium text-slate-700" htmlFor="alert-message">
                 Message

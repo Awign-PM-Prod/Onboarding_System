@@ -6,7 +6,8 @@ export const WEEK_OFF_PRESETS = [
   'first_sat',
   'second_sat',
   'third_sat',
-  'fourth_sat'
+  'fourth_sat',
+  'fifth_sat'
 ];
 
 export const WEEKDAY_NAMES = [
@@ -130,6 +131,7 @@ export function isWeekOffDate(isoDate, weekOffConfig) {
     if (preset === 'second_sat' && dow === 6 && day === nthWeekdayOfMonth(year, month, 6, 2)) return true;
     if (preset === 'third_sat' && dow === 6 && day === nthWeekdayOfMonth(year, month, 6, 3)) return true;
     if (preset === 'fourth_sat' && dow === 6 && day === nthWeekdayOfMonth(year, month, 6, 4)) return true;
+    if (preset === 'fifth_sat' && dow === 6 && day === nthWeekdayOfMonth(year, month, 6, 5)) return true;
   }
   return false;
 }

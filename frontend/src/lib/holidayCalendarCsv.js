@@ -39,11 +39,32 @@ function normalizeStateName(raw) {
 }
 
 function parseHolidayDate(raw) {
-  const s = String(raw ?? '').trim().slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
-  const d = new Date(`${s}T00:00:00Z`);
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return null;
-  return s;
+  const s = String(raw ?? '').trim().split(/[\sT]/)[0];
+  if (!s) return null;
+
+  let year;
+  let month;
+  let day;
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    year = Number(iso[1]);
+    month = Number(iso[2]);
+    day = Number(iso[3]);
+  } else {
+    const dmy = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
+    if (!dmy) return null;
+    day = Number(dmy[1]);
+    month = Number(dmy[2]);
+    year = Number(dmy[3]);
+  }
+
+  if (!Number.isInteger(year) || year < 1900 || year > 2100) return null;
+  if (!Number.isInteger(month) || month < 1 || month > 12) return null;
+  if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+  const isoDate = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== isoDate) return null;
+  return isoDate;
 }
 
 function normalizeHolidayType(raw) {
@@ -75,9 +96,7 @@ export function buildHolidayCalendarTemplateCsv() {
   return Papa.unparse({
     fields: HOLIDAY_CALENDAR_CSV_HEADERS,
     data: [
-      ['Maharashtra', '2026-01-26', 'Monday', 'NH', 'Republic Day'],
-      ['Maharashtra', '2026-08-15', 'Saturday', 'NH', 'Independence Day'],
-      ['Karnataka', '2026-11-01', 'Sunday', 'FH', 'Kannada Rajyotsava']
+      ['Maharashtra', '2026-01-26', 'Monday', 'NH', 'Republic Day']
     ]
   });
 }
@@ -133,7 +152,7 @@ export function parseHolidayCalendarCsvText(text) {
     }
     const holiday_date = parseHolidayDate(row.date);
     if (!holiday_date) {
-      errors.push(`Row ${line}: invalid date "${row.date ?? ''}" (use YYYY-MM-DD).`);
+      errors.push(`Row ${line}: invalid date "${row.date ?? ''}".`);
       continue;
     }
     const holiday_type = normalizeHolidayType(row.holiday_type);

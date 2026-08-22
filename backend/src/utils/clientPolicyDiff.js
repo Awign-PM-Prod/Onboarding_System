@@ -224,10 +224,20 @@ export function diffClientPolicyBundles(before, after) {
     changes.push(`Incentive: ${bIncentive} → ${aIncentive}`);
   }
 
-  const bSource = String(before?.holiday_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
-  const aSource = String(after?.holiday_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
-  if (bSource !== aSource) {
-    changes.push(`Holiday calendar: ${bSource} → ${aSource}`);
+  const bCal = String(before?.holiday_calendar_id ?? '').trim() || null;
+  const aCal = String(after?.holiday_calendar_id ?? '').trim() || null;
+  const bCalName = String(before?.holiday_calendar_name ?? '').trim()
+    || (bCal ? 'named calendar' : 'Default');
+  const aCalName = String(after?.holiday_calendar_name ?? '').trim()
+    || (aCal ? 'named calendar' : 'Default');
+  if (bCal !== aCal) {
+    changes.push(`Holiday calendar: ${bCalName} → ${aCalName}`);
+  } else {
+    const bSource = String(before?.holiday_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
+    const aSource = String(after?.holiday_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
+    if (bSource !== aSource) {
+      changes.push(`Holiday calendar: ${bSource} → ${aSource}`);
+    }
   }
 
   const bHolidays = holidayKeys(before?.holidays);
