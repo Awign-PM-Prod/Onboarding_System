@@ -703,6 +703,7 @@ async function invokeKycDocValidateEdge({
   imageBase64,
   expectedAadhaarNumber,
   expectedPanNumber,
+  expectedUanNumber,
 }) {
   const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
   const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
@@ -724,6 +725,7 @@ async function invokeKycDocValidateEdge({
       image_base64: imageBase64,
       expected_aadhaar_number: expectedAadhaarNumber || null,
       expected_pan_number: expectedPanNumber || null,
+      expected_uan_number: expectedUanNumber || null,
     }),
   });
 
@@ -2256,7 +2258,7 @@ router.post('/qualification-certificate-upload', (req, res, next) => {
 });
 
 const KYC_UPLOAD_KINDS = new Set(['aadhaar_front', 'aadhaar_back', 'pan_card', 'bank_passbook']);
-const KYC_VALIDATE_KINDS = new Set(['aadhaar_front', 'aadhaar_back', 'pan_card']);
+const KYC_VALIDATE_KINDS = new Set(['aadhaar_front', 'aadhaar_back', 'pan_card', 'pf_uan_face_auth']);
 
 const kycValidateUpload = multer({
   storage: multer.memoryStorage(),
@@ -2274,7 +2276,7 @@ router.post('/kyc-document-validate', (req, res, next) => {
   const kind = String(req.query?.kind || '').trim();
   if (!KYC_VALIDATE_KINDS.has(kind)) {
     return res.status(400).json({
-      error: 'Invalid kind. Use ?kind=aadhaar_front, aadhaar_back, or pan_card',
+      error: 'Invalid kind. Use ?kind=aadhaar_front, aadhaar_back, pan_card, or pf_uan_face_auth',
     });
   }
   kycValidateUpload.single('file')(req, res, (err) => {
@@ -2306,7 +2308,7 @@ router.post('/kyc-document-validate', (req, res, next) => {
 
     const { data: form, error: formErr } = await supabaseAdmin
       .from('job_app_form')
-      .select('aadhaar_number, kyc_pan_number')
+      .select('aadhaar_number, kyc_pan_number, bp_pf_uan_number')
       .eq('employee_id', emp.id)
       .maybeSingle();
     if (formErr) throw formErr;
@@ -2322,6 +2324,22 @@ router.post('/kyc-document-validate', (req, res, next) => {
       });
     }
 
+    const bodyUan = String(req.body?.uan_number ?? req.body?.bp_pf_uan_number ?? '')
+      .replace(/\D/g, '')
+      .slice(0, 12);
+    const dbUan = String(form?.bp_pf_uan_number ?? '').replace(/\D/g, '').slice(0, 12);
+    const expectedUan = TWELVE_DIGIT_REGEX.test(bodyUan) ? bodyUan : dbUan;
+    if (kind === 'pf_uan_face_auth' && !TWELVE_DIGIT_REGEX.test(expectedUan)) {
+      return res.json({
+        ok: true,
+        checked: false,
+        warnings: [
+          'Enter your 12-digit PF UAN first, then upload the screenshot.',
+        ],
+        details: 'PF UAN number not entered yet',
+      });
+    }
+
     try {
       const edgeResult = await invokeKycDocValidateEdge({
         kind,
@@ -2329,6 +2347,7 @@ router.post('/kyc-document-validate', (req, res, next) => {
         imageBase64: req.file.buffer.toString('base64'),
         expectedAadhaarNumber: String(form?.aadhaar_number ?? '').replace(/\D/g, ''),
         expectedPanNumber: normalizedPan,
+        expectedUanNumber: expectedUan,
       });
       return res.json({
         ok: true,

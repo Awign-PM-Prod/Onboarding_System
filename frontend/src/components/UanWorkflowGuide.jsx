@@ -257,7 +257,7 @@ export default function UanWorkflowGuide({ path, uanNumberField, screenshotField
               <WorkflowStep
                 stepNumber={4}
                 title="Upload confirmation screenshot"
-                description="Upload a screenshot that clearly shows successful face authentication."
+                description="Upload a screenshot or photo that clearly shows your UAN (EPFO/UMANG success, face authentication, or similar). It must match the number you entered."
               >
                 {screenshotField}
               </WorkflowStep>
@@ -295,7 +295,7 @@ export default function UanWorkflowGuide({ path, uanNumberField, screenshotField
               <WorkflowStep
                 stepNumber={5}
                 title="Upload confirmation screenshot"
-                description="Upload a screenshot showing successful face authentication."
+                description="Upload a screenshot or photo that clearly shows your UAN (EPFO/UMANG success, face authentication, or similar). It must match the number you entered."
               >
                 {screenshotField}
               </WorkflowStep>

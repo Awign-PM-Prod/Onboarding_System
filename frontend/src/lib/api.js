@@ -583,12 +583,13 @@ export const api = {
     fd.append('file', file);
     return uploadRequest(`/api/public/onboarding/kyc-document-upload?${q.toString()}`, fd);
   },
-  validateKycDocument: ({ mobile, employeeId, file, kind }) => {
+  validateKycDocument: ({ mobile, employeeId, file, kind, uanNumber }) => {
     const q = new URLSearchParams();
     q.set('kind', kind);
     const fd = new FormData();
     fd.append('mobile', mobile);
     if (employeeId) fd.append('employee_id', employeeId);
+    if (uanNumber) fd.append('uan_number', uanNumber);
     fd.append('file', file);
     return uploadRequest(`/api/public/onboarding/kyc-document-validate?${q.toString()}`, fd);
   },

@@ -1094,6 +1094,7 @@ function isAllowedOcrImageFile(file) {
 function kycKindLabel(kind) {
   if (kind === 'aadhaar_front') return 'Aadhaar front';
   if (kind === 'aadhaar_back') return 'Aadhaar back';
+  if (kind === 'pf_uan_face_auth') return 'PF UAN confirmation screenshot';
   return 'PAN';
 }
 
@@ -1143,6 +1144,20 @@ function kycValidationHint(kind, validation) {
       text: 'This does not seem to match the PAN number added by you. Please upload the correct PAN card.',
     };
   }
+  if (kind === 'pf_uan_face_auth' && result?.matches?.uan_number_match === false) {
+    return {
+      tone: 'error',
+      blocking: true,
+      text: 'This does not seem to match the PF UAN number added by you. Please upload the correct screenshot.',
+    };
+  }
+  if (kind === 'pf_uan_face_auth' && result?.matches?.uan_number_match !== true) {
+    return {
+      tone: 'error',
+      blocking: true,
+      text: 'Could not read a 12-digit UAN on this image. Please upload a clearer screenshot that shows your UAN.',
+    };
+  }
 
   if (result?.quality_ok === false) {
     return {
@@ -1167,6 +1182,9 @@ function kycValidationHint(kind, validation) {
   }
   if (kind === 'pan_card') {
     return { tone: 'success', blocking: false, text: 'PAN card verified.' };
+  }
+  if (kind === 'pf_uan_face_auth') {
+    return { tone: 'success', blocking: false, text: 'PF UAN screenshot verified.' };
   }
   return { tone: 'success', blocking: false, text: `${docLabel} image looks correct.` };
 }
@@ -1968,6 +1986,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   );
   const [pfUanScreenshotUp, setPfUanScreenshotUp] = useState(false);
   const [pfUanScreenshotErr, setPfUanScreenshotErr] = useState('');
+  const [pfUanScreenshotHint, setPfUanScreenshotHint] = useState(null);
   const [pfUanScreenshotRemoving, setPfUanScreenshotRemoving] = useState(false);
   const [policeUrl, setPoliceUrl] = useState(() => jobForm.bp_police_verification_url ?? '');
   const [policeFileName, setPoliceFileName] = useState(() => fileNameFromStorageUrl(jobForm.bp_police_verification_url ?? ''));
@@ -2023,6 +2042,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     setPhotoErr('');
     setPoliceErr('');
     setPfUanScreenshotErr('');
+    setPfUanScreenshotHint(null);
     setPhotoRemoving(false);
     setPoliceRemoving(false);
     setPfUanScreenshotRemoving(false);
@@ -2134,21 +2154,69 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
       ? 'Upload a screenshot showing completed PF UAN face authentication.'
       : '';
 
+  const clearPfUanScreenshotLocal = () => {
+    setPfUanScreenshotHint(null);
+    setPfUanScreenshotErr('');
+    setPfUanScreenshotUrl('');
+    setPfUanScreenshotFileName('');
+  };
+
+  const clearPfUanScreenshot = (currentUrl) => {
+    const urlToDelete = String(currentUrl ?? '').trim();
+    clearPfUanScreenshotLocal();
+    if (!urlToDelete) return;
+    api.deleteOnboardingDocument({
+      mobile,
+      employeeId,
+      field: 'bp_pf_uan_face_auth_screenshot_url',
+      url: urlToDelete,
+    }).catch(() => {});
+  };
+
   const handlePfUanFaceAuthScreenshot = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setPfUanScreenshotErr('Only image screenshots are allowed (JPG, PNG, etc.).');
+    if (!TWELVE_DIGIT_REGEX.test(pfUan)) {
+      setPfUanScreenshotHint(null);
+      setPfUanScreenshotErr('Enter your 12-digit PF UAN first, then upload the screenshot.');
+      return;
+    }
+    if (!isAllowedOcrImageFile(file)) {
+      setPfUanScreenshotHint(null);
+      setPfUanScreenshotErr('Only JPG, JPEG, PNG, or WEBP images are allowed.');
       return;
     }
     if (file.size > BP_MAX_BYTES) {
+      setPfUanScreenshotHint(null);
       setPfUanScreenshotErr('File must be 5 MB or smaller.');
       return;
     }
     setPfUanScreenshotErr('');
+    setPfUanScreenshotHint(null);
     setPfUanScreenshotUp(true);
     try {
+      let validation;
+      try {
+        validation = await api.validateKycDocument({
+          mobile,
+          employeeId,
+          file,
+          kind: 'pf_uan_face_auth',
+          uanNumber: pfUan,
+        });
+      } catch {
+        validation = {
+          checked: false,
+          warnings: ['Could not verify this document. Please upload a clear, correct image and try again.'],
+        };
+      }
+      const hint = kycValidationHint('pf_uan_face_auth', validation);
+      setPfUanScreenshotHint(hint);
+      if (kycHintIsBlocking(hint)) {
+        setPfUanScreenshotErr(hint.text);
+        return;
+      }
       const { url } = await api.uploadBpDocument({
         mobile,
         employeeId,
@@ -2165,7 +2233,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   };
 
   const handleSubmit = async () => {
-    if (!canSubmit || saving || hasPfUanChoiceError || pfUanError || pfUanScreenshotError) return;
+    if (!canSubmit || saving || hasPfUanChoiceError || pfUanError || pfUanScreenshotError || kycHintIsBlocking(pfUanScreenshotHint)) return;
     const nomineeNameTrim = String(nomineeName).trim();
     const nomineeRelationTrim = String(nomineeRelation).trim();
     const nomineeMobileNorm = normalizeMobile(nomineeMobile);
@@ -2318,9 +2386,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                     onChange={() => {
                       setHasPfUan('no');
                       setPfUan('');
-                      setPfUanScreenshotUrl('');
-                      setPfUanScreenshotFileName('');
-                      setPfUanScreenshotErr('');
+                      clearPfUanScreenshot(pfUanScreenshotUrl);
                     }}
                     className="h-4 w-4 border-slate-300 text-indigo-600 focus:ring-indigo-500"
                   />
@@ -2345,7 +2411,13 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                           inputMode="numeric"
                           maxLength={12}
                           value={pfUan}
-                          onChange={(e) => setPfUan(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                          onChange={(e) => {
+                            const next = e.target.value.replace(/\D/g, '').slice(0, 12);
+                            if (next !== pfUan && (pfUanScreenshotUrl || pfUanScreenshotHint)) {
+                              clearPfUanScreenshot(pfUanScreenshotUrl);
+                            }
+                            setPfUan(next);
+                          }}
                           className={fieldClass(false)}
                           placeholder="Enter your 12-digit PF UAN no."
                           autoComplete="off"
@@ -2358,23 +2430,37 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
                         label="Upload confirmation screenshot"
                         required
                         inputId="bp-pf-uan-face-auth"
-                        accept="image/*"
+                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/jpg,image/png,image/webp"
                         uploading={pfUanScreenshotUp}
+                        uploadingLabel="Checking screenshot…"
                         error={pfUanScreenshotErr || pfUanScreenshotError}
-                        hint="Screenshot only · max 5MB · image (JPG, PNG, etc.)"
+                        hint={
+                          pfUan.length === 12
+                            ? 'EPFO, UMANG, face-auth success, or any screenshot/photo that shows your UAN · JPG, JPEG, PNG, WEBP · max 5MB'
+                            : 'Enter your 12-digit PF UAN first, then upload the screenshot.'
+                        }
                         url={pfUanScreenshotUrl}
                         uploadedFileName={pfUanScreenshotFileName}
-                        onRemove={() => handleRemoveBankPhotoDocument({
-                          field: 'bp_pf_uan_face_auth_screenshot_url',
-                          currentUrl: pfUanScreenshotUrl,
-                          setUrl: setPfUanScreenshotUrl,
-                          setFileName: setPfUanScreenshotFileName,
-                          setErr: setPfUanScreenshotErr,
-                          setRemoving: setPfUanScreenshotRemoving,
-                        })}
+                        onRemove={() => {
+                          setPfUanScreenshotHint(null);
+                          handleRemoveBankPhotoDocument({
+                            field: 'bp_pf_uan_face_auth_screenshot_url',
+                            currentUrl: pfUanScreenshotUrl,
+                            setUrl: setPfUanScreenshotUrl,
+                            setFileName: setPfUanScreenshotFileName,
+                            setErr: setPfUanScreenshotErr,
+                            setRemoving: setPfUanScreenshotRemoving,
+                          });
+                        }}
                         removing={pfUanScreenshotRemoving}
-                        onChange={handlePfUanFaceAuthScreenshot}
-                      />
+                        onChange={pfUan.length === 12 ? handlePfUanFaceAuthScreenshot : undefined}
+                      >
+                        {pfUanScreenshotHint && (pfUanScreenshotHint.tone === 'success' || !pfUanScreenshotErr) && (
+                          <p className={`mt-2 text-sm ${kycHintTextClass(pfUanScreenshotHint)}`}>
+                            {pfUanScreenshotHint.text}
+                          </p>
+                        )}
+                      </DocUploadField>
                     }
                   />
                 </div>
@@ -2494,7 +2580,8 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
             saving ||
             Boolean(hasPfUanChoiceError) ||
             Boolean(pfUanError) ||
-            Boolean(pfUanScreenshotError)
+            Boolean(pfUanScreenshotError) ||
+            kycHintIsBlocking(pfUanScreenshotHint)
           }
           onClick={handleSubmit}
           className={NAV_BTN_SUBMIT}

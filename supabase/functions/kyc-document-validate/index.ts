@@ -5,7 +5,7 @@ const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
-const KYC_KINDS = ["aadhaar_front", "aadhaar_back", "pan_card"] as const;
+const KYC_KINDS = ["aadhaar_front", "aadhaar_back", "pan_card", "pf_uan_face_auth"] as const;
 type KycKind = (typeof KYC_KINDS)[number];
 
 type RequestBody = {
@@ -14,6 +14,7 @@ type RequestBody = {
   image_base64?: string;
   expected_aadhaar_number?: string | null;
   expected_pan_number?: string | null;
+  expected_uan_number?: string | null;
 };
 
 type ValidationResult = {
@@ -26,11 +27,13 @@ type ValidationResult = {
   extracted: {
     aadhaar_number: string | null;
     pan_number: string | null;
+    uan_number: string | null;
     full_name: string | null;
   };
   matches: {
     aadhaar_number_match: boolean | null;
     pan_number_match: boolean | null;
+    uan_number_match: boolean | null;
   };
 };
 
@@ -46,6 +49,10 @@ function asKycKind(raw: string): KycKind | null {
   return (KYC_KINDS as readonly string[]).includes(candidate)
     ? (candidate as KycKind)
     : null;
+}
+
+function parseDetectedKind(raw: string): KycKind | "other" {
+  return (KYC_KINDS as readonly string[]).includes(raw) ? (raw as KycKind) : "other";
 }
 
 function normalizeDigits(raw: unknown): string {
@@ -83,13 +90,22 @@ function parseConfidence(raw: unknown): number {
   return n;
 }
 
-function buildPrompt(kind: KycKind, expectedAadhaar: string, expectedPan: string): string {
+function kindDisplayName(kind: string): string {
+  return kind.replaceAll("_", " ");
+}
+
+function buildPrompt(
+  kind: KycKind,
+  expectedAadhaar: string,
+  expectedPan: string,
+  expectedUan: string,
+): string {
   const commonRules = [
     "You are validating Indian KYC document images for onboarding.",
     "Return JSON only, no markdown.",
     "If text is unreadable/blurry/glare/cropped, include warning.",
     "Never invent values. Use null if unsure.",
-    "Allowed detected_kind values: aadhaar_front, aadhaar_back, pan_card, other.",
+    "Allowed detected_kind values: aadhaar_front, aadhaar_back, pan_card, pf_uan_face_auth, other.",
   ];
 
   const kindRules =
@@ -97,28 +113,38 @@ function buildPrompt(kind: KycKind, expectedAadhaar: string, expectedPan: string
       ? [
           "Expected: Aadhaar FRONT side.",
           "Front usually has holder photo and identity details.",
-          "If image looks like Aadhaar back or PAN, set is_expected_kind false and warn.",
+          "If image looks like Aadhaar back, PAN, or a UAN/EPFO screenshot, set is_expected_kind false and warn.",
         ]
       : kind === "aadhaar_back"
         ? [
             "Expected: Aadhaar BACK side.",
             "Back usually has address block and often QR code area.",
-            "If image looks like Aadhaar front or PAN, set is_expected_kind false and warn.",
+            "If image looks like Aadhaar front, PAN, or a UAN/EPFO screenshot, set is_expected_kind false and warn.",
           ]
-        : [
-            "Expected: PAN card image.",
-            "If image looks like Aadhaar front/back or non-PAN doc, set is_expected_kind false and warn.",
-          ];
+        : kind === "pan_card"
+          ? [
+              "Expected: PAN card image.",
+              "If image looks like Aadhaar front/back, a UAN/EPFO screenshot, or a non-PAN doc, set is_expected_kind false and warn.",
+            ]
+          : [
+              "Expected: PF UAN confirmation screenshot or document photo that clearly shows the Universal Account Number (UAN).",
+              "Accept any of these layouts: EPFO member portal, UMANG, UAN generated/activated success popup, face authentication success, UAN card, PF passbook, or similar.",
+              "The UAN is exactly 12 digits. It may be a labeled field OR inside a sentence such as: your UAN (102371725469) has been successfully generated and activated.",
+              "Do NOT treat Application Transaction Number, masked mobile numbers, timestamps, Aadhaar numbers, or other long digit strings as the UAN.",
+              "Put the 12-digit UAN in extracted.uan_number only. Leave it null if you cannot find a UAN.",
+              "If the image is Aadhaar, PAN, or has no visible UAN, set is_expected_kind false and warn.",
+            ];
 
   const expectedValues = [
     `Expected Aadhaar number for match check (may be empty): ${expectedAadhaar || "N/A"}`,
     `Expected PAN number for match check (may be empty): ${expectedPan || "N/A"}`,
+    `Expected UAN number for match check (may be empty): ${expectedUan || "N/A"}`,
   ];
 
   const outputSchema = [
     "Output shape:",
     "{",
-    '  "detected_kind": "aadhaar_front|aadhaar_back|pan_card|other",',
+    '  "detected_kind": "aadhaar_front|aadhaar_back|pan_card|pf_uan_face_auth|other",',
     '  "is_expected_kind": true|false,',
     '  "quality_ok": true|false,',
     '  "confidence": 0..1,',
@@ -126,6 +152,7 @@ function buildPrompt(kind: KycKind, expectedAadhaar: string, expectedPan: string
     '  "extracted": {',
     '    "aadhaar_number": "12 digits or null",',
     '    "pan_number": "ABCDE1234F or null",',
+    '    "uan_number": "12 digits or null",',
     '    "full_name": "string or null"',
     "  }",
     "}",
@@ -139,29 +166,32 @@ function normalizeResult(
   parsed: Record<string, unknown>,
   expectedAadhaar: string,
   expectedPan: string,
+  expectedUan: string,
 ): ValidationResult {
-  const detectedRaw = String(parsed.detected_kind ?? "").trim();
-  const detectedKind =
-    detectedRaw === "aadhaar_front" ||
-      detectedRaw === "aadhaar_back" ||
-      detectedRaw === "pan_card"
-      ? (detectedRaw as KycKind)
-      : "other";
-
   const extractedRaw =
     parsed.extracted && typeof parsed.extracted === "object"
       ? (parsed.extracted as Record<string, unknown>)
       : {};
   const extractedAadhaar = normalizeDigits(extractedRaw.aadhaar_number).slice(0, 12) || "";
   const extractedPan = normalizePan(extractedRaw.pan_number).slice(0, 10) || "";
+  const extractedUan = normalizeDigits(extractedRaw.uan_number).slice(0, 12) || "";
   const extractedName = String(extractedRaw.full_name ?? "").trim();
+
+  let detectedKind = parseDetectedKind(String(parsed.detected_kind ?? "").trim());
+  if (kind === "pf_uan_face_auth" && extractedUan.length === 12) {
+    detectedKind = "pf_uan_face_auth";
+  }
 
   const warnings = toStringArray(parsed.warnings);
   const declaredExpected = Boolean(parsed.is_expected_kind);
-  const isExpectedKind = declaredExpected && detectedKind === kind;
+  const isExpectedKind =
+    (declaredExpected && detectedKind === kind) ||
+    (kind === "pf_uan_face_auth" && extractedUan.length === 12);
 
   if (detectedKind !== kind) {
-    warnings.push(`Document seems to be ${detectedKind.replace("_", " ")} instead of ${kind.replace("_", " ")}.`);
+    warnings.push(
+      `Document seems to be ${kindDisplayName(detectedKind)} instead of ${kindDisplayName(kind)}.`,
+    );
   }
   if (!parsed.quality_ok) {
     warnings.push("Image quality is low. Please upload a clearer photo.");
@@ -172,12 +202,22 @@ function normalizeResult(
       ? expectedAadhaar === extractedAadhaar
       : null;
   const panMatch = expectedPan && extractedPan ? expectedPan === extractedPan : null;
+  const uanMatch =
+    expectedUan && extractedUan ? expectedUan === extractedUan : null;
 
   if (aadhaarMatch === false) {
     warnings.push("Aadhaar number on image does not match the verified Aadhaar number.");
   }
   if (panMatch === false) {
     warnings.push("PAN number on image does not match the verified PAN number.");
+  }
+  if (uanMatch === false) {
+    warnings.push("UAN number on image does not match the PF UAN number entered in the form.");
+  }
+  if (kind === "pf_uan_face_auth" && expectedUan && !extractedUan) {
+    warnings.push(
+      "Could not read a 12-digit UAN on this image. Please upload a clearer screenshot that shows your UAN.",
+    );
   }
 
   return {
@@ -190,11 +230,13 @@ function normalizeResult(
     extracted: {
       aadhaar_number: extractedAadhaar || null,
       pan_number: extractedPan || null,
+      uan_number: extractedUan || null,
       full_name: extractedName || null,
     },
     matches: {
       aadhaar_number_match: aadhaarMatch,
       pan_number_match: panMatch,
+      uan_number_match: uanMatch,
     },
   };
 }
@@ -217,7 +259,9 @@ serve(async (req) => {
   const kind = asKycKind(String(body.kind ?? ""));
   if (!kind) {
     console.warn("[kyc-document-validate] invalid kind", { kind: body.kind ?? null });
-    return json(400, { error: "kind must be one of aadhaar_front, aadhaar_back, pan_card" });
+    return json(400, {
+      error: "kind must be one of aadhaar_front, aadhaar_back, pan_card, pf_uan_face_auth",
+    });
   }
 
   const mimeType = String(body.mime_type ?? "").trim().toLowerCase();
@@ -246,12 +290,14 @@ serve(async (req) => {
   const model = String(Deno.env.get("OPENAI_KYC_MODEL") ?? DEFAULT_OPENAI_MODEL).trim() || DEFAULT_OPENAI_MODEL;
   const expectedAadhaar = normalizeDigits(body.expected_aadhaar_number).slice(0, 12);
   const expectedPan = normalizePan(body.expected_pan_number).slice(0, 10);
-  const prompt = buildPrompt(kind, expectedAadhaar, expectedPan);
+  const expectedUan = normalizeDigits(body.expected_uan_number).slice(0, 12);
+  const prompt = buildPrompt(kind, expectedAadhaar, expectedPan, expectedUan);
   console.log("[kyc-document-validate] calling OpenAI", {
     model,
     kind,
     hasExpectedAadhaar: Boolean(expectedAadhaar),
     hasExpectedPan: Boolean(expectedPan),
+    hasExpectedUan: Boolean(expectedUan),
   });
 
   let upstreamResponse: Response;
@@ -334,7 +380,7 @@ serve(async (req) => {
   }
 
   const parsed = parseOpenAiJson(rawContent);
-  const result = normalizeResult(kind, parsed, expectedAadhaar, expectedPan);
+  const result = normalizeResult(kind, parsed, expectedAadhaar, expectedPan, expectedUan);
   console.log("[kyc-document-validate] validation completed", {
     kind,
     detectedKind: result.detected_kind,
@@ -342,6 +388,7 @@ serve(async (req) => {
     warningCount: result.warnings.length,
     aadhaarMatch: result.matches.aadhaar_number_match,
     panMatch: result.matches.pan_number_match,
+    uanMatch: result.matches.uan_number_match,
   });
 
   return json(200, {
