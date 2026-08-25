@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, useNavigate, useParams } from 'react-router-dom';
-import { PM_TAB_SEGMENT_TO_KEY, pmClientTabUrl } from '../lib/pmClientRoutes';
+import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { PM_TAB_SEGMENT_TO_KEY, onboardingBaseFromPathname, pmClientTabUrl } from '../lib/pmClientRoutes';
 import EmployeeTable from '../components/EmployeeTable';
 import EmployeeFormResponseModal from '../components/EmployeeFormResponseModal';
 import AddEmployeeModal from '../components/AddEmployeeModal';
@@ -12,6 +12,7 @@ import AttendancePanel from '../components/AttendancePanel';
 import ClientProjectMetaHeader from '../components/ClientProjectMetaHeader';
 import ModalOverlay from '../components/ModalOverlay';
 import { api } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
 import {
   formatDesignationLabel,
@@ -32,6 +33,7 @@ const TESTING_FORM_CSV_EXPORT_STATUSES = new Set([
   'PM APPROVED',
   'APPROVED',
   'PL APPROVED',
+  'SUPERADMIN APPROVED',
   'Form Submitted',
 ]);
 
@@ -78,6 +80,7 @@ function isMissingRoleDetails(row) {
 }
 
 function getTestingFormStatusLabel(row) {
+  if (row?.form_superadmin_dual_approved) return 'SUPERADMIN APPROVED';
   if (String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED') return 'PL APPROVED';
   if (String(row.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED') return 'REQUEST CORRECTION';
   if (String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED') return 'PM APPROVED';
@@ -119,6 +122,11 @@ function canBulkRequestExtendDoj(row) {
 export default function PmClientDetail() {
   const { id, tab: tabSegment } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { profile } = useAuth();
+  const onboardingBase = onboardingBaseFromPathname(location.pathname);
+  const isSuperAdminOnboarding = onboardingBase === '/super-admin';
+  const tabUrl = (tabKey) => pmClientTabUrl(id, tabKey, onboardingBase);
   const [client, setClient] = useState(null);
   const [pmClients, setPmClients] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -214,7 +222,11 @@ export default function PmClientDetail() {
       ]);
       const found = clients.find(c => c.id === id);
       if (!found) {
-        setError('Client not found or not assigned to you.');
+        setError(
+          isSuperAdminOnboarding
+            ? 'Client not found or you do not have access.'
+            : 'Client not found or not assigned to you.'
+        );
       } else {
         setPmClients(clients);
         setClient(found);
@@ -267,14 +279,18 @@ export default function PmClientDetail() {
   }, [id]);
 
   useEffect(() => {
+    if (isSuperAdminOnboarding && tabSegment === 'attendance') {
+      navigate(`/super-admin/client/${id}/attendance`, { replace: true });
+      return;
+    }
     if (tabSegment === 'testing') {
-      navigate(pmClientTabUrl(id, 'testing'), { replace: true });
+      navigate(pmClientTabUrl(id, 'testing', onboardingBase), { replace: true });
       return;
     }
     if (tabSegment && !PM_TAB_SEGMENT_TO_KEY[tabSegment]) {
-      navigate(pmClientTabUrl(id, 'client_dashboard'), { replace: true });
+      navigate(pmClientTabUrl(id, 'client_dashboard', onboardingBase), { replace: true });
     }
-  }, [tabSegment, id, navigate]);
+  }, [tabSegment, id, navigate, isSuperAdminOnboarding, onboardingBase]);
 
   const pending = useMemo(
     () => employees.filter((e) => e.onboarding_status === 'AVAILABLE' || e.onboarding_status === 'PENDING'),
@@ -353,6 +369,7 @@ export default function PmClientDetail() {
         else if (joiningStatus === 'NOT_JOINED') latestStatus = 'Not Joined';
         else if (joiningStatus === 'JOINED_OTHER_DATE') latestStatus = 'Joined on other date';
         else if (joiningStatus === 'JOINED_ABSCONDED') latestStatus = 'Joined and absconded';
+        else if (row.form_superadmin_dual_approved) latestStatus = 'SUPERADMIN APPROVED';
         else if (payrollReviewStatus === 'PAYROLL_APPROVED') latestStatus = 'Payroll Approved';
         else if (payrollReviewStatus === 'PAYROLL_REJECTED') latestStatus = 'Payroll Rejected';
         else if (payrollReviewStatus === 'PENDING_PAYROLL_LEAD') latestStatus = 'Pending Payroll Review';
@@ -1289,6 +1306,7 @@ export default function PmClientDetail() {
     const inTestingEmployees = activeTab === 'testing' && testingSubtab === 'employees';
     const isPayrollApprovedRow = String(row.form_payroll_review_status ?? '').trim().toUpperCase() === 'PAYROLL_APPROVED';
     const isPmApprovedRow = String(row.form_review_status ?? '').trim().toUpperCase() === 'APPROVED';
+    const isSuperAdminDirect = profile?.role === 'SUPER_ADMIN';
     const canRequestExtendContext =
       ((activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') || (inTestingEmployees && isPayrollApprovedRow)) &&
       isPayrollApprovedRow &&
@@ -1301,7 +1319,7 @@ export default function PmClientDetail() {
       ((activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') || (inTestingEmployees && isPayrollApprovedRow)) &&
       isPayrollApprovedRow &&
       isPmApprovedRow &&
-      (!status || statusUnlock);
+      (!status || statusUnlock || isSuperAdminDirect);
 
     const formatExpiry = (iso) => {
       if (!iso) return null;
@@ -1311,7 +1329,7 @@ export default function PmClientDetail() {
     };
 
     const statusChangeControl =
-      canRequestExtendContext && status ? (
+      canRequestExtendContext && status && !isSuperAdminDirect ? (
         statusUnlock ? (
           <span className="whitespace-nowrap text-[10px] text-emerald-800">
             Status unlocked once
@@ -1338,20 +1356,26 @@ export default function PmClientDetail() {
       ) : null;
 
     const extendControl = canRequestExtendContext ? (
-      unlock ? (
+      isSuperAdminDirect || unlock ? (
         <div className="flex flex-wrap items-center gap-1.5">
           <label className="whitespace-nowrap text-[11px] font-medium text-amber-800">
-            Extended DOJ (editable once)
+            {isSuperAdminDirect ? 'Extended DOJ' : 'Extended DOJ (editable once)'}
           </label>
-          <span className="whitespace-nowrap text-[10px] text-amber-800">
-            Max allowed: {row.doj_extend_max_date || '—'}
-            {row.doj_extend_unlock_expires_at
-              ? ` · Expires ${formatExpiry(row.doj_extend_unlock_expires_at)}`
-              : ''}
-          </span>
+          {!isSuperAdminDirect ? (
+            <span className="whitespace-nowrap text-[10px] text-amber-800">
+              Max allowed: {row.doj_extend_max_date || '—'}
+              {row.doj_extend_unlock_expires_at
+                ? ` · Expires ${formatExpiry(row.doj_extend_unlock_expires_at)}`
+                : ''}
+            </span>
+          ) : (
+            <span className="whitespace-nowrap text-[10px] text-slate-500">
+              Current DOJ: {row.date_of_joining || '—'}
+            </span>
+          )}
           <input
             type="date"
-            max={row.doj_extend_max_date || undefined}
+            max={isSuperAdminDirect ? undefined : row.doj_extend_max_date || undefined}
             value={extendedDojDraftById[row.id] ?? ''}
             onChange={(e) =>
               setExtendedDojDraftById((prev) => ({ ...prev, [row.id]: e.target.value }))
@@ -1386,7 +1410,7 @@ export default function PmClientDetail() {
     ) : null;
 
     const currentDojLabel =
-      canRequestExtendContext && !unlock ? (
+      canRequestExtendContext && !unlock && !isSuperAdminDirect ? (
         <span className="whitespace-nowrap text-[10px] text-slate-500">
           Current DOJ: {row.date_of_joining || '—'}
         </span>
@@ -1521,7 +1545,7 @@ export default function PmClientDetail() {
               >
                 <nav className="mt-2.5 flex flex-wrap items-center gap-2" aria-label="Client views">
                   <NavLink
-                    to={pmClientTabUrl(id, 'client_dashboard')}
+                    to={tabUrl('client_dashboard')}
                     className={({ isActive }) =>
                       `rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
                         isActive
@@ -1533,7 +1557,7 @@ export default function PmClientDetail() {
                     Dashboard
                   </NavLink>
                   <NavLink
-                    to={pmClientTabUrl(id, 'testing')}
+                    to={tabUrl('testing')}
                     className={({ isActive }) =>
                       `rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
                         isActive
@@ -1579,7 +1603,7 @@ export default function PmClientDetail() {
           <PmClientDashboard employees={employees} />
         )}
 
-        {activeTab === 'attendance' && (
+        {activeTab === 'attendance' && !isSuperAdminOnboarding && (
           <AttendancePanel clientId={id} role="PROGRAM_MANAGER" projectName={client?.client_name} />
         )}
 
@@ -2281,7 +2305,11 @@ export default function PmClientDetail() {
                 : null
           }
           showSalaryAction={activeTab !== 'pending'}
-          salaryActionForRow={salaryActionForEmployee}
+          salaryActionForRow={(row) =>
+            salaryActionForEmployee(row, {
+              allowDirectAfterPmApproval: profile?.role === 'SUPER_ADMIN',
+            })
+          }
           onSalaryAction={handleSalaryAction}
         />
         )}
@@ -2370,47 +2398,61 @@ export default function PmClientDetail() {
                 </button>
               </div>
 
-              <div className="mt-6 border-t border-slate-200 pt-5">
-                <h4 className="text-sm font-semibold text-slate-900">Request Extend DOJ</h4>
-                <p className="mt-1 text-sm text-slate-600">
-                  Applies to {testingBulkExtendDojEligibleCount} selected employee
-                  {testingBulkExtendDojEligibleCount === 1 ? '' : 's'} at PL Approved stage with DOJ set and no
-                  pending/unlocked request. Others in the selection will be skipped.
-                </p>
-                <label className="mt-3 mb-1 block text-xs font-medium text-slate-600">
-                  Reason (optional, applied to all)
-                </label>
-                <textarea
-                  value={extendDojBulkReason}
-                  onChange={(e) => setExtendDojBulkReason(e.target.value)}
-                  rows={2}
-                  disabled={joiningBulkLoading || extendDojBulkLoading}
-                  placeholder="Why do these employees need an extended joining date?"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:opacity-60"
-                />
-                <div className="mt-4 flex items-center justify-end gap-2">
+              {profile?.role !== 'SUPER_ADMIN' && (
+                <div className="mt-6 border-t border-slate-200 pt-5">
+                  <h4 className="text-sm font-semibold text-slate-900">Request Extend DOJ</h4>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Applies to {testingBulkExtendDojEligibleCount} selected employee
+                    {testingBulkExtendDojEligibleCount === 1 ? '' : 's'} at PL Approved stage with DOJ set and no
+                    pending/unlocked request. Others in the selection will be skipped.
+                  </p>
+                  <label className="mt-3 mb-1 block text-xs font-medium text-slate-600">
+                    Reason (optional, applied to all)
+                  </label>
+                  <textarea
+                    value={extendDojBulkReason}
+                    onChange={(e) => setExtendDojBulkReason(e.target.value)}
+                    rows={2}
+                    disabled={joiningBulkLoading || extendDojBulkLoading}
+                    placeholder="Why do these employees need an extended joining date?"
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:opacity-60"
+                  />
+                  <div className="mt-4 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={closeTestingBulkJoiningModal}
+                      disabled={joiningBulkLoading || extendDojBulkLoading}
+                      className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestingBulkExtendDoj}
+                      disabled={
+                        testingBulkExtendDojEligibleCount === 0 ||
+                        joiningBulkLoading ||
+                        extendDojBulkLoading
+                      }
+                      className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {extendDojBulkLoading ? 'Sending…' : 'Request Extend DOJ'}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {profile?.role === 'SUPER_ADMIN' && (
+                <div className="mt-5 flex items-center justify-end">
                   <button
                     type="button"
                     onClick={closeTestingBulkJoiningModal}
-                    disabled={joiningBulkLoading || extendDojBulkLoading}
+                    disabled={joiningBulkLoading}
                     className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                   >
                     Cancel
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleTestingBulkExtendDoj}
-                    disabled={
-                      testingBulkExtendDojEligibleCount === 0 ||
-                      joiningBulkLoading ||
-                      extendDojBulkLoading
-                    }
-                    className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {extendDojBulkLoading ? 'Sending…' : 'Request Extend DOJ'}
-                  </button>
                 </div>
-              </div>
+              )}
             </div>
           </ModalOverlay>
         )}
@@ -2724,6 +2766,7 @@ export default function PmClientDetail() {
           previousCorrectionRejectedFields={responseModalPreviousRejectedFields}
           onDecision={handleResponseDecision}
           deciding={responseDecisionLoading}
+          dualApprove={profile?.role === 'SUPER_ADMIN'}
         />
           </div>
         </div>

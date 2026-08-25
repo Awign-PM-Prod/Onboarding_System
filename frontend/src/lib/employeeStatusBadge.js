@@ -2,6 +2,10 @@
 
 export { formatEmployeeStatusLabel } from './formatLabels';
 
+export function isSuperAdminDualApproved(row) {
+  return Boolean(row?.form_superadmin_dual_approved);
+}
+
 export function isPmApprovedReview(row) {
   return String(row?.form_review_status ?? '').trim().toUpperCase() === 'APPROVED';
 }
@@ -30,6 +34,7 @@ export function resolveEmployeeStatusLabel(row, {
     if (custom) return custom;
   }
 
+  if (isSuperAdminDualApproved(row)) return 'SUPERADMIN APPROVED';
   if (isPlApprovedReview(row)) return 'PL APPROVED';
   if (isPlRejectedReview(row) && isPmApprovedReview(row)) return 'PL REJECTED';
   if (String(row?.form_review_status ?? '').trim().toUpperCase() === 'CORRECTION_REQUESTED') {
@@ -61,6 +66,7 @@ export function employeeStatusBadgeClass(statusLabel, { onboardingInitiated = fa
   if (label === 'RESPONDED') return `${base} bg-[#EDF7FC] text-[#1891CD]`;
   if (label === 'REQUEST CORRECTION') return `${base} bg-orange-50 text-orange-700`;
   if (label === 'PM APPROVED') return `${base} bg-[#E6F4EA] text-[#137333]`;
+  if (label === 'SUPERADMIN APPROVED') return `${base} bg-emerald-700 text-emerald-50`;
   if (label === 'PL APPROVED') return `${base} bg-emerald-700 text-emerald-50`;
   if (label === 'PL REJECTED') return `${base} bg-red-800 text-white`;
   if (label === 'PM REJECTED') return `${base} bg-red-50 text-red-700`;

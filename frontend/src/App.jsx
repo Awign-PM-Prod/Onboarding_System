@@ -57,6 +57,11 @@ function SuperAdminClientLegacyRedirect() {
   return <Navigate to={`/super-admin/client/${id}/dashboard`} replace />;
 }
 
+function SuperAdminOnboardingRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/super-admin/client/${id}/onboarding/dashboard`} replace />;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -140,6 +145,8 @@ export default function App() {
         <Route path="client/:id">
           <Route index element={<SuperAdminClientDefaultRedirect />} />
           <Route path="dashboard" element={<PayrollClientDashboardHome />} />
+          <Route path="onboarding" element={<SuperAdminOnboardingRedirect />} />
+          <Route path="onboarding/:tab" element={<PmClientDetail />} />
           <Route path="approved-employees" element={<PayrollClientApprovedEmployeesPage />} />
           <Route path="pl-approved-employees" element={<PayrollClientFinalApprovedEmployeesPage />} />
           <Route path="rejected-employees" element={<PayrollClientRejectedEmployeesPage />} />
@@ -154,6 +161,7 @@ export default function App() {
         <Route path="holiday-calendar" element={<SuperAdminHolidayCalendarPage />} />
         <Route path="region-zones" element={<SuperAdminRegionZonesPage />} />
         <Route path="task-reminders" element={<SuperAdminTaskRemindersPage />} />
+        <Route path="bulk-alerts" element={<PmBulkAlertsPage />} />
         <Route path="staff-accounts" element={<SuperAdminStaffAccountsPage />} />
         <Route path="staff-accounts/new" element={<ProgramManagerForm />} />
         <Route path="staff-accounts/new-payroll-lead" element={<ProgramManagerForm />} />

@@ -335,7 +335,8 @@ export default function EmployeeFormResponseModal({
   onDecision,
   deciding = false,
   reviewMode = 'program_manager',
-  pmApproverName = null
+  pmApproverName = null,
+  dualApprove = false
 }) {
   const isPayrollMode = reviewMode === 'payroll';
   const alreadyPayrollApproved =
@@ -518,9 +519,14 @@ export default function EmployeeFormResponseModal({
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:px-6">
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold text-slate-900">
-              {isPayrollMode ? 'Payroll Lead review' : 'Application response'}
+              {isPayrollMode ? 'Payroll Lead review' : dualApprove ? 'Super Admin review' : 'Application response'}
             </h2>
             <p className="mt-0.5 truncate text-sm text-slate-600">{employeeName}</p>
+            {dualApprove && !isPayrollMode && !alreadyApprovedForCorrection && (
+              <p className="mt-0.5 text-xs text-slate-500">
+                Approve completes both Program Manager and Payroll Lead review.
+              </p>
+            )}
             {alreadyApprovedForCorrection && (
               <p className="mt-0.5 text-xs text-emerald-700">
                 Already approved — review remains available. Mark incorrect fields to send for correction.
@@ -725,7 +731,7 @@ export default function EmployeeFormResponseModal({
                   disabled={deciding}
                   className="rounded-lg bg-emerald-700 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
                 >
-                  {deciding ? 'Submitting...' : 'Approve'}
+                  {deciding ? 'Submitting...' : dualApprove && !isPayrollMode ? 'Approve (PM + PL)' : 'Approve'}
                 </button>
               )}
               {alreadyApprovedForCorrection && !hasIncorrectMarks && !isPayrollMode && (

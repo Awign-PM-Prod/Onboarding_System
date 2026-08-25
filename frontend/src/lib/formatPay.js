@@ -24,8 +24,11 @@ export function hasEmployeePayFields(row) {
   return true;
 }
 
-export function salaryActionForEmployee(row) {
+export function salaryActionForEmployee(row, { allowDirectAfterPmApproval = false } = {}) {
   if (!hasEmployeePayFields(row)) return null;
+  if (allowDirectAfterPmApproval) {
+    return { mode: 'direct', label: 'Edit salary' };
+  }
   if (row.salary_change_request_pending) {
     return { mode: 'pending', label: 'Cancel request' };
   }

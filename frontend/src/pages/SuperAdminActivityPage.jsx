@@ -32,6 +32,7 @@ const ACTION_OPTIONS = [
   { value: 'DOJ_EXTEND_REJECTED', label: 'DOJ extend rejected' },
   { value: 'DOJ_EXTENDED', label: 'DOJ extended' },
   { value: 'PM_REVIEW', label: 'PM review' },
+  { value: 'SA_REVIEW', label: 'Super Admin review' },
   { value: 'PL_REVIEW', label: 'PL review' },
   { value: 'ATTENDANCE_UPLOAD', label: 'Attendance upload' },
   { value: 'ATTENDANCE_SUBMIT', label: 'Attendance submit' },

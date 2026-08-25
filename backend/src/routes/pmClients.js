@@ -6,7 +6,30 @@ import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePag
 
 const router = Router();
 
-router.use(requireRole('PROGRAM_MANAGER'));
+router.use(requireRole(['PROGRAM_MANAGER', 'SUPER_ADMIN']));
+
+function isSuperAdminCaller(req) {
+  return req.user?.role === 'SUPER_ADMIN';
+}
+
+function scopedClientsQuery(query, req) {
+  if (isSuperAdminCaller(req)) return query;
+  return query.eq('program_manager_id', req.user.id);
+}
+
+async function assertScopedClient(req, clientId, select = 'id, program_manager_id') {
+  const { data: client, error } = await supabaseAdmin
+    .from('clients')
+    .select(select)
+    .eq('id', clientId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!client) return { ok: false, status: 404, error: 'Client not found' };
+  if (!isSuperAdminCaller(req) && client.program_manager_id !== req.user.id) {
+    return { ok: false, status: 403, error: 'Not authorized for this client' };
+  }
+  return { ok: true, client };
+}
 
 const PM_DECIDED = new Set(['APPROVED', 'REJECTED', 'CORRECTION_REQUESTED']);
 
@@ -52,11 +75,12 @@ function primaryRemarkFromCounts(counts) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const { data: clients, error } = await supabaseAdmin
+    let clientsQuery = supabaseAdmin
       .from('clients')
       .select('*')
-      .eq('program_manager_id', req.user.id)
       .order('created_at', { ascending: false });
+    clientsQuery = scopedClientsQuery(clientsQuery, req);
+    const { data: clients, error } = await clientsQuery;
     if (error) throw error;
     if (clients.length === 0) return res.json([]);
 
@@ -293,8 +317,8 @@ router.get('/dashboard-stats', async (req, res, next) => {
     let clientsQuery = supabaseAdmin
       .from('clients')
       .select('id, client_name, contract_code')
-      .eq('program_manager_id', req.user.id)
       .order('client_name', { ascending: true });
+    clientsQuery = scopedClientsQuery(clientsQuery, req);
     if (filterClientId) {
       clientsQuery = clientsQuery.eq('id', filterClientId);
     }
@@ -385,17 +409,10 @@ router.get('/joining-status-reminders', async (req, res, next) => {
   try {
     const clientId = String(req.query.client_id ?? '').trim() || null;
     if (clientId) {
-      const { data: client, error: cErr } = await supabaseAdmin
-        .from('clients')
-        .select('id, program_manager_id')
-        .eq('id', clientId)
-        .maybeSingle();
-      if (cErr) throw cErr;
-      if (!client || client.program_manager_id !== req.user.id) {
-        return res.status(403).json({ error: 'Not authorized for this client' });
-      }
+      const access = await assertScopedClient(req, clientId);
+      if (!access.ok) return res.status(access.status).json({ error: access.error });
     }
-    const payload = await buildJoiningStatusReminderPayload(req.user.id, { clientId });
+    const payload = await buildJoiningStatusReminderPayload(req, { clientId });
     return res.json(payload);
   } catch (err) {
     next(err);
@@ -412,17 +429,11 @@ router.get('/joining-status-reminders/export', async (req, res, next) => {
       return res.status(400).json({ error: 'client_id is required.' });
     }
 
-    const { data: client, error: cErr } = await supabaseAdmin
-      .from('clients')
-      .select('id, client_name, program_manager_id')
-      .eq('id', clientId)
-      .maybeSingle();
-    if (cErr) throw cErr;
-    if (!client || client.program_manager_id !== req.user.id) {
-      return res.status(403).json({ error: 'Not authorized for this client' });
-    }
+    const access = await assertScopedClient(req, clientId, 'id, client_name, program_manager_id');
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const client = access.client;
 
-    const payload = await buildJoiningStatusReminderPayload(req.user.id, { clientId });
+    const payload = await buildJoiningStatusReminderPayload(req, { clientId });
     const rows = bucket === 'overdue' ? payload.overdue : payload.within_2_days;
     const clientRow = rows.find((r) => r.client_id === clientId);
     const employees = Array.isArray(clientRow?.employees) ? clientRow.employees : [];
@@ -471,12 +482,12 @@ router.get('/joining-status-reminders/export', async (req, res, next) => {
   }
 });
 
-async function buildJoiningStatusReminderPayload(pmUserId, { clientId = null } = {}) {
+async function buildJoiningStatusReminderPayload(req, { clientId = null } = {}) {
   let clientsQuery = supabaseAdmin
     .from('clients')
     .select('id, client_name')
-    .eq('program_manager_id', pmUserId)
     .order('client_name', { ascending: true });
+  clientsQuery = scopedClientsQuery(clientsQuery, req);
   if (clientId) clientsQuery = clientsQuery.eq('id', clientId);
 
   const { data: clients, error: cErr } = await clientsQuery;

@@ -42,6 +42,18 @@ function IconCheck({ className }) {
   );
 }
 
+function IconClipboardCheck({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M11.35 3.836c.065-.24.24-.44.48-.505A2.25 2.25 0 0114.25 3.75h1.5a2.25 2.25 0 012.25 2.25v.5M11.35 3.836A2.25 2.25 0 019.75 3.75h-1.5a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 008.25 21.75h7.5A2.25 2.25 0 0018 19.5V6A2.25 2.25 0 0015.75 3.75h-1.5a2.25 2.25 0 00-2.25 2.25v.5m-3.9 4.704l1.5 1.5 3-3.75"
+      />
+    </svg>
+  );
+}
+
 function IconReject({ className }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
@@ -105,6 +117,18 @@ function IconMail({ className }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
+      />
+    </svg>
+  );
+}
+
+function IconBulkAlerts({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
       />
     </svg>
   );
@@ -176,7 +200,9 @@ function SuperAdminLayoutInner() {
   const isHolidayCalendarPage = pathname.startsWith('/super-admin/holiday-calendar');
   const isRegionZonesPage = pathname.startsWith('/super-admin/region-zones');
   const isTaskRemindersPage = pathname.startsWith('/super-admin/task-reminders');
+  const isBulkAlertsPage = pathname.startsWith('/super-admin/bulk-alerts');
   const isStaffAccountsPage = pathname.startsWith('/super-admin/staff-accounts');
+  const isOnboardingPage = /\/client\/[^/]+\/onboarding(\/|$)/.test(pathname);
 
   const loadClients = useCallback(async () => {
     try {
@@ -399,6 +425,14 @@ function SuperAdminLayoutInner() {
       onClick: () => setPanelOpenPersist(false)
     },
     {
+      id: 'bulk-alerts',
+      to: '/super-admin/bulk-alerts',
+      label: 'Bulk Alerts',
+      active: isBulkAlertsPage,
+      icon: <IconBulkAlerts className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
       id: 'staff-accounts',
       to: '/super-admin/staff-accounts',
       label: 'Staff Accounts',
@@ -418,11 +452,18 @@ function SuperAdminLayoutInner() {
           icon: <IconDashboard className="h-full w-full" />
         },
         {
+          id: 'onboarding',
+          to: paths.clientOnboarding(clientId, 'dashboard'),
+          label: 'Onboarding',
+          active: isOnboardingPage,
+          icon: <IconOnboarding className="h-full w-full" />
+        },
+        {
           id: 'pm-approved',
           to: paths.client(clientId, 'approved-employees'),
           label: 'PM Approved',
           active: /\/approved-employees\/?$/.test(pathname),
-          icon: <IconOnboarding className="h-full w-full" />
+          icon: <IconClipboardCheck className="h-full w-full" />
         },
         {
           id: 'approved',

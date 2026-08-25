@@ -6,7 +6,11 @@ import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 
 const router = Router();
 
-router.use(requireRole('PROGRAM_MANAGER'));
+router.use(requireRole(['PROGRAM_MANAGER', 'SUPER_ADMIN']));
+
+function isSuperAdminCaller(req) {
+  return req.user?.role === 'SUPER_ADMIN';
+}
 
 const DEFAULT_SUBJECT = 'Update from Awign';
 const MAX_MESSAGE_CHARS = 5000;
@@ -229,7 +233,7 @@ router.post('/send', async (req, res, next) => {
         .eq('id', employee.client_id)
         .maybeSingle();
       if (clientErr) throw clientErr;
-      if (!client || client.program_manager_id !== req.user.id) {
+      if (!client || (client.program_manager_id !== req.user.id && !isSuperAdminCaller(req))) {
         return res.status(403).json({ error: 'Not authorized for this employee' });
       }
       clientId = client.id;

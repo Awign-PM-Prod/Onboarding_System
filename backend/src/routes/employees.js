@@ -329,15 +329,28 @@ async function fetchProgramManagerOwnedClient(req, clientId) {
     .eq('id', req.user.id)
     .maybeSingle();
   if (uErr) throw uErr;
-  if (userRow?.role !== 'PROGRAM_MANAGER') return null;
+  if (userRow?.role) req.user.role = userRow.role;
+  if (userRow?.role !== 'PROGRAM_MANAGER' && userRow?.role !== 'SUPER_ADMIN') return null;
   const { data, error } = await supabaseAdmin
     .from('clients')
     .select('id, program_manager_id')
     .eq('id', clientId)
     .maybeSingle();
   if (error) throw error;
-  if (!data || data.program_manager_id !== req.user.id) return null;
+  if (!data) return null;
+  if (userRow.role === 'SUPER_ADMIN') return data;
+  if (data.program_manager_id !== req.user.id) return null;
   return data;
+}
+
+function isSuperAdminDualApprovedForm(form, roleByUserId) {
+  if (!form) return false;
+  if (String(form.review_status ?? '').trim().toUpperCase() !== 'APPROVED') return false;
+  if (String(form.payroll_review_status ?? '').trim().toUpperCase() !== 'PAYROLL_APPROVED') return false;
+  const pmBy = form.reviewed_by;
+  const plBy = form.payroll_reviewed_by;
+  if (!pmBy || !plBy || pmBy !== plBy) return false;
+  return roleByUserId.get(pmBy) === 'SUPER_ADMIN';
 }
 
 async function fetchClientDesignationMap(clientId) {
@@ -1058,23 +1071,29 @@ router.get('/', async (req, res, next) => {
     const employeeIds = rows.map((r) => r.id);
     let formMap = new Map();
     let pmUserNameById = new Map();
+    let reviewerRoleById = new Map();
     if (employeeIds.length > 0) {
       const { data: forms, error: formErr } = await supabaseAdmin
         .from('job_app_form')
-        .select('employee_id, submission_status, review_status, review_reason, reviewed_at, payroll_review_status, payroll_review_reason, payroll_reviewed_at, reviewed_by, bp_pf_uan_number, bp_esic_number')
+        .select('employee_id, submission_status, review_status, review_reason, reviewed_at, payroll_review_status, payroll_review_reason, payroll_reviewed_at, reviewed_by, payroll_reviewed_by, bp_pf_uan_number, bp_esic_number')
         .in('employee_id', employeeIds);
       if (formErr) throw formErr;
       formMap = new Map((forms ?? []).map((f) => [f.employee_id, f]));
       const reviewedByIds = Array.from(
-        new Set((forms ?? []).map((f) => f.reviewed_by).filter((id) => typeof id === 'string' && id))
+        new Set(
+          (forms ?? [])
+            .flatMap((f) => [f.reviewed_by, f.payroll_reviewed_by])
+            .filter((id) => typeof id === 'string' && id)
+        )
       );
       if (reviewedByIds.length > 0) {
         const { data: pmUsers, error: pmUsersErr } = await supabaseAdmin
           .from('users')
-          .select('id, name')
+          .select('id, name, role')
           .in('id', reviewedByIds);
         if (pmUsersErr) throw pmUsersErr;
         pmUserNameById = new Map((pmUsers ?? []).map((u) => [u.id, u.name ?? null]));
+        reviewerRoleById = new Map((pmUsers ?? []).map((u) => [u.id, u.role ?? null]));
       }
     }
     const out = rows.map((r) => {
@@ -1085,10 +1104,13 @@ router.get('/', async (req, res, next) => {
         form_review_status: f?.review_status ?? null,
         form_review_reason: f?.review_reason ?? null,
         form_reviewed_at: f?.reviewed_at ?? null,
+        form_reviewed_by: f?.reviewed_by ?? null,
         form_payroll_review_status: f?.payroll_review_status ?? null,
         form_payroll_review_reason: f?.payroll_review_reason ?? null,
         form_payroll_reviewed_at: f?.payroll_reviewed_at ?? null,
+        form_payroll_reviewed_by: f?.payroll_reviewed_by ?? null,
         form_pm_approver_name: f?.reviewed_by ? pmUserNameById.get(f.reviewed_by) ?? null : null,
+        form_superadmin_dual_approved: isSuperAdminDualApprovedForm(f, reviewerRoleById),
         form_bp_pf_uan_number: f?.bp_pf_uan_number ?? null,
         form_bp_esic_number: f?.bp_esic_number ?? null
       };
@@ -1479,7 +1501,8 @@ router.put('/:id/salary', async (req, res, next) => {
     }
 
     const reviewStatus = await fetchJobAppReviewStatus(employeeId);
-    if (isPmApprovedReviewStatus(reviewStatus)) {
+    const isSuperAdminDirect = req.user.role === 'SUPER_ADMIN';
+    if (isPmApprovedReviewStatus(reviewStatus) && !isSuperAdminDirect) {
       return res.status(400).json({
         error: 'Salary changes after PM approval require a Payroll Lead request with a supporting attachment'
       });
@@ -1520,7 +1543,8 @@ router.put('/:id/salary', async (req, res, next) => {
         from_ctc_value: row.ctc_value,
         to_pay_type: validation.salaryFields.pay_type,
         to_ctc_type: validation.salaryFields.ctc_type,
-        to_ctc_value: validation.salaryFields.ctc_value
+        to_ctc_value: validation.salaryFields.ctc_value,
+        direct_by_super_admin: isSuperAdminDirect
       }
     });
 
@@ -2368,6 +2392,7 @@ router.post('/joining-status/bulk', async (req, res, next) => {
 
     const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
     if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+    const isSuperAdminDirect = req.user.role === 'SUPER_ADMIN';
 
     const { data: employees, error: empErr } = await supabaseAdmin
       .from('employees')
@@ -2404,15 +2429,25 @@ router.post('/joining-status/bulk', async (req, res, next) => {
       }
 
       const currentCount = Number(row.joining_status_change_count ?? 0);
-      if (currentCount > 0 || String(row.joining_status ?? '').trim()) {
+      const currentStatus = String(row.joining_status ?? '').trim().toUpperCase();
+      if (!isSuperAdminDirect && (currentCount > 0 || currentStatus)) {
         failed.push({
           employee_id: row.id,
           error: 'Bulk joining status is allowed only for first-time status setting.'
         });
         continue;
       }
+      if (isSuperAdminDirect && currentStatus && joiningStatus === currentStatus) {
+        failed.push({
+          employee_id: row.id,
+          error: 'New joining status must be different from the current status.'
+        });
+        continue;
+      }
 
-      const transition = validateJoiningTransition(row.joining_status, { unlockValid: false });
+      const transition = validateJoiningTransition(row.joining_status, {
+        unlockValid: isSuperAdminDirect
+      });
       if (!transition.ok) {
         failed.push({ employee_id: row.id, error: transition.message });
         continue;
@@ -2426,7 +2461,10 @@ router.post('/joining-status/bulk', async (req, res, next) => {
         joining_status_updated_at: now,
         joining_status_updated_by: req.user.id
       };
-      if (Number(row.joining_status_change_count ?? 0) === 0) {
+      if (isSuperAdminDirect && currentStatus) {
+        Object.assign(payload, JOINING_STATUS_UNLOCK_CLEAR);
+      }
+      if (currentCount === 0) {
         payload.joining_status_set_at = now;
         payload.joining_status_set_by = req.user.id;
       }
@@ -2473,6 +2511,7 @@ router.post('/:id/joining-status', async (req, res, next) => {
 
     const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
     if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+    const isSuperAdminDirect = req.user.role === 'SUPER_ADMIN';
 
     const { data: row, error: empErr } = await supabaseAdmin
       .from('employees')
@@ -2498,7 +2537,7 @@ router.post('/:id/joining-status', async (req, res, next) => {
     }
 
     const unlockCheck = await ensureJoiningStatusUnlockValid(row);
-    const unlockValid = unlockCheck.valid;
+    const unlockValid = isSuperAdminDirect || unlockCheck.valid;
     const currentStatus = String(row.joining_status ?? '').trim().toUpperCase();
     if (currentStatus && joiningStatus === currentStatus) {
       return res.status(400).json({ error: 'New joining status must be different from the current status.' });
@@ -2508,7 +2547,7 @@ router.post('/:id/joining-status', async (req, res, next) => {
     if (!transition.ok) {
       return res.status(400).json({ error: transition.message });
     }
-    if (unlockCheck.expired && currentStatus) {
+    if (!isSuperAdminDirect && unlockCheck.expired && currentStatus) {
       return res.status(400).json({
         error: 'Joining status unlock expired. Request Super Admin approval again.',
       });
@@ -2551,7 +2590,8 @@ router.post('/:id/joining-status', async (req, res, next) => {
       .update(payload)
       .eq('id', row.id)
       .eq('client_id', clientId);
-    if (unlockValid) {
+    // PM unlock path requires the unlock flag still set; Super Admin can write without it.
+    if (unlockValid && !isSuperAdminDirect) {
       updateQuery = updateQuery.eq('joining_status_unlock', true);
     }
 
@@ -2564,7 +2604,7 @@ router.post('/:id/joining-status', async (req, res, next) => {
     }
     if (!updated) {
       return res.status(409).json({
-        error: unlockValid
+        error: unlockValid && !isSuperAdminDirect
           ? 'Could not update joining status (unlock may have expired).'
           : 'Could not update joining status.',
       });
@@ -2576,7 +2616,11 @@ router.post('/:id/joining-status', async (req, res, next) => {
       entityId: row.id,
       clientId,
       summary: `Joining status set to ${joiningStatus} for employee ${updated?.name || row.id}`,
-      metadata: { joining_status: joiningStatus, via_unlock: unlockValid }
+      metadata: {
+        joining_status: joiningStatus,
+        via_unlock: unlockValid && !isSuperAdminDirect,
+        direct_by_super_admin: isSuperAdminDirect
+      }
     });
 
     return res.json({ employee: updated });
@@ -3062,6 +3106,7 @@ router.put('/:id/extended-doj', async (req, res, next) => {
 
     const ownedPm = await fetchProgramManagerOwnedClient(req, clientId);
     if (!ownedPm) return res.status(403).json({ error: 'Not authorized for this client' });
+    const isSuperAdminDirect = req.user.role === 'SUPER_ADMIN';
 
     const { data: row, error: empErr } = await supabaseAdmin
       .from('employees')
@@ -3074,13 +3119,15 @@ router.put('/:id/extended-doj', async (req, res, next) => {
     if (empErr) throw empErr;
     if (!row) return res.status(404).json({ error: 'Employee not found for this client' });
 
-    const unlockCheck = await ensureDojUnlockValid(row);
-    if (!unlockCheck.valid) {
-      return res.status(400).json({
-        error: unlockCheck.expired
-          ? 'Extended DOJ unlock expired. Request Super Admin approval again.'
-          : 'Extended DOJ is locked for this employee. Request Super Admin approval first.',
-      });
+    if (!isSuperAdminDirect) {
+      const unlockCheck = await ensureDojUnlockValid(row);
+      if (!unlockCheck.valid) {
+        return res.status(400).json({
+          error: unlockCheck.expired
+            ? 'Extended DOJ unlock expired. Request Super Admin approval again.'
+            : 'Extended DOJ is locked for this employee. Request Super Admin approval first.',
+        });
+      }
     }
     if (row.onboarding_status === 'AVAILABLE') {
       return res.status(400).json({ error: 'Cannot extend DOJ for AVAILABLE employees via this path.' });
@@ -3089,19 +3136,21 @@ router.put('/:id/extended-doj', async (req, res, next) => {
       return res.status(400).json({ error: 'New date of joining must be different from the current date.' });
     }
     const maxAllowed = String(row.doj_extend_max_date ?? '').trim();
-    if (!maxAllowed) {
-      return res.status(400).json({
-        error: 'Max allowed DOJ is missing on this unlock. Ask Super Admin to re-approve.',
-      });
-    }
-    if (nextDoj > maxAllowed) {
-      return res.status(400).json({
-        error: `New date of joining must be on or before the max allowed DOJ (${maxAllowed}).`,
-      });
+    if (!isSuperAdminDirect) {
+      if (!maxAllowed) {
+        return res.status(400).json({
+          error: 'Max allowed DOJ is missing on this unlock. Ask Super Admin to re-approve.',
+        });
+      }
+      if (nextDoj > maxAllowed) {
+        return res.status(400).json({
+          error: `New date of joining must be on or before the max allowed DOJ (${maxAllowed}).`,
+        });
+      }
     }
 
     const now = new Date().toISOString();
-    const { data: updated, error: upErr } = await supabaseAdmin
+    let updateQuery = supabaseAdmin
       .from('employees')
       .update({
         date_of_joining: nextDoj,
@@ -3116,13 +3165,18 @@ router.put('/:id/extended-doj', async (req, res, next) => {
         ...JOINING_STATUS_UNLOCK_CLEAR,
       })
       .eq('id', employeeId)
-      .eq('client_id', clientId)
-      .eq('doj_extend_unlock', true)
-      .select('*')
-      .maybeSingle();
+      .eq('client_id', clientId);
+    if (!isSuperAdminDirect) {
+      updateQuery = updateQuery.eq('doj_extend_unlock', true);
+    }
+    const { data: updated, error: upErr } = await updateQuery.select('*').maybeSingle();
     if (upErr) throw upErr;
     if (!updated) {
-      return res.status(409).json({ error: 'Could not update Extended DOJ (unlock may have expired).' });
+      return res.status(409).json({
+        error: isSuperAdminDirect
+          ? 'Could not update Extended DOJ.'
+          : 'Could not update Extended DOJ (unlock may have expired).'
+      });
     }
 
     await logOrgActivityFromReq(req, {
@@ -3134,7 +3188,8 @@ router.put('/:id/extended-doj', async (req, res, next) => {
       metadata: {
         old_date_of_joining: row.date_of_joining,
         new_date_of_joining: nextDoj,
-        max_allowed_doj: maxAllowed,
+        max_allowed_doj: isSuperAdminDirect ? null : maxAllowed,
+        direct_by_super_admin: isSuperAdminDirect
       }
     });
 
@@ -3722,6 +3777,25 @@ router.post('/:id/form-review', async (req, res, next) => {
       });
     if (reviewInsertErr) throw reviewInsertErr;
 
+    const isSuperAdminDualApprove =
+      req.user.role === 'SUPER_ADMIN' && decisionStatus === 'APPROVED' && !alreadyPmApproved;
+
+    if (isSuperAdminDualApprove) {
+      const cycleNo = await nextPayrollReviewCycle(form.id);
+      const { error: payrollReviewInsertErr } = await supabaseAdmin.from('job_app_form_payroll_reviews').insert({
+        job_app_form_id: form.id,
+        employee_id: form.employee_id,
+        client_id: form.client_id,
+        cycle_no: cycleNo,
+        decision_status: 'APPROVED',
+        rejected_fields: [],
+        decision_reason: null,
+        reviewed_by: req.user.id,
+        reviewed_at: now,
+      });
+      if (payrollReviewInsertErr) throw payrollReviewInsertErr;
+    }
+
     const formUpdatePayload = {
       review_status: reviewStatus,
       editable_fields: nextEditableFields,
@@ -3731,10 +3805,17 @@ router.post('/:id/form-review', async (req, res, next) => {
       updated_at: now
     };
     if (decisionStatus === 'APPROVED') {
-      formUpdatePayload.payroll_review_status = 'PENDING_PAYROLL_LEAD';
-      formUpdatePayload.payroll_review_reason = null;
-      formUpdatePayload.payroll_reviewed_by = null;
-      formUpdatePayload.payroll_reviewed_at = null;
+      if (req.user.role === 'SUPER_ADMIN') {
+        formUpdatePayload.payroll_review_status = 'PAYROLL_APPROVED';
+        formUpdatePayload.payroll_review_reason = null;
+        formUpdatePayload.payroll_reviewed_by = req.user.id;
+        formUpdatePayload.payroll_reviewed_at = now;
+      } else {
+        formUpdatePayload.payroll_review_status = 'PENDING_PAYROLL_LEAD';
+        formUpdatePayload.payroll_review_reason = null;
+        formUpdatePayload.payroll_reviewed_by = null;
+        formUpdatePayload.payroll_reviewed_at = null;
+      }
     }
     // Re-open for employee edits: clear any PM/PL approval trail so PL queue stays correct.
     if (decisionStatus === 'CORRECTION_REQUESTED' || (alreadyPmApproved && decisionStatus === 'REJECTED')) {
@@ -3773,15 +3854,29 @@ router.post('/:id/form-review', async (req, res, next) => {
       } catch (emailErr) {
         console.warn('[review-status-email] PM review notify failed', emailErr?.message || emailErr);
       }
+    } else if (isSuperAdminDualApprove) {
+      try {
+        await notifyEmployeeReviewStatus({
+          employee: emp,
+          formEmail: form.email,
+          kind: 'BOTH_APPROVED',
+          reason: null,
+          employeeId
+        });
+      } catch (emailErr) {
+        console.warn('[review-status-email] SA dual approve notify failed', emailErr?.message || emailErr);
+      }
     }
 
     await logOrgActivityFromReq(req, {
-      action: 'PM_REVIEW',
+      action: isSuperAdminDualApprove ? 'SA_REVIEW' : 'PM_REVIEW',
       entityType: 'employee',
       entityId: employeeId,
       clientId: form.client_id,
-      summary: `PM ${decisionStatus} for employee ${emp?.name || employeeId}`,
-      metadata: { decision_status: decisionStatus }
+      summary: isSuperAdminDualApprove
+        ? `Super Admin dual-approved employee ${emp?.name || employeeId}`
+        : `PM ${decisionStatus} for employee ${emp?.name || employeeId}`,
+      metadata: { decision_status: decisionStatus, dual_approve: isSuperAdminDualApprove }
     });
 
     return res.json({ form: updatedForm });

@@ -24,14 +24,24 @@ export const PM_TAB_SEGMENT_TO_KEY = {
   attendance: 'attendance'
 };
 
-export function pmClientTabUrl(clientId, tabKey) {
+export function onboardingBaseFromPathname(pathname) {
+  if (String(pathname || '').startsWith('/super-admin')) return '/super-admin';
+  return '/pm-dashboard';
+}
+
+export function pmClientTabUrl(clientId, tabKey, basePath = '/pm-dashboard') {
   const seg = PM_CLIENT_TAB_SEGMENT[tabKey] ?? 'dashboard';
+  if (basePath === '/super-admin') {
+    return `/super-admin/client/${clientId}/onboarding/${seg}`;
+  }
   return `/pm-dashboard/client/${clientId}/${seg}`;
 }
 
-/** Match `/pm-dashboard/client/:id/:tab` */
+/** Match PM or Super Admin onboarding client detail paths */
 export function matchPmClientDetailPath(pathname) {
-  const m = pathname.match(/^\/pm-dashboard\/client\/([^/]+)\/([^/]+)$/);
+  const sa = String(pathname || '').match(/^\/super-admin\/client\/([^/]+)\/onboarding\/([^/]+)$/);
+  if (sa) return { clientId: sa[1], tabSegment: sa[2], basePath: '/super-admin' };
+  const m = String(pathname || '').match(/^\/pm-dashboard\/client\/([^/]+)\/([^/]+)$/);
   if (!m) return null;
-  return { clientId: m[1], tabSegment: m[2] };
+  return { clientId: m[1], tabSegment: m[2], basePath: '/pm-dashboard' };
 }

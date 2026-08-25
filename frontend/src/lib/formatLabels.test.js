@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DESIGNATION_OPTIONS } from '../components/DesignationsInput.jsx';
 import { formatDesignationLabel, formatEmployeeStatusLabel } from './formatLabels.js';
+import { resolveEmployeeStatusLabel } from './employeeStatusBadge.js';
 import {
   CTC_TYPE_OPTIONS,
   DIRECTORY_STATUS_OPTIONS,
@@ -18,6 +19,7 @@ const EXPECTED_FORM_STATUS_LABELS = {
   RESPONDED: 'Responded',
   'REQUEST CORRECTION': 'Correction Mail Sent',
   'PM APPROVED': 'PM Approved',
+  'SUPERADMIN APPROVED': 'Superadmin Approved',
   'PL APPROVED': 'PL Approved',
   'Form Submitted': 'Form Submitted',
 };
@@ -34,6 +36,7 @@ const EXPECTED_DIRECTORY_STATUS_LABELS = {
   'Correction Requested': 'Correction Requested',
   APPROVED: 'Approved',
   'PM APPROVED': 'PM Approved',
+  'SUPERADMIN APPROVED': 'Superadmin Approved',
   REJECTED: 'Rejected',
   'PM Approved': 'PM Approved',
   'PM Rejected': 'PM Rejected',
@@ -81,6 +84,34 @@ describe('formatEmployeeStatusLabel', () => {
     for (const status of DIRECTORY_STATUS_OPTIONS) {
       expect(formatEmployeeStatusLabel(status)).toBe(EXPECTED_DIRECTORY_STATUS_LABELS[status]);
     }
+  });
+});
+
+describe('resolveEmployeeStatusLabel', () => {
+  it('labels Super Admin dual approval as Superadmin Approved', () => {
+    expect(
+      resolveEmployeeStatusLabel({
+        form_review_status: 'APPROVED',
+        form_payroll_review_status: 'PAYROLL_APPROVED',
+        form_superadmin_dual_approved: true,
+      })
+    ).toBe('SUPERADMIN APPROVED');
+  });
+
+  it('keeps PM then PL two-step labels', () => {
+    expect(
+      resolveEmployeeStatusLabel({
+        form_review_status: 'APPROVED',
+        form_payroll_review_status: 'PENDING_PAYROLL_LEAD',
+      })
+    ).toBe('PM APPROVED');
+    expect(
+      resolveEmployeeStatusLabel({
+        form_review_status: 'APPROVED',
+        form_payroll_review_status: 'PAYROLL_APPROVED',
+        form_superadmin_dual_approved: false,
+      })
+    ).toBe('PL APPROVED');
   });
 });
 

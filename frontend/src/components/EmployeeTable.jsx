@@ -215,7 +215,7 @@ export default function EmployeeTable({
             });
 
             // Legacy optional flags — default true so PM/PL approved show everywhere.
-            if (!showPlApprovedForPayrollApproved && statusLabel === 'PL APPROVED') {
+            if (!showPlApprovedForPayrollApproved && (statusLabel === 'PL APPROVED' || statusLabel === 'SUPERADMIN APPROVED')) {
               statusLabel = isPmApprovedOnlyFallback(r);
             }
             if (!showApprovedForPmApproved && statusLabel === 'PM APPROVED') {

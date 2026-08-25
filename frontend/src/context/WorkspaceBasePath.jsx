@@ -14,6 +14,7 @@ function buildPaths(basePath) {
     clientEdit: (id) =>
       isSuperAdmin ? `${base}/clients/${id}/edit` : `/clients/${id}/edit`,
     client: (id, tab = 'dashboard') => `${base}/client/${id}/${tab}`,
+    clientOnboarding: (id, tab = 'dashboard') => `${base}/client/${id}/onboarding/${tab}`,
     programManagers: `${base}/program-managers`,
     programManagerNew: `${base}/program-managers/new`,
     matchClientId: (pathname) => {

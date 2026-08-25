@@ -30,6 +30,7 @@ const EMPLOYEE_STATUS_LABELS = {
   ROLE_ASSIGNED: 'Role Assigned',
   'REQUEST CORRECTION': 'Correction Mail Sent',
   'PM APPROVED': 'PM Approved',
+  'SUPERADMIN APPROVED': 'Superadmin Approved',
   'PL APPROVED': 'PL Approved',
   'PL REJECTED': 'PL Rejected',
   'PM REJECTED': 'PM Rejected',

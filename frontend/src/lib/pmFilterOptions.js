@@ -9,6 +9,7 @@ export const TESTING_FORM_STATUS_OPTIONS = [
   'RESPONDED',
   'REQUEST CORRECTION',
   'PM APPROVED',
+  'SUPERADMIN APPROVED',
   'PL APPROVED',
   'Form Submitted',
 ];
@@ -38,6 +39,7 @@ export const DIRECTORY_STATUS_OPTIONS = [
   'Correction Requested',
   'APPROVED',
   'PM APPROVED',
+  'SUPERADMIN APPROVED',
   'REJECTED',
   'PM Approved',
   'PM Rejected',
