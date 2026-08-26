@@ -225,14 +225,45 @@ async function buildPmDigests(
   const pmUsers = users.filter((u) => u.role === "PROGRAM_MANAGER");
   if (!pmUsers.length) return [];
 
-  const clients = await fetchInBatches<{
+  const assignments = await fetchInBatches<{
+    client_id: string;
+    program_manager_id: string;
+  }>(
+    supabase,
+    "client_program_managers",
+    "client_id, program_manager_id",
+    "program_manager_id",
+    pmUsers.map((u) => u.id),
+  );
+  const legacyClients = await fetchInBatches<{
     id: string;
     client_name: string | null;
     program_manager_id: string;
   }>(supabase, "clients", "id, client_name, program_manager_id", "program_manager_id", pmUsers.map((u) => u.id));
-  if (!clients.length) return [];
 
-  const clientIds = clients.map((c) => c.id);
+  const clientIdSet = new Set([
+    ...assignments.map((a) => a.client_id),
+    ...legacyClients.map((c) => c.id),
+  ]);
+  if (!clientIdSet.size) return [];
+
+  const clientIds = [...clientIdSet];
+  const { data: clientRows, error: clientsErr } = await supabase
+    .from("clients")
+    .select("id, client_name")
+    .in("id", clientIds);
+  if (clientsErr) throw clientsErr;
+  const clientById = new Map((clientRows ?? []).map((c) => [c.id, c]));
+
+  const clientToPms = new Map<string, Set<string>>();
+  const addAssignment = (clientId: string, pmId: string) => {
+    if (!clientId || !pmId) return;
+    if (!clientToPms.has(clientId)) clientToPms.set(clientId, new Set());
+    clientToPms.get(clientId)!.add(pmId);
+  };
+  for (const row of assignments) addAssignment(row.client_id, row.program_manager_id);
+  for (const client of legacyClients) addAssignment(client.id, client.program_manager_id);
+
   const employees = await fetchInBatches<{
     id: string;
     client_id: string;
@@ -262,17 +293,18 @@ async function buildPmDigests(
   const formMap = new Map(forms.map((f) => [f.employee_id, f]));
 
   const byPm = new Map<string, Map<string, PmBucket>>();
-  for (const client of clients) {
-    if (!byPm.has(client.program_manager_id)) byPm.set(client.program_manager_id, new Map());
-    byPm.get(client.program_manager_id)!.set(client.id, emptyPmBucket(client));
+  for (const [clientId, pmSet] of clientToPms) {
+    const client = clientById.get(clientId);
+    if (!client) continue;
+    for (const pmId of pmSet) {
+      if (!byPm.has(pmId)) byPm.set(pmId, new Map());
+      byPm.get(pmId)!.set(clientId, emptyPmBucket(client));
+    }
   }
-  const clientToPm = new Map(clients.map((c) => [c.id, c.program_manager_id]));
 
   for (const emp of employees) {
-    const pmId = clientToPm.get(emp.client_id);
-    const clientMap = pmId ? byPm.get(pmId) : undefined;
-    const bucket = clientMap?.get(emp.client_id);
-    if (!bucket) continue;
+    const pmSet = clientToPms.get(emp.client_id);
+    if (!pmSet) continue;
 
     const form = formMap.get(emp.id);
     const submissionStatus = String(form?.submission_status ?? "").trim();
@@ -280,25 +312,30 @@ async function buildPmDigests(
     const payrollReviewStatus = String(form?.payroll_review_status ?? "").trim();
     const onboardingStatus = String(emp.onboarding_status ?? "").trim().toUpperCase();
 
-    if (submissionStatus === "Submitted" && !PM_DECIDED.has(reviewStatus)) {
-      bucket.awaiting_pm_review += 1;
-    }
-    if (reviewStatus === "APPROVED" && payrollReviewStatus === "PAYROLL_REJECTED") {
-      bucket.pl_rejected += 1;
-    }
-    if (reviewStatus === "CORRECTION_REQUESTED") {
-      bucket.correction_requested += 1;
-    }
-    if (emp.onboarding_initiated && submissionStatus !== "Submitted") {
-      bucket.submission_pending += 1;
-    }
-    if (onboardingStatus === "ROLE_ASSIGNED") bucket.role_assigned += 1;
+    for (const pmId of pmSet) {
+      const bucket = byPm.get(pmId)?.get(emp.client_id);
+      if (!bucket) continue;
 
-    const joining = String(emp.joining_status ?? "").trim();
-    const doj = String(emp.date_of_joining ?? "").trim();
-    if (!joining && doj && payrollReviewStatus === "PAYROLL_APPROVED") {
-      if (doj === todayIst) bucket.joining_today += 1;
-      else if (doj < todayIst) bucket.joining_overdue += 1;
+      if (submissionStatus === "Submitted" && !PM_DECIDED.has(reviewStatus)) {
+        bucket.awaiting_pm_review += 1;
+      }
+      if (reviewStatus === "APPROVED" && payrollReviewStatus === "PAYROLL_REJECTED") {
+        bucket.pl_rejected += 1;
+      }
+      if (reviewStatus === "CORRECTION_REQUESTED") {
+        bucket.correction_requested += 1;
+      }
+      if (emp.onboarding_initiated && submissionStatus !== "Submitted") {
+        bucket.submission_pending += 1;
+      }
+      if (onboardingStatus === "ROLE_ASSIGNED") bucket.role_assigned += 1;
+
+      const joining = String(emp.joining_status ?? "").trim();
+      const doj = String(emp.date_of_joining ?? "").trim();
+      if (!joining && doj && payrollReviewStatus === "PAYROLL_APPROVED") {
+        if (doj === todayIst) bucket.joining_today += 1;
+        else if (doj < todayIst) bucket.joining_overdue += 1;
+      }
     }
   }
 

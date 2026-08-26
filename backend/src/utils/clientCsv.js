@@ -223,12 +223,17 @@ function buildLeaveAllowances(designations, row) {
 
 /**
  * Convert one CSV row into a create-client API payload (without program_manager_id).
- * Caller must resolve program_manager_email → program_manager_id.
+ * Caller must resolve program_manager_email(s) → program_manager_ids.
+ * Multiple PM emails may be separated by ; or ,
  */
 export function csvRowToClientPayload(row) {
   const designations = parseDesignations(cell(row, 'designations'));
   const openEnded = parseBool(cell(row, 'open_ended_contract'), false);
   const insuranceApplicable = parseBool(cell(row, 'insurance_applicable'), false);
+  const programManagerEmails = splitList(cell(row, 'program_manager_email'), ';')
+    .flatMap((part) => splitList(part, ','))
+    .map((e) => e.toLowerCase())
+    .filter(Boolean);
 
   const attendance_policy = normalizeAttendancePolicy({
     payroll_cycle_start_day: parseNumber(cell(row, 'payroll_cycle_start_day'), 25),
@@ -261,7 +266,8 @@ export function csvRowToClientPayload(row) {
     contract_start_date: cell(row, 'contract_start_date'),
     contract_end_date: openEnded ? null : cell(row, 'contract_end_date'),
     open_ended_contract: openEnded,
-    program_manager_email: cell(row, 'program_manager_email').toLowerCase(),
+    program_manager_email: programManagerEmails[0] || '',
+    program_manager_emails: programManagerEmails,
     insurance_applicable: insuranceApplicable,
     insurance_name: insuranceApplicable ? cell(row, 'insurance_name') : null,
     insurance_amount: insuranceApplicable
@@ -325,7 +331,7 @@ export function buildClientTemplateCsv() {
     contract_start_date: '2026-04-01',
     contract_end_date: '2027-03-31',
     open_ended_contract: 'false',
-    program_manager_email: 'pm@example.com',
+    program_manager_email: 'pm1@example.com;pm2@example.com',
     insurance_applicable: 'false',
     insurance_name: '',
     insurance_amount: '',
@@ -385,11 +391,17 @@ export function clientToExportRow(client) {
     contract_end_date: openEnded ? '' : (client?.contract_end_date ?? ''),
     open_ended_contract: boolStr(openEnded),
     program_manager_email:
-      client?.program_manager?.email
+      (Array.isArray(client?.program_managers) && client.program_managers.length
+        ? client.program_managers.map((pm) => pm.email).filter(Boolean).join(';')
+        : null)
+      || client?.program_manager?.email
       || client?.program_manager_email
       || '',
     program_manager_name:
-      client?.program_manager?.name
+      (Array.isArray(client?.program_managers) && client.program_managers.length
+        ? client.program_managers.map((pm) => pm.name).filter(Boolean).join('; ')
+        : null)
+      || client?.program_manager?.name
       || client?.program_manager_name
       || '',
     insurance_applicable: boolStr(client?.insurance_applicable),

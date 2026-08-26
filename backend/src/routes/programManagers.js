@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { createStaffInviteUser } from '../utils/createStaffInviteUser.js';
+import { filterUsersWithCompletedSetup } from '../utils/staffInvite.js';
 
 const router = Router();
 
@@ -13,7 +14,8 @@ router.get('/', async (_req, res, next) => {
       .eq('role', 'PROGRAM_MANAGER')
       .order('name', { ascending: true });
     if (error) throw error;
-    res.json(data);
+    // Hide invited PMs until they finish set-password / name setup.
+    res.json(await filterUsersWithCompletedSetup(data ?? []));
   } catch (err) {
     next(err);
   }

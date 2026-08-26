@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { invokeResendEmailBatch } from '../utils/sendEmail.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
+import { isProgramManagerForClient } from '../utils/clientProgramManagers.js';
 
 const router = Router();
 
@@ -233,7 +234,7 @@ router.post('/send', async (req, res, next) => {
         .eq('id', employee.client_id)
         .maybeSingle();
       if (clientErr) throw clientErr;
-      if (!client || (client.program_manager_id !== req.user.id && !isSuperAdminCaller(req))) {
+      if (!client || (!(await isProgramManagerForClient(req.user.id, client.id)) && !isSuperAdminCaller(req))) {
         return res.status(403).json({ error: 'Not authorized for this employee' });
       }
       clientId = client.id;

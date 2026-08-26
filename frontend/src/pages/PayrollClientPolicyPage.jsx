@@ -171,6 +171,9 @@ export default function PayrollClientPolicyPage() {
             contract_start_date: client.contract_start_date,
             contract_end_date: client.contract_end_date,
             program_manager_id: client.program_manager_id,
+            program_manager_ids: Array.isArray(client.program_manager_ids) && client.program_manager_ids.length
+              ? client.program_manager_ids
+              : (client.program_manager_id ? [client.program_manager_id] : []),
             client_type: client.client_type || 'COMPLIANCE',
             insurance_applicable: client.insurance_applicable,
             insurance_name: client.insurance_applicable ? client.insurance_name : null,

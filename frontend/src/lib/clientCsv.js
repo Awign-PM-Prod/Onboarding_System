@@ -246,10 +246,17 @@ export function csvRowToClientForm(row, programManagers = []) {
   const designations = parseDesignations(cell(row, 'designations'));
   const openEnded = parseBool(cell(row, 'open_ended_contract'), false);
   const insuranceApplicable = parseBool(cell(row, 'insurance_applicable'), false);
-  const email = cell(row, 'program_manager_email').toLowerCase();
-  const pm = (programManagers ?? []).find(
-    (p) => String(p.email ?? '').trim().toLowerCase() === email
-  );
+  const emails = splitList(cell(row, 'program_manager_email'), ';')
+    .flatMap((part) => splitList(part, ','))
+    .map((e) => e.toLowerCase())
+    .filter(Boolean);
+  const pmIds = [];
+  for (const email of emails) {
+    const pm = (programManagers ?? []).find(
+      (p) => String(p.email ?? '').trim().toLowerCase() === email
+    );
+    if (pm?.id && !pmIds.includes(pm.id)) pmIds.push(pm.id);
+  }
 
   const attendance_policy = normalizeAttendancePolicyForForm({
     ...DEFAULT_ATTENDANCE_POLICY,
@@ -289,8 +296,8 @@ export function csvRowToClientForm(row, programManagers = []) {
     contract_start_date: cell(row, 'contract_start_date'),
     contract_end_date: openEnded ? '' : cell(row, 'contract_end_date'),
     open_ended_contract: openEnded,
-    program_manager_id: pm?.id ?? '',
-    program_manager_email: email,
+    program_manager_ids: pmIds,
+    program_manager_email: emails.join(';'),
     insurance_applicable: insuranceApplicable,
     insurance_name: insuranceApplicable ? cell(row, 'insurance_name') : '',
     insurance_amount: insuranceApplicable ? cell(row, 'insurance_amount') : '',
@@ -331,7 +338,7 @@ export function buildClientTemplateCsv() {
     contract_start_date: '2026-04-01',
     contract_end_date: '2027-03-31',
     open_ended_contract: 'false',
-    program_manager_email: 'pm@example.com',
+    program_manager_email: 'pm1@example.com;pm2@example.com',
     insurance_applicable: 'false',
     insurance_name: '',
     insurance_amount: '',
@@ -392,11 +399,17 @@ export function clientToExportRow(client, programManagerEmail = '') {
     open_ended_contract: boolStr(openEnded),
     program_manager_email:
       programManagerEmail
+      || (Array.isArray(client?.program_managers) && client.program_managers.length
+        ? client.program_managers.map((pm) => pm.email).filter(Boolean).join(';')
+        : null)
       || client?.program_manager?.email
       || client?.program_manager_email
       || '',
     program_manager_name:
-      client?.program_manager?.name
+      (Array.isArray(client?.program_managers) && client.program_managers.length
+        ? client.program_managers.map((pm) => pm.name).filter(Boolean).join('; ')
+        : null)
+      || client?.program_manager?.name
       || client?.program_manager_name
       || '',
     insurance_applicable: boolStr(client?.insurance_applicable),

@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import ProgramManagersMultiSelect from '../components/ProgramManagersMultiSelect';
 
 export default function PayrollClientAssignPmPage() {
   const { id } = useParams();
   const [client, setClient] = useState(null);
   const [pms, setPms] = useState([]);
   const [history, setHistory] = useState([]);
-  const [programManagerId, setProgramManagerId] = useState('');
+  const [programManagerIds, setProgramManagerIds] = useState([]);
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -29,7 +30,10 @@ export default function PayrollClientAssignPmPage() {
       }
       setClient(found);
       setPms(pmList);
-      setProgramManagerId(found.program_manager_id);
+      const ids = Array.isArray(found.program_manager_ids) && found.program_manager_ids.length
+        ? found.program_manager_ids
+        : (found.program_manager_id ? [found.program_manager_id] : []);
+      setProgramManagerIds(ids);
       try {
         const transfers = await api.listClientPmTransfers(id);
         setHistory(transfers);
@@ -49,18 +53,23 @@ export default function PayrollClientAssignPmPage() {
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    if (!client || !programManagerId) return;
+    if (!client || !programManagerIds.length) return;
 
     setSubmitting(true);
     setError(null);
     setSaved(false);
     try {
       const updated = await api.assignClientProgramManager(id, {
-        program_manager_id: programManagerId,
+        program_manager_ids: programManagerIds,
+        program_manager_id: programManagerIds[0],
         reason: reason.trim() || undefined
       });
       setClient(updated);
-      setProgramManagerId(updated.program_manager_id);
+      setProgramManagerIds(
+        Array.isArray(updated.program_manager_ids) && updated.program_manager_ids.length
+          ? updated.program_manager_ids
+          : (updated.program_manager_id ? [updated.program_manager_id] : [])
+      );
       setReason('');
       setSaved(true);
       const transfers = await api.listClientPmTransfers(id);
@@ -72,8 +81,10 @@ export default function PayrollClientAssignPmPage() {
     }
   };
 
-  const currentPmName = client?.program_manager_name
-    || pms.find((p) => p.id === client?.program_manager_id)?.name
+  const currentPmNames = client?.program_manager_name
+    || (Array.isArray(client?.program_managers)
+      ? client.program_managers.map((pm) => pm.name).filter(Boolean).join(', ')
+      : null)
     || '—';
 
   if (loading) {
@@ -93,7 +104,7 @@ export default function PayrollClientAssignPmPage() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">Re-Assign Program Manager</h1>
+        <h1 className="text-2xl font-semibold text-slate-900">Assign Program Managers</h1>
         <p className="mt-1 text-sm text-slate-500">
           {client.client_name} · {client.contract_code}
         </p>
@@ -107,28 +118,26 @@ export default function PayrollClientAssignPmPage() {
 
       {saved && (
         <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-          Program Manager updated. The new PM will see this client in their dashboard; the previous PM will lose access.
+          Program Managers updated. All selected PMs can access this client; removed PMs lose access.
         </div>
       )}
 
       <form onSubmit={onSubmit} className="rounded-lg border border-slate-200 bg-white p-6 space-y-5">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Current Program Manager</label>
-          <p className="text-sm text-slate-900">{currentPmName}</p>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Current Program Managers</label>
+          <p className="text-sm text-slate-900">{currentPmNames}</p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Assign to</label>
-          <select
-            value={programManagerId}
-            onChange={(e) => setProgramManagerId(e.target.value)}
-            className="input"
-          >
-            <option value="">Select a program manager</option>
-            {pms.map((pm) => (
-              <option key={pm.id} value={pm.id}>{pm.name}</option>
-            ))}
-          </select>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Assign Program Managers</label>
+          <ProgramManagersMultiSelect
+            options={pms}
+            value={programManagerIds}
+            onChange={setProgramManagerIds}
+          />
+          <p className="mt-1.5 text-xs text-slate-500">
+            Select one or more program managers for this client.
+          </p>
         </div>
 
         <div>
@@ -138,17 +147,17 @@ export default function PayrollClientAssignPmPage() {
             onChange={(e) => setReason(e.target.value)}
             rows={3}
             className="input"
-            placeholder="e.g. PM workload rebalancing"
+            placeholder="e.g. Share client across PM team"
           />
         </div>
 
         <div className="flex justify-end">
           <button
             type="submit"
-            disabled={submitting || !programManagerId}
+            disabled={submitting || !programManagerIds.length}
             className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-60"
           >
-            {submitting ? 'Saving...' : 'Re-Assign Program Manager'}
+            {submitting ? 'Saving...' : 'Save Program Managers'}
           </button>
         </div>
       </form>

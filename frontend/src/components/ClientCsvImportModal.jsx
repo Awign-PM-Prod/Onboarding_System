@@ -159,7 +159,7 @@ export default function ClientCsvImportModal({ onClose, onDone }) {
                     <th className="px-3 py-2 text-left font-medium">Contract</th>
                     <th className="px-3 py-2 text-left font-medium">Entity</th>
                     <th className="px-3 py-2 text-left font-medium">State</th>
-                    <th className="px-3 py-2 text-left font-medium">PM Email</th>
+                    <th className="px-3 py-2 text-left font-medium">PM Email(s)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">

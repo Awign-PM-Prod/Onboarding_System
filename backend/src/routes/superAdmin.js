@@ -12,11 +12,19 @@ import {
 } from '../utils/wageConfig.js';
 import { runRemainingTaskDigest } from '../jobs/remainingTaskDigest.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
-import { buildLoginLink, buildPasswordResetEmail } from '../utils/staffInvite.js';
+import {
+  buildLoginLink,
+  buildPasswordResetEmail,
+  filterUsersWithCompletedSetup
+} from '../utils/staffInvite.js';
 import { createStaffInviteUser } from '../utils/createStaffInviteUser.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
 import { isNonComplianceClient } from '../utils/clientType.js';
 import { unlockExpiresAtFromNow } from '../utils/unlockTtl.js';
+import {
+  attachProgramManagersToClient,
+  fetchProgramManagersByClientIds
+} from '../utils/clientProgramManagers.js';
 import {
   listHolidayCalendars,
   replaceHolidayCalendars,
@@ -292,20 +300,29 @@ router.get('/clients', async (req, res, next) => {
       countByClient.set(e.client_id, (countByClient.get(e.client_id) ?? 0) + 1);
     }
 
+    const managersByClient = await fetchProgramManagersByClientIds(ids);
+
     res.json(
-      clientRows.map((c) => ({
-        id: c.id,
-        client_name: c.client_name,
-        contract_code: c.contract_code,
-        state: c.state,
-        entity: c.entity,
-        created_at: c.created_at,
-        program_manager_name: c.program_manager?.name ?? null,
-        program_manager_email: c.program_manager?.email ?? null,
-        payroll_lead_name: c.creator?.name ?? null,
-        payroll_lead_email: c.creator?.email ?? null,
-        employee_count: countByClient.get(c.id) ?? 0
-      }))
+      clientRows.map((c) => {
+        const withPms = attachProgramManagersToClient(c, managersByClient.get(c.id) ?? []);
+        return {
+          id: c.id,
+          client_name: c.client_name,
+          contract_code: c.contract_code,
+          state: c.state,
+          entity: c.entity,
+          created_at: c.created_at,
+          program_manager_name: withPms.program_manager_name,
+          program_manager_email: withPms.program_managers?.map((pm) => pm.email).filter(Boolean).join('; ')
+            || c.program_manager?.email
+            || null,
+          program_managers: withPms.program_managers,
+          program_manager_ids: withPms.program_manager_ids,
+          payroll_lead_name: c.creator?.name ?? null,
+          payroll_lead_email: c.creator?.email ?? null,
+          employee_count: countByClient.get(c.id) ?? 0
+        };
+      })
     );
   } catch (err) {
     next(err);
@@ -325,6 +342,9 @@ router.get('/clients/:id/employees', async (req, res, next) => {
       .maybeSingle();
     if (cErr) throw cErr;
     if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    const managersByClient = await fetchProgramManagersByClientIds([clientId]);
+    const withPms = attachProgramManagersToClient(client, managersByClient.get(clientId) ?? []);
 
     const { data: employees, error: eErr } = await supabaseAdmin
       .from('employees')
@@ -351,12 +371,14 @@ router.get('/clients/:id/employees', async (req, res, next) => {
 
     res.json({
       client: {
-        id: client.id,
-        client_name: client.client_name,
-        contract_code: client.contract_code,
-        state: client.state,
-        entity: client.entity,
-        program_manager_name: client.program_manager?.name ?? null,
+        id: withPms.id,
+        client_name: withPms.client_name,
+        contract_code: withPms.contract_code,
+        state: withPms.state,
+        entity: withPms.entity,
+        program_manager_name: withPms.program_manager_name,
+        program_managers: withPms.program_managers,
+        program_manager_ids: withPms.program_manager_ids,
         payroll_lead_name: client.creator?.name ?? null
       },
       employees: employeeRows.map((e) => {
@@ -775,8 +797,10 @@ async function listPmAndPlUsers() {
     .in('role', ['PROGRAM_MANAGER', 'PAYROLL_LEAD']);
   if (error) throw error;
 
+  const ready = await filterUsersWithCompletedSetup(data ?? []);
+
   const roleOrder = { PROGRAM_MANAGER: 0, PAYROLL_LEAD: 1 };
-  return (data ?? []).slice().sort((a, b) => {
+  return ready.slice().sort((a, b) => {
     const ro = (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9);
     if (ro !== 0) return ro;
     return String(a.name || '').localeCompare(String(b.name || ''));

@@ -3,6 +3,12 @@ import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { classifyDojReminderBucket, todayDateInIST } from '../utils/workingDays.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
+import {
+  attachProgramManagersToClient,
+  fetchProgramManagersByClientIds,
+  isProgramManagerForClient,
+  listClientIdsForProgramManager
+} from '../utils/clientProgramManagers.js';
 
 const router = Router();
 
@@ -12,9 +18,11 @@ function isSuperAdminCaller(req) {
   return req.user?.role === 'SUPER_ADMIN';
 }
 
-function scopedClientsQuery(query, req) {
+async function scopedClientsQuery(query, req) {
   if (isSuperAdminCaller(req)) return query;
-  return query.eq('program_manager_id', req.user.id);
+  const clientIds = await listClientIdsForProgramManager(req.user.id);
+  if (!clientIds.length) return query.eq('id', '00000000-0000-0000-0000-000000000000');
+  return query.in('id', clientIds);
 }
 
 async function assertScopedClient(req, clientId, select = 'id, program_manager_id') {
@@ -25,7 +33,7 @@ async function assertScopedClient(req, clientId, select = 'id, program_manager_i
     .maybeSingle();
   if (error) throw error;
   if (!client) return { ok: false, status: 404, error: 'Client not found' };
-  if (!isSuperAdminCaller(req) && client.program_manager_id !== req.user.id) {
+  if (!isSuperAdminCaller(req) && !(await isProgramManagerForClient(req.user.id, clientId))) {
     return { ok: false, status: 403, error: 'Not authorized for this client' };
   }
   return { ok: true, client };
@@ -79,7 +87,7 @@ router.get('/', async (req, res, next) => {
       .from('clients')
       .select('*')
       .order('created_at', { ascending: false });
-    clientsQuery = scopedClientsQuery(clientsQuery, req);
+    clientsQuery = await scopedClientsQuery(clientsQuery, req);
     const { data: clients, error } = await clientsQuery;
     if (error) throw error;
     if (clients.length === 0) return res.json([]);
@@ -197,10 +205,11 @@ router.get('/', async (req, res, next) => {
       }
     }
 
+    const managersByClient = await fetchProgramManagersByClientIds(ids);
     res.json(clients.map(c => {
       const action_counts = actionByClient.get(c.id) ?? emptyActionCounts();
       return {
-        ...c,
+        ...attachProgramManagersToClient(c, managersByClient.get(c.id) ?? []),
         designations: byClient.get(c.id) ?? [],
         action_counts,
         open_change_count: openChangeCount(action_counts),
@@ -318,7 +327,7 @@ router.get('/dashboard-stats', async (req, res, next) => {
       .from('clients')
       .select('id, client_name, contract_code')
       .order('client_name', { ascending: true });
-    clientsQuery = scopedClientsQuery(clientsQuery, req);
+    clientsQuery = await scopedClientsQuery(clientsQuery, req);
     if (filterClientId) {
       clientsQuery = clientsQuery.eq('id', filterClientId);
     }
@@ -487,7 +496,7 @@ async function buildJoiningStatusReminderPayload(req, { clientId = null } = {}) 
     .from('clients')
     .select('id, client_name')
     .order('client_name', { ascending: true });
-  clientsQuery = scopedClientsQuery(clientsQuery, req);
+  clientsQuery = await scopedClientsQuery(clientsQuery, req);
   if (clientId) clientsQuery = clientsQuery.eq('id', clientId);
 
   const { data: clients, error: cErr } = await clientsQuery;

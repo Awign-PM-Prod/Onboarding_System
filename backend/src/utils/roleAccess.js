@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '../supabase.js';
+import { listClientIdsForProgramManager } from './clientProgramManagers.js';
 
 export async function loadUserRole(userId) {
   const { data, error } = await supabaseAdmin
@@ -31,10 +32,6 @@ export async function listAccessibleClientIds(userId) {
     return { user, clientIds: (data ?? []).map((c) => c.id) };
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('clients')
-    .select('id')
-    .eq('program_manager_id', userId);
-  if (error) throw error;
-  return { user, clientIds: (data ?? []).map((c) => c.id) };
+  const clientIds = await listClientIdsForProgramManager(userId);
+  return { user, clientIds };
 }

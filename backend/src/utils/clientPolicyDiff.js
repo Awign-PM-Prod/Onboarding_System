@@ -106,11 +106,21 @@ export function diffClientCoreFields(before, after) {
     push('Contract end', fmtDate(before?.contract_end_date), fmtDate(after?.contract_end_date));
   }
 
-  const bPm = before?.program_manager_id ?? null;
-  const aPm = after?.program_manager_id ?? null;
-  if (bPm !== aPm) {
-    const bLabel = before?.program_manager_name || before?.program_manager?.name || bPm || 'none';
-    const aLabel = after?.program_manager_name || after?.program_manager?.name || aPm || 'none';
+  const bPmIds = Array.isArray(before?.program_manager_ids) && before.program_manager_ids.length
+    ? [...before.program_manager_ids].map(String).sort().join(',')
+    : String(before?.program_manager_id ?? '');
+  const aPmIds = Array.isArray(after?.program_manager_ids) && after.program_manager_ids.length
+    ? [...after.program_manager_ids].map(String).sort().join(',')
+    : String(after?.program_manager_id ?? '');
+  if (bPmIds !== aPmIds) {
+    const bLabel = before?.program_manager_name
+      || before?.program_manager?.name
+      || before?.program_manager_id
+      || 'none';
+    const aLabel = after?.program_manager_name
+      || after?.program_manager?.name
+      || after?.program_manager_id
+      || 'none';
     changes.push(`Program manager: ${bLabel} → ${aLabel}`);
   }
 

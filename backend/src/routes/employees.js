@@ -9,6 +9,7 @@ import { normalizeIndianState } from '../utils/indianStates.js';
 import { logOrgActivityFromReq } from '../utils/orgActivityLog.js';
 import { applyCushion, normalizeRegionName, normalizeWageZone } from '../utils/wageConfig.js';
 import { listAccessibleClientIds } from '../utils/roleAccess.js';
+import { isProgramManagerForClient } from '../utils/clientProgramManagers.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
 import {
   clientTypeOrDefault,
@@ -299,7 +300,7 @@ async function fetchOwnedClient(req, clientId) {
   if (error) throw error;
   if (!data) return null;
   if (userRow?.role === 'SUPER_ADMIN' || userRow?.role === 'PAYROLL_LEAD') return data;
-  const ownedByPm = data.program_manager_id === req.user.id;
+  const ownedByPm = await isProgramManagerForClient(req.user.id, clientId);
   return ownedByPm ? data : null;
 }
 
@@ -339,7 +340,7 @@ async function fetchProgramManagerOwnedClient(req, clientId) {
   if (error) throw error;
   if (!data) return null;
   if (userRow.role === 'SUPER_ADMIN') return data;
-  if (data.program_manager_id !== req.user.id) return null;
+  if (!(await isProgramManagerForClient(req.user.id, clientId))) return null;
   return data;
 }
 

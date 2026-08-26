@@ -3,6 +3,10 @@ import { supabaseAdmin } from '../supabase.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { fetchAllRows, fetchAllRowsByIds } from '../utils/supabasePaginate.js';
 import { isNonComplianceClient } from '../utils/clientType.js';
+import {
+  attachProgramManagersToClient,
+  fetchProgramManagersByClientIds
+} from '../utils/clientProgramManagers.js';
 
 const router = Router();
 
@@ -47,10 +51,11 @@ router.get('/clients', async (req, res, next) => {
       });
     }
 
+    const managersByClient = await fetchProgramManagersByClientIds(ids);
+
     res.json(
       clientRows.map((c) => ({
-        ...c,
-        program_manager_name: c.program_manager?.name ?? null,
+        ...attachProgramManagersToClient(c, managersByClient.get(c.id) ?? []),
         payroll_lead_name: c.creator?.name ?? null,
         designations: byClient.get(c.id) ?? []
       }))

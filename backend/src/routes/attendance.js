@@ -38,6 +38,10 @@ import {
   exportFilename
 } from '../utils/attendanceExport.js';
 import { canAccessClientAsLead, loadUserRole } from '../utils/roleAccess.js';
+import {
+  isProgramManagerForClient,
+  listProgramManagerIdsForClient
+} from '../utils/clientProgramManagers.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
 
 const router = Router({ mergeParams: true });
@@ -61,7 +65,8 @@ async function resolveClientAccess(req, clientId) {
   if (error) throw error;
   if (!client) return { ok: false, status: 404, error: 'Client not found' };
 
-  const isPm = user.role === 'PROGRAM_MANAGER' && client.program_manager_id === user.id;
+  const isPm = user.role === 'PROGRAM_MANAGER'
+    && (await isProgramManagerForClient(user.id, clientId));
   const isPl = canAccessClientAsLead(user, client);
   if (!isPm && !isPl) {
     return { ok: false, status: 403, error: 'Not authorized for this client' };
@@ -478,22 +483,20 @@ async function clearEditGrants(sheetId) {
 }
 
 async function loadEligiblePms(client) {
-  if (!client?.program_manager_id) return [];
-  const { data: pm, error } = await supabaseAdmin
+  if (!client?.id) return [];
+  const pmIds = await listProgramManagerIdsForClient(client.id);
+  if (!pmIds.length) return [];
+  const { data: pms, error } = await supabaseAdmin
     .from('users')
     .select('id, name, email, role')
-    .eq('id', client.program_manager_id)
-    .maybeSingle();
+    .in('id', pmIds);
   if (error) throw error;
-  if (!pm) return [];
-  return [
-    {
-      id: pm.id,
-      name: pm.name || '',
-      email: pm.email || '',
-      role_label: 'Program Manager'
-    }
-  ];
+  return (pms ?? []).map((pm) => ({
+    id: pm.id,
+    name: pm.name || '',
+    email: pm.email || '',
+    role_label: 'Program Manager'
+  }));
 }
 
 function sheetEditScope(sheet) {

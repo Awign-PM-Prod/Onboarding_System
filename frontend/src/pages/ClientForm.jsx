@@ -3,6 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWorkspacePaths } from '../context/WorkspaceBasePath';
 import DesignationsInput from '../components/DesignationsInput';
+import ProgramManagersMultiSelect from '../components/ProgramManagersMultiSelect';
 import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyConfigFields';
 import ClientConfigActivityLog from '../components/clientPolicy/ClientConfigActivityLog';
 import {
@@ -43,7 +44,7 @@ const emptyForm = {
   contract_start_date: '',
   contract_end_date: '',
   open_ended_contract: false,
-  program_manager_id: '',
+  program_manager_ids: [],
   client_type: CLIENT_TYPE_COMPLIANCE,
   insurance_applicable: false,
   insurance_name: '',
@@ -135,7 +136,9 @@ export default function ClientForm() {
           contract_start_date: found.contract_start_date,
           contract_end_date: found.contract_end_date ?? '',
           open_ended_contract: Boolean(found.open_ended_contract),
-          program_manager_id: found.program_manager_id,
+          program_manager_ids: Array.isArray(found.program_manager_ids) && found.program_manager_ids.length
+            ? found.program_manager_ids
+            : (found.program_manager_id ? [found.program_manager_id] : []),
           client_type: clientTypeOrDefault(found.client_type),
           insurance_applicable: found.insurance_applicable,
           insurance_name: found.insurance_name ?? '',
@@ -198,7 +201,7 @@ export default function ClientForm() {
         errs.contract_end_date = 'End date must be on or after start date';
       }
     }
-    if (!form.program_manager_id) errs.program_manager_id = 'Required';
+    if (!form.program_manager_ids?.length) errs.program_manager_ids = 'Select at least one program manager';
     if (form.client_type !== CLIENT_TYPE_COMPLIANCE && form.client_type !== CLIENT_TYPE_NON_COMPLIANCE) {
       errs.client_type = 'Required';
     }
@@ -272,7 +275,7 @@ export default function ClientForm() {
         return;
       }
       const mapped = csvRowToClientForm(rows[0], pms);
-      if (!mapped.program_manager_id && mapped.program_manager_email) {
+      if (!mapped.program_manager_ids?.length && mapped.program_manager_email) {
         setError(
           `Program manager not found for email: ${mapped.program_manager_email}. Select one manually.`
         );
@@ -309,7 +312,7 @@ export default function ClientForm() {
         downloadBlob(blob, `client-${safeCode}-export.csv`);
         return;
       }
-      const pm = pms.find((p) => p.id === form.program_manager_id);
+      const selectedPms = pms.filter((p) => form.program_manager_ids.includes(p.id));
       const csv = buildClientExportCsv(
         {
           ...form,
@@ -321,7 +324,7 @@ export default function ClientForm() {
           cushion_type: form.cushion_enabled ? form.cushion_type : null,
           cushion_value: form.cushion_enabled ? form.cushion_value : null
         },
-        pm?.email || ''
+        selectedPms.map((pm) => pm.email).filter(Boolean).join(';')
       );
       const safeCode = String(form.contract_code || 'client')
         .replace(/[^a-zA-Z0-9_-]+/g, '-')
@@ -347,6 +350,8 @@ export default function ClientForm() {
     try {
       const payload = {
         ...form,
+        program_manager_ids: form.program_manager_ids,
+        program_manager_id: form.program_manager_ids[0],
         contract_end_date: form.open_ended_contract ? null : form.contract_end_date,
         attendance_policy: normalizeAttendancePolicyForForm(form.attendance_policy),
         insurance_name: form.insurance_applicable ? form.insurance_name : null,
@@ -608,17 +613,15 @@ export default function ClientForm() {
             </div>
           </div>
 
-          <Field label="Program Manager" error={fieldErrors.program_manager_id}>
-            <select
-              value={form.program_manager_id}
-              onChange={e => set({ program_manager_id: e.target.value })}
-              className="input"
-            >
-              <option value="">Select a program manager</option>
-              {pms.map(pm => (
-                <option key={pm.id} value={pm.id}>{pm.name}</option>
-              ))}
-            </select>
+          <Field label="Program Managers" error={fieldErrors.program_manager_ids}>
+            <ProgramManagersMultiSelect
+              options={pms}
+              value={form.program_manager_ids}
+              onChange={(ids) => set({ program_manager_ids: ids })}
+            />
+            <p className="mt-1.5 text-xs text-slate-500">
+              Select one or more program managers. All selected PMs can access this client.
+            </p>
           </Field>
 
           <Field label="Designations" error={fieldErrors.designations}>

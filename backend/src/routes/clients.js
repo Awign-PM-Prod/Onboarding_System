@@ -31,6 +31,14 @@ import {
 import { canAccessClientAsLead, isSuperAdminRole, loadUserRole } from '../utils/roleAccess.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
 import { CLIENT_TYPES, normalizeClientType } from '../utils/clientType.js';
+import {
+  assertValidProgramManagers,
+  attachProgramManagersToClient,
+  fetchProgramManagersByClientIds,
+  parseProgramManagerIds,
+  syncClientProgramManagers
+} from '../utils/clientProgramManagers.js';
+import { getPendingInviteUserIdSet } from '../utils/staffInvite.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -182,7 +190,6 @@ function validateClientPayload(body) {
     'client_name',
     'contract_code',
     'contract_start_date',
-    'program_manager_id',
     'entity',
     'state'
   ];
@@ -190,6 +197,10 @@ function validateClientPayload(body) {
     if (body[key] === undefined || body[key] === null || String(body[key]).trim() === '') {
       errors[key] = 'required';
     }
+  }
+  const pmIds = parseProgramManagerIds(body);
+  if (!pmIds.length) {
+    errors.program_manager_ids = 'required';
   }
   const openEnded = parseOpenEnded(body);
   if (openEnded === null) {
@@ -279,8 +290,9 @@ function validateClientPayload(body) {
   return errors;
 }
 
-function buildClientCorePayload(body, { includeCreatedBy = false, createdBy } = {}) {
+function buildClientCorePayload(body, { includeCreatedBy = false, createdBy, programManagerIds } = {}) {
   const openEnded = parseOpenEnded(body) === true;
+  const pmIds = programManagerIds ?? parseProgramManagerIds(body);
   const payload = {
     client_name: String(body.client_name).trim(),
     contract_code: String(body.contract_code).trim(),
@@ -289,7 +301,7 @@ function buildClientCorePayload(body, { includeCreatedBy = false, createdBy } = 
     contract_start_date: body.contract_start_date,
     contract_end_date: openEnded ? null : body.contract_end_date,
     open_ended_contract: openEnded,
-    program_manager_id: body.program_manager_id,
+    program_manager_id: pmIds[0],
     client_type: normalizeClientType(body.client_type),
     insurance_applicable: body.insurance_applicable,
     insurance_name: body.insurance_applicable ? String(body.insurance_name).trim() : null,
@@ -310,9 +322,11 @@ function buildClientCorePayload(body, { includeCreatedBy = false, createdBy } = 
 }
 
 async function createClientRecord(body, createdBy) {
+  const pmIds = parseProgramManagerIds(body);
   const insertPayload = buildClientCorePayload(body, {
     includeCreatedBy: true,
-    createdBy
+    createdBy,
+    programManagerIds: pmIds
   });
 
   const { data: created, error: insertErr } = await supabaseAdmin
@@ -321,6 +335,13 @@ async function createClientRecord(body, createdBy) {
     .select()
     .single();
   if (insertErr) throw insertErr;
+
+  try {
+    await syncClientProgramManagers(created.id, pmIds);
+  } catch (pmSyncErr) {
+    await supabaseAdmin.from('clients').delete().eq('id', created.id);
+    throw pmSyncErr;
+  }
 
   const designations = normalizedDesignationRows(body.designations);
   if (designations.length) {
@@ -371,6 +392,9 @@ async function fetchClientWithRelations(clientId) {
     .single();
   if (clientErr) throw clientErr;
 
+  const managersByClient = await fetchProgramManagersByClientIds([clientId]);
+  const managers = managersByClient.get(clientId) ?? [];
+
   const { data: designations, error: desigErr } = await supabaseAdmin
     .from('designations')
     .select('name, skill_level')
@@ -420,8 +444,7 @@ async function fetchClientWithRelations(clientId) {
   const policyBundle = await fetchClientPolicyBundle(clientId);
 
   return {
-    ...client,
-    program_manager_name: client.program_manager?.name ?? null,
+    ...attachProgramManagersToClient(client, managers),
     designations: (designations ?? []).map((d) => ({
       name: d.name,
       skill_level: d.skill_level || 'UNSKILLED'
@@ -469,10 +492,10 @@ router.get('/', async (req, res, next) => {
       ids.map((id) => fetchClientPolicyBundle(id))
     );
     const policyByClient = new Map(ids.map((id, i) => [id, policyBundles[i]]));
+    const managersByClient = await fetchProgramManagersByClientIds(ids);
 
     res.json(clients.map(c => ({
-      ...c,
-      program_manager_name: c.program_manager?.name ?? null,
+      ...attachProgramManagersToClient(c, managersByClient.get(c.id) ?? []),
       designations: byClient.get(c.id) ?? [],
       ...policyByClient.get(c.id)
     })));
@@ -611,17 +634,16 @@ router.post('/', async (req, res, next) => {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }
 
-    const { data: pm, error: pmErr } = await supabaseAdmin
-      .from('users')
-      .select('id, role')
-      .eq('id', req.body.program_manager_id)
-      .maybeSingle();
-    if (pmErr) throw pmErr;
-    if (!pm || pm.role !== 'PROGRAM_MANAGER') {
-      return res.status(400).json({ error: 'Invalid program_manager_id' });
+    const pmIds = parseProgramManagerIds(req.body || {});
+    const pmCheck = await assertValidProgramManagers(pmIds);
+    if (!pmCheck.ok) {
+      return res.status(400).json({ error: pmCheck.error });
     }
 
-    const full = await createClientRecord(req.body, req.user.id);
+    const full = await createClientRecord(
+      { ...req.body, program_manager_ids: pmIds, program_manager_id: pmIds[0] },
+      req.user.id
+    );
     await logOrgActivityFromReq(req, {
       action: 'CLIENT_CREATED',
       entityType: 'client',
@@ -662,8 +684,11 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
 
     const emails = [...new Set(
       rows
-        .map((r) => String(r.program_manager_email ?? '').trim().toLowerCase())
-        .filter(Boolean)
+        .flatMap((r) => {
+          const raw = String(r.program_manager_email ?? '').trim().toLowerCase();
+          if (!raw) return [];
+          return raw.split(/[;,]/).map((e) => e.trim()).filter(Boolean);
+        })
     )];
     const pmByEmail = new Map();
     if (emails.length) {
@@ -672,7 +697,9 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
         .select('id, email, role')
         .eq('role', 'PROGRAM_MANAGER');
       if (pmErr) throw pmErr;
+      const pending = await getPendingInviteUserIdSet((pms ?? []).map((pm) => pm.id));
       for (const pm of pms ?? []) {
+        if (pending.has(pm.id)) continue;
         const key = String(pm.email ?? '').trim().toLowerCase();
         if (key && emails.includes(key)) pmByEmail.set(key, pm);
       }
@@ -687,23 +714,37 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
       const rowNumber = i + 2; // header is row 1
       try {
         const payload = csvRowToClientPayload(rows[i]);
-        if (!payload.program_manager_email) {
+        const pmEmails = payload.program_manager_emails?.length
+          ? payload.program_manager_emails
+          : (payload.program_manager_email ? [payload.program_manager_email] : []);
+        if (!pmEmails.length) {
           errors.push({ row: rowNumber, error: 'program_manager_email is required' });
           skipped += 1;
           continue;
         }
-        const pm = pmByEmail.get(payload.program_manager_email);
-        if (!pm) {
+        const resolvedPms = [];
+        let unknownEmail = null;
+        for (const email of pmEmails) {
+          const pm = pmByEmail.get(email);
+          if (!pm) {
+            unknownEmail = email;
+            break;
+          }
+          resolvedPms.push(pm);
+        }
+        if (unknownEmail) {
           errors.push({
             row: rowNumber,
-            error: `Unknown program manager email: ${payload.program_manager_email}`
+            error: `Unknown program manager email: ${unknownEmail}`
           });
           skipped += 1;
           continue;
         }
+        const pmIds = [...new Set(resolvedPms.map((pm) => pm.id))];
         const body = {
           ...payload,
-          program_manager_id: pm.id
+          program_manager_ids: pmIds,
+          program_manager_id: pmIds[0]
         };
         const validationErrors = validateClientPayload(body);
         if (Object.keys(validationErrors).length) {
@@ -752,22 +793,20 @@ router.put('/:id', async (req, res, next) => {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }
 
-    const { data: pm, error: pmErr } = await supabaseAdmin
-      .from('users')
-      .select('id, role, name, email')
-      .eq('id', req.body.program_manager_id)
-      .maybeSingle();
-    if (pmErr) throw pmErr;
-    if (!pm || pm.role !== 'PROGRAM_MANAGER') {
-      return res.status(400).json({ error: 'Invalid program_manager_id' });
+    const pmIds = parseProgramManagerIds(req.body || {});
+    const pmCheck = await assertValidProgramManagers(pmIds);
+    if (!pmCheck.ok) {
+      return res.status(400).json({ error: pmCheck.error });
     }
 
     const beforeClient = await fetchClientWithRelations(id);
-    const updatePayload = buildClientCorePayload(req.body);
+    const updatePayload = buildClientCorePayload(req.body, { programManagerIds: pmIds });
     const designations = normalizedDesignationRows(req.body.designations);
+    const pmNames = pmCheck.users.map((u) => u.name).filter(Boolean).join(', ');
     const coreChanges = diffClientCoreFields(beforeClient, {
       ...updatePayload,
-      program_manager_name: pm.name,
+      program_manager_name: pmNames,
+      program_manager_ids: pmIds,
       designations
     });
 
@@ -782,6 +821,7 @@ router.put('/:id', async (req, res, next) => {
       throw updateErr;
     }
 
+    await syncClientProgramManagers(id, pmIds);
     await syncClientDesignations(id, designations);
 
     const { savedPolicy, policyChanges, effectiveFromMonth } = await savePolicyWithAudit(
@@ -1056,11 +1096,13 @@ router.get('/:id/pm-transfers', async (req, res, next) => {
 router.patch('/:id/program-manager', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const programManagerId = req.body?.program_manager_id;
     const reason = String(req.body?.reason ?? '').trim() || null;
+    const pmIds = parseProgramManagerIds(req.body || {});
 
-    if (!programManagerId) {
-      return res.status(400).json({ error: 'program_manager_id is required' });
+    if (!pmIds.length) {
+      return res.status(400).json({
+        error: 'program_manager_ids (or program_manager_id) is required'
+      });
     }
 
     const access = await assertLeadClientAccess(req, id, {
@@ -1069,35 +1111,48 @@ router.patch('/:id/program-manager', async (req, res, next) => {
     if (!access.ok) return res.status(access.status).json({ error: access.error });
     const existing = access.client;
 
-    const { data: pm, error: pmErr } = await supabaseAdmin
-      .from('users')
-      .select('id, role, name')
-      .eq('id', programManagerId)
-      .maybeSingle();
-    if (pmErr) throw pmErr;
-    if (!pm || pm.role !== 'PROGRAM_MANAGER') {
-      return res.status(400).json({ error: 'Invalid program_manager_id' });
+    const pmCheck = await assertValidProgramManagers(pmIds);
+    if (!pmCheck.ok) {
+      return res.status(400).json({ error: pmCheck.error });
     }
 
-    if (existing.program_manager_id === programManagerId) {
-      const full = await fetchClientWithRelations(id);
-      return res.json(full);
+    const before = await fetchClientWithRelations(id);
+    const beforeIds = before.program_manager_ids?.length
+      ? before.program_manager_ids
+      : (existing.program_manager_id ? [existing.program_manager_id] : []);
+
+    const syncResult = await syncClientProgramManagers(id, pmIds);
+    const sameSet =
+      beforeIds.length === pmIds.length
+      && beforeIds.every((pmId) => pmIds.includes(pmId));
+    if (sameSet) {
+      return res.json(await fetchClientWithRelations(id));
     }
 
-    const { error: updateErr } = await supabaseAdmin
-      .from('clients')
-      .update({ program_manager_id: programManagerId })
-      .eq('id', id);
-    if (updateErr) throw updateErr;
-
-    const { error: logErr } = await supabaseAdmin.from('client_pm_transfers').insert({
-      client_id: id,
-      from_program_manager_id: existing.program_manager_id,
-      to_program_manager_id: programManagerId,
-      transferred_by: req.user.id,
-      reason
-    });
-    if (logErr) throw logErr;
+    // Log transfer rows for adds (from primary → new) and keep audit trail.
+    const transferRows = [];
+    for (const addedId of syncResult.added) {
+      transferRows.push({
+        client_id: id,
+        from_program_manager_id: existing.program_manager_id,
+        to_program_manager_id: addedId,
+        transferred_by: req.user.id,
+        reason
+      });
+    }
+    if (!syncResult.added.length && syncResult.removed.length) {
+      transferRows.push({
+        client_id: id,
+        from_program_manager_id: existing.program_manager_id,
+        to_program_manager_id: pmIds[0],
+        transferred_by: req.user.id,
+        reason
+      });
+    }
+    if (transferRows.length) {
+      const { error: logErr } = await supabaseAdmin.from('client_pm_transfers').insert(transferRows);
+      if (logErr) throw logErr;
+    }
 
     const full = await fetchClientWithRelations(id);
     await logOrgActivityFromReq(req, {
@@ -1105,10 +1160,12 @@ router.patch('/:id/program-manager', async (req, res, next) => {
       entityType: 'client',
       entityId: id,
       clientId: id,
-      summary: `Assigned PM ${pm.name || programManagerId} on ${full.client_name || id}`,
+      summary: `Assigned PM(s) ${full.program_manager_name || pmIds.join(', ')} on ${full.client_name || id}`,
       metadata: {
-        from_program_manager_id: existing.program_manager_id,
-        to_program_manager_id: programManagerId,
+        from_program_manager_ids: beforeIds,
+        to_program_manager_ids: pmIds,
+        added: syncResult.added,
+        removed: syncResult.removed,
         reason
       }
     });

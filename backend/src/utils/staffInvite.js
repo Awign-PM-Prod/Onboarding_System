@@ -1,7 +1,39 @@
 import crypto from 'crypto';
+import { supabaseAdmin } from '../supabase.js';
 
 const FRONTEND_URL =
   String(process.env.FRONTEND_URL || 'http://localhost:8088').trim() || 'http://localhost:8088';
+
+/**
+ * User IDs with an unconsumed staff invite (name/password not set yet).
+ * Users with no invite row are treated as setup-complete (legacy/seed accounts).
+ * @param {string[] | null | undefined} userIds - when provided, only check these ids
+ * @returns {Promise<Set<string>>}
+ */
+export async function getPendingInviteUserIdSet(userIds) {
+  if (Array.isArray(userIds) && userIds.length === 0) return new Set();
+
+  let query = supabaseAdmin
+    .from('staff_account_invites')
+    .select('user_id')
+    .is('consumed_at', null);
+
+  if (Array.isArray(userIds)) {
+    query = query.in('user_id', userIds);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return new Set((data ?? []).map((row) => row.user_id).filter(Boolean));
+}
+
+/** Drop users who have not finished invite login setup. */
+export async function filterUsersWithCompletedSetup(users) {
+  const list = Array.isArray(users) ? users : [];
+  if (!list.length) return [];
+  const pending = await getPendingInviteUserIdSet(list.map((u) => u.id).filter(Boolean));
+  return list.filter((u) => u?.id && !pending.has(u.id));
+}
 
 export function hashToken(rawToken) {
   return crypto.createHash('sha256').update(String(rawToken), 'utf8').digest('hex');
