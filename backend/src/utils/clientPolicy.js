@@ -11,14 +11,17 @@ export {
   validateAttendancePolicyPayload,
   validateLeaveAllowancesPayload,
   validateHolidaysPayload,
-  normalizeHolidaySource
+  normalizeHolidaySource,
+  normalizeLeaveSource,
+  validateLeaveConfigRulesPayload
 } from './clientPolicyCore.js';
 
 import { supabaseAdmin } from '../supabase.js';
 import {
   DEFAULT_ATTENDANCE_POLICY,
   normalizeAttendancePolicy,
-  normalizeHolidaySource
+  normalizeHolidaySource,
+  normalizeLeaveSource
 } from './clientPolicyCore.js';
 import {
   assignHolidayCalendarToClient,
@@ -30,6 +33,15 @@ import {
   replaceAllHolidayCalendars,
   uniqueClientCalendarName
 } from './holidayCalendar.js';
+import {
+  assignLeaveConfigToClient,
+  createLeaveConfigDef,
+  getLeaveConfigDef,
+  listLeaveConfigRules,
+  normalizeLeaveConfigId,
+  replaceAllLeaveConfigRules,
+  uniqueClientLeaveConfigName
+} from './leaveConfig.js';
 import {
   BASELINE_POLICY_MONTH,
   bundleToPolicyJson,
@@ -85,6 +97,62 @@ export function applyHolidayCalendarPayload(body) {
   return body;
 }
 
+export function applyLeaveConfigPayload(body) {
+  if (!body || typeof body !== 'object') return body;
+  const createNew = body.create_leave_config === true || body.create_leave_config === 'true';
+  const configId = normalizeLeaveConfigId(body.leave_config_id ?? body.leaveConfigId);
+  if (createNew && !configId) {
+    body.leave_config_id = null;
+    body.leave_source = 'custom';
+    body.create_leave_config = true;
+    return body;
+  }
+  body.create_leave_config = false;
+  body.leave_config_id = configId;
+  body.leave_source = configId ? 'custom' : 'default';
+  return body;
+}
+
+function mapLeaveConfigRuleRows(rows) {
+  return (rows ?? []).map((r) => ({
+    id: r.id ?? null,
+    state: r.state ?? '',
+    leave_type: r.leave_type,
+    not_applicable: r.not_applicable === true,
+    accrual_rules: Array.isArray(r.accrual_rules) ? r.accrual_rules : [],
+    fixed_days: r.fixed_days == null || r.fixed_days === '' ? null : Number(r.fixed_days),
+    accumulation_limit:
+      r.accumulation_limit == null || r.accumulation_limit === ''
+        ? null
+        : Number(r.accumulation_limit)
+  }));
+}
+
+/** Overlay live leave-config rules for Default or a named template. */
+async function applyAssignedLeaveConfig(bundle) {
+  const configId = normalizeLeaveConfigId(bundle?.leave_config_id);
+  const source = normalizeLeaveSource(bundle?.leave_source);
+  const useLive = Boolean(configId) || source === 'default';
+  if (!useLive) {
+    return { ...bundle, leave_rules: bundle?.leave_rules ?? [] };
+  }
+  const rows = await listLeaveConfigRules({ configId });
+  let name = bundle?.leave_config_name || null;
+  try {
+    const def = await getLeaveConfigDef(configId);
+    name = def?.name || name;
+  } catch {
+    // keep snapshot name
+  }
+  return {
+    ...bundle,
+    leave_rules: mapLeaveConfigRuleRows(rows),
+    leave_config_name: name || (configId ? bundle?.leave_config_name : 'Default'),
+    leave_source: configId ? 'custom' : 'default',
+    leave_config_id: configId
+  };
+}
+
 /**
  * Policy bundle effective for a given attendance month (YYYY-MM or YYYY-MM-DD).
  * Uses versioned snapshots; falls back to live tables when no version matches.
@@ -94,7 +162,7 @@ export async function fetchClientPolicyBundleForMonth(clientId, monthYm) {
   const year = monthDate ? Number(String(monthDate).slice(0, 4)) : null;
   if (!monthDate) {
     const live = await fetchClientPolicyBundle(clientId);
-    return applyAssignedCalendarHolidays(live, year);
+    return applyAssignedLeaveConfig(await applyAssignedCalendarHolidays(live, year));
   }
 
   const { data: versions, error: vErr } = await supabaseAdmin
@@ -106,10 +174,12 @@ export async function fetchClientPolicyBundleForMonth(clientId, monthYm) {
   if (vErr) throw vErr;
 
   const bundle = selectPolicyBundleForMonth(versions ?? [], monthYm, normalizeAttendancePolicy);
-  if (bundle) return applyAssignedCalendarHolidays(bundle, year);
+  if (bundle) {
+    return applyAssignedLeaveConfig(await applyAssignedCalendarHolidays(bundle, year));
+  }
 
   const live = await fetchClientPolicyBundle(clientId);
-  return applyAssignedCalendarHolidays(live, year);
+  return applyAssignedLeaveConfig(await applyAssignedCalendarHolidays(live, year));
 }
 
 export async function insertClientPolicyVersion(clientId, effectiveFromMonth, bundle, actorUserId = null) {
@@ -183,6 +253,15 @@ export async function fetchClientPolicyBundle(clientId) {
   }
   const namedId = calendarDef && !calendarDef.is_default ? calendarDef.id : null;
 
+  const leaveConfigId = normalizeLeaveConfigId(policy?.leave_config_id);
+  let leaveConfigDef = null;
+  try {
+    leaveConfigDef = await getLeaveConfigDef(leaveConfigId);
+  } catch (defErr) {
+    if (defErr?.status !== 404) throw defErr;
+  }
+  const namedLeaveId = leaveConfigDef && !leaveConfigDef.is_default ? leaveConfigDef.id : null;
+
   let holidays = [];
   if (namedId) {
     holidays = mapCalendarHolidayRows(await listHolidayCalendars({ calendarId: namedId }));
@@ -210,7 +289,7 @@ export async function fetchClientPolicyBundle(clientId) {
     }));
   }
 
-  return {
+  const bundle = {
     attendance_policy: policy
       ? normalizeAttendancePolicy(policy)
       : { ...DEFAULT_ATTENDANCE_POLICY },
@@ -226,8 +305,21 @@ export async function fetchClientPolicyBundle(clientId) {
     holidays,
     holiday_source: namedId ? 'custom' : 'default',
     holiday_calendar_id: namedId,
-    holiday_calendar_name: namedId ? calendarDef.name : (calendarDef?.name || 'Default')
+    holiday_calendar_name: namedId ? calendarDef.name : (calendarDef?.name || 'Default'),
+    leave_source: namedLeaveId ? 'custom' : 'default',
+    leave_config_id: namedLeaveId,
+    leave_config_name: namedLeaveId ? leaveConfigDef.name : (leaveConfigDef?.name || 'Default'),
+    leave_rules: []
   };
+  try {
+    return await applyAssignedLeaveConfig(bundle);
+  } catch (err) {
+    const msg = String(err?.message || '');
+    if (msg.includes('leave_config') || msg.includes('Leave configuration')) {
+      return bundle;
+    }
+    throw err;
+  }
 }
 
 export async function upsertClientPolicyBundle(clientId, body) {
@@ -252,6 +344,8 @@ export async function upsertClientPolicyBundle(clientId, body) {
     incentive_value: policy.incentive_value,
     holiday_source: normalizeHolidaySource(body.holiday_source ?? body.attendance_policy?.holiday_source),
     holiday_calendar_id: normalizeHolidayCalendarId(body.holiday_calendar_id),
+    leave_source: normalizeLeaveSource(body.leave_source ?? body.attendance_policy?.leave_source),
+    leave_config_id: normalizeLeaveConfigId(body.leave_config_id),
     updated_at: new Date().toISOString()
   };
 
@@ -270,6 +364,22 @@ export async function upsertClientPolicyBundle(clientId, body) {
     row.holiday_calendar_id = await assignHolidayCalendarToClient(clientId, row.holiday_calendar_id);
   }
   row.holiday_source = row.holiday_calendar_id ? 'custom' : 'default';
+
+  const createLeaveNew = body.create_leave_config === true && !row.leave_config_id;
+  if (createLeaveNew) {
+    const { data: clientRow, error: clientErr } = await supabaseAdmin
+      .from('clients')
+      .select('client_name')
+      .eq('id', clientId)
+      .maybeSingle();
+    if (clientErr) throw clientErr;
+    const name = await uniqueClientLeaveConfigName(clientRow?.client_name, clientId);
+    const created = await createLeaveConfigDef({ name });
+    row.leave_config_id = await assignLeaveConfigToClient(clientId, created.id);
+  } else {
+    row.leave_config_id = await assignLeaveConfigToClient(clientId, row.leave_config_id);
+  }
+  row.leave_source = row.leave_config_id ? 'custom' : 'default';
 
   const { data: saved, error: pErr } = await supabaseAdmin
     .from('client_attendance_policies')
@@ -291,6 +401,11 @@ export async function upsertClientPolicyBundle(clientId, body) {
     if (msg.includes('holiday_source')) {
       throw new Error(
         'Holiday calendar column is missing in the database. Run migration 20260820140000_holiday_calendars.sql in Supabase.'
+      );
+    }
+    if (msg.includes('leave_config_id') || msg.includes('leave_config_defs') || msg.includes('leave_source')) {
+      throw new Error(
+        'Leave configuration columns are missing. Run migration 20260831120000_leave_config.sql in Supabase.'
       );
     }
     if (msg.includes('client_holidays') && msg.includes('state')) {
@@ -319,6 +434,9 @@ export async function upsertClientPolicyBundle(clientId, body) {
   await supabaseAdmin.from('client_holidays').delete().eq('client_id', clientId);
   if (row.holiday_calendar_id) {
     await replaceAllHolidayCalendars(body.holidays ?? [], { calendarId: row.holiday_calendar_id });
+  }
+  if (row.leave_config_id) {
+    await replaceAllLeaveConfigRules(body.leave_rules ?? [], { configId: row.leave_config_id });
   }
 
   return normalizeAttendancePolicy(saved);

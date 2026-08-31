@@ -26,7 +26,11 @@ function applyClientPolicyState(found, setters) {
     setHolidays,
     setHolidaySource,
     setHolidayCalendarId,
-    setCreateHolidayCalendar
+    setCreateHolidayCalendar,
+    setLeaveSource,
+    setLeaveConfigId,
+    setCreateLeaveConfig,
+    setLeaveRules
   } = setters;
   setClient(found);
   // Include designations found on the client's employees so every employee in
@@ -50,6 +54,18 @@ function applyClientPolicyState(found, setters) {
   }
   if (typeof setCreateHolidayCalendar === 'function') {
     setCreateHolidayCalendar(false);
+  }
+  if (typeof setLeaveConfigId === 'function') {
+    setLeaveConfigId(found.leave_config_id || null);
+  }
+  if (typeof setLeaveSource === 'function') {
+    setLeaveSource(found.leave_config_id ? 'custom' : 'default');
+  }
+  if (typeof setCreateLeaveConfig === 'function') {
+    setCreateLeaveConfig(false);
+  }
+  if (typeof setLeaveRules === 'function') {
+    setLeaveRules(found.leave_config_id ? (found.leave_rules ?? []) : []);
   }
 }
 
@@ -75,6 +91,10 @@ export default function PayrollClientPolicyPage() {
   const [holidaySource, setHolidaySource] = useState('default');
   const [holidayCalendarId, setHolidayCalendarId] = useState(null);
   const [createHolidayCalendar, setCreateHolidayCalendar] = useState(false);
+  const [leaveRules, setLeaveRules] = useState([]);
+  const [leaveSource, setLeaveSource] = useState('default');
+  const [leaveConfigId, setLeaveConfigId] = useState(null);
+  const [createLeaveConfig, setCreateLeaveConfig] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -99,7 +119,11 @@ export default function PayrollClientPolicyPage() {
         setHolidays,
         setHolidaySource,
         setHolidayCalendarId,
-        setCreateHolidayCalendar
+        setCreateHolidayCalendar,
+        setLeaveSource,
+        setLeaveConfigId,
+        setCreateLeaveConfig,
+        setLeaveRules
       });
     } catch (err) {
       setError(err.message);
@@ -157,6 +181,10 @@ export default function PayrollClientPolicyPage() {
         holiday_source: holidayCalendarId || createHolidayCalendar ? 'custom' : 'default',
         holiday_calendar_id: holidayCalendarId || null,
         create_holiday_calendar: Boolean(createHolidayCalendar) && !holidayCalendarId,
+        leave_source: leaveConfigId || createLeaveConfig ? 'custom' : 'default',
+        leave_config_id: leaveConfigId || null,
+        create_leave_config: Boolean(createLeaveConfig) && !leaveConfigId,
+        leave_rules: leaveRules ?? [],
         effective_from_month: effectiveFromMonth
       };
 
@@ -329,6 +357,10 @@ export default function PayrollClientPolicyPage() {
           holidayCalendarId={holidayCalendarId}
           holidaySource={holidaySource}
           createHolidayCalendar={createHolidayCalendar}
+          leaveConfigId={leaveConfigId}
+          leaveSource={leaveSource}
+          createLeaveConfig={createLeaveConfig}
+          leaveRules={leaveRules}
           fieldErrors={fieldErrors}
           designations={designations}
           clientId={id}
@@ -347,6 +379,16 @@ export default function PayrollClientPolicyPage() {
             }
           }}
           onHolidaySourceChange={setHolidaySource}
+          onLeaveConfigIdChange={setLeaveConfigId}
+          onCreateLeaveConfigChange={(createNew) => {
+            setCreateLeaveConfig(createNew);
+            if (createNew) {
+              setLeaveConfigId(null);
+              setLeaveSource('custom');
+            }
+          }}
+          onLeaveSourceChange={setLeaveSource}
+          onLeaveRulesChange={setLeaveRules}
         />
         <div className="mt-6 flex justify-end">
           <button

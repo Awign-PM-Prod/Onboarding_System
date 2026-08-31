@@ -4,6 +4,13 @@ import {
   getCalendarMonthPeriod,
   isWeekOffDate
 } from './clientPolicyCore.js';
+import {
+  CODE_TO_LEAVE_TYPE,
+  LEAVE_CODE_TO_ALLOWANCE_FIELD,
+  daysWorkedFromLegendTotals,
+  leaveRuleForEmployee,
+  resolveAnnualEntitlement
+} from './leaveConfigCore.js';
 
 const PAID_FULL = new Set(['P', 'W', 'NH', 'FH', 'EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO']);
 const NOT_CONSIDERED = new Set(['AB', 'R', 'T', '-']);
@@ -37,14 +44,6 @@ export function findLeaveAllowanceForDesignation(leaveAllowances, designation) {
     (leaveAllowances ?? []).find((a) => normalizeDesignationKey(a.designation) === key) ?? null
   );
 }
-
-const LEAVE_CODE_TO_ALLOWANCE_FIELD = {
-  EL: 'earned_days',
-  SL: 'sick_days',
-  CL: 'paid_days',
-  PL: 'paternity_days',
-  ML: 'maternity_days'
-};
 
 export function annualLeaveAllowanceFromPolicy(allowance, leaveCode) {
   const field = LEAVE_CODE_TO_ALLOWANCE_FIELD[String(leaveCode ?? '').toUpperCase()];
@@ -82,6 +81,10 @@ export function holidaysForEmployee(holidays, employeeState) {
 
 function emptyYtd() {
   return { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0, RH: 0, CO: 0, NH: 0, FH: 0 };
+}
+
+function emptyCarryIn() {
+  return { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0 };
 }
 
 /** Sum legend totals from prior rows in the same calendar year. */
@@ -166,7 +169,9 @@ export function computeRowSummary({
   employee,
   monthYm,
   ytdTaken = emptyYtd(),
-  openingCoBalance = 0
+  openingCoBalance = 0,
+  ytdDaysWorked = 0,
+  carryIn = emptyCarryIn()
 }) {
   const policy = policyBundle?.attendance_policy ?? {};
   const leaveAllowances = policyBundle?.leave_allowances ?? [];
@@ -246,6 +251,25 @@ export function computeRowSummary({
     employee
   );
 
+  const daysWorkedPeriod = daysWorkedFromLegendTotals(legend_totals);
+  const daysWorkedYtd = Math.max(0, Number(ytdDaysWorked) || 0) + daysWorkedPeriod;
+  const leaveRules = policyBundle?.leave_rules ?? [];
+  const carry = { ...emptyCarryIn(), ...(carryIn ?? {}) };
+
+  const entitlements = {};
+  for (const code of ['EL', 'SL', 'CL', 'PL', 'ML']) {
+    const leaveType = CODE_TO_LEAVE_TYPE[code];
+    const rule = leaveRuleForEmployee(leaveRules, employee?.state, leaveType);
+    const field = LEAVE_CODE_TO_ALLOWANCE_FIELD[code];
+    const fallback = field ? Number(allowance?.[field]) || 0 : 0;
+    entitlements[code] = resolveAnnualEntitlement({
+      rule,
+      daysWorked: daysWorkedYtd,
+      carryIn: carry[code] ?? 0,
+      fallbackAnnual: fallback
+    });
+  }
+
   const leave_summary = {
     EL_taken: ytdWithPeriod.EL,
     SL_taken: ytdWithPeriod.SL,
@@ -258,23 +282,30 @@ export function computeRowSummary({
     FH_taken: periodTaken.FH,
     NH_taken_ytd: ytdWithPeriod.NH,
     FH_taken_ytd: ytdWithPeriod.FH,
-    EL_annual: Math.max(0, Number(allowance?.earned_days) || 0),
-    SL_annual: Math.max(0, Number(allowance?.sick_days) || 0),
-    CL_annual: Math.max(0, Number(allowance?.paid_days) || 0),
-    PL_annual: Math.max(0, Number(allowance?.paternity_days) || 0),
-    ML_annual: Math.max(0, Number(allowance?.maternity_days) || 0),
-    EL_left: Math.max(0, (allowance?.earned_days ?? 0) - ytdWithPeriod.EL),
-    SL_left: Math.max(0, (allowance?.sick_days ?? 0) - ytdWithPeriod.SL),
-    CL_left: Math.max(0, (allowance?.paid_days ?? 0) - ytdWithPeriod.CL),
-    PL_left: Math.max(0, (allowance?.paternity_days ?? 0) - ytdWithPeriod.PL),
-    ML_left: Math.max(0, (allowance?.maternity_days ?? 0) - ytdWithPeriod.ML),
+    EL_annual: entitlements.EL.annual,
+    SL_annual: entitlements.SL.annual,
+    CL_annual: entitlements.CL.annual,
+    PL_annual: entitlements.PL.annual,
+    ML_annual: entitlements.ML.annual,
+    EL_left: Math.max(0, entitlements.EL.annual - ytdWithPeriod.EL),
+    SL_left: Math.max(0, entitlements.SL.annual - ytdWithPeriod.SL),
+    CL_left: Math.max(0, entitlements.CL.annual - ytdWithPeriod.CL),
+    PL_left: Math.max(0, entitlements.PL.annual - ytdWithPeriod.PL),
+    ML_left: Math.max(0, entitlements.ML.annual - ytdWithPeriod.ML),
+    EL_not_applicable: entitlements.EL.not_applicable,
+    SL_not_applicable: entitlements.SL.not_applicable,
+    CL_not_applicable: entitlements.CL.not_applicable,
+    PL_not_applicable: entitlements.PL.not_applicable,
+    ML_not_applicable: entitlements.ML.not_applicable,
     RH_left: 0,
     CO_left: Math.max(0, coLeft),
     NH_left: Math.max(0, nhDates.length - periodTaken.NH),
     FH_left: Math.max(0, fhDates.length - periodTaken.FH),
     NH_allowed: nhDates.length,
     FH_allowed: fhDates.length,
-    CO_earned_period: coEarned
+    CO_earned_period: coEarned,
+    days_worked_period: daysWorkedPeriod,
+    days_worked_ytd: daysWorkedYtd
   };
 
   return {

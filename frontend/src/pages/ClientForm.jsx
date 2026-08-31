@@ -61,7 +61,11 @@ const emptyForm = {
   holidays: [],
   holiday_source: 'default',
   holiday_calendar_id: null,
-  create_holiday_calendar: false
+  create_holiday_calendar: false,
+  leave_source: 'default',
+  leave_config_id: null,
+  create_leave_config: false,
+  leave_rules: []
 };
 
 function downloadBlob(blob, filename) {
@@ -162,7 +166,11 @@ export default function ClientForm() {
           holidays: found.holidays ?? [],
           holiday_source: found.holiday_calendar_id ? 'custom' : 'default',
           holiday_calendar_id: found.holiday_calendar_id || null,
-          create_holiday_calendar: false
+          create_holiday_calendar: false,
+          leave_source: found.leave_config_id ? 'custom' : 'default',
+          leave_config_id: found.leave_config_id || null,
+          create_leave_config: false,
+          leave_rules: found.leave_config_id ? (found.leave_rules ?? []) : []
         });
       })
       .catch(err => setError(err.message))
@@ -363,7 +371,11 @@ export default function ClientForm() {
         holidays: (form.holidays ?? []).filter((h) => h.holiday_date),
         holiday_source: form.holiday_calendar_id || form.create_holiday_calendar ? 'custom' : 'default',
         holiday_calendar_id: form.holiday_calendar_id || null,
-        create_holiday_calendar: Boolean(form.create_holiday_calendar) && !form.holiday_calendar_id
+        create_holiday_calendar: Boolean(form.create_holiday_calendar) && !form.holiday_calendar_id,
+        leave_source: form.leave_config_id || form.create_leave_config ? 'custom' : 'default',
+        leave_config_id: form.leave_config_id || null,
+        create_leave_config: Boolean(form.create_leave_config) && !form.leave_config_id,
+        leave_rules: form.leave_rules ?? []
       };
       delete payload.cushion_enabled;
       if (isEdit) {
@@ -828,6 +840,10 @@ export default function ClientForm() {
               holidayCalendarId={form.holiday_calendar_id}
               holidaySource={form.holiday_source}
               createHolidayCalendar={form.create_holiday_calendar}
+              leaveConfigId={form.leave_config_id}
+              leaveSource={form.leave_source}
+              createLeaveConfig={form.create_leave_config}
+              leaveRules={form.leave_rules}
               fieldErrors={fieldErrors}
               designations={form.designations}
               clientId={isEdit ? id : null}
@@ -845,6 +861,15 @@ export default function ClientForm() {
                   : {})
               })}
               onHolidaySourceChange={(holiday_source) => set({ holiday_source })}
+              onLeaveConfigIdChange={(leave_config_id) => set({ leave_config_id })}
+              onCreateLeaveConfigChange={(create_leave_config) => set({
+                create_leave_config,
+                ...(create_leave_config
+                  ? { leave_config_id: null, leave_source: 'custom' }
+                  : {})
+              })}
+              onLeaveSourceChange={(leave_source) => set({ leave_source })}
+              onLeaveRulesChange={(leave_rules) => set({ leave_rules })}
             />
           </div>
 

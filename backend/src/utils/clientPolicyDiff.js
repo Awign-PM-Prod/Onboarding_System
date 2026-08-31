@@ -42,6 +42,26 @@ function holidayKeys(holidays) {
   );
 }
 
+function leaveRuleKeys(rules) {
+  const map = new Map();
+  for (const r of rules ?? []) {
+    const state = String(r.state ?? '').trim();
+    const type = String(r.leave_type ?? '').trim();
+    if (!state || !type) continue;
+    const key = `${state} ${type}`;
+    const accrual = Array.isArray(r.accrual_rules)
+      ? r.accrual_rules.map((c) => `${c.days}/${c.per_days_worked}`).join(';')
+      : '';
+    const value = r.not_applicable
+      ? 'N/A'
+      : [accrual, r.fixed_days != null ? `fixed:${r.fixed_days}` : '', r.accumulation_limit != null ? `cap:${r.accumulation_limit}` : '']
+        .filter(Boolean)
+        .join(' ');
+    map.set(key, value);
+  }
+  return map;
+}
+
 const ALLOWANCE_FIELDS = [
   ['earned_days', 'earned days'],
   ['sick_days', 'sick days'],
@@ -253,6 +273,37 @@ export function diffClientPolicyBundles(before, after) {
     const aSource = String(after?.holiday_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
     if (bSource !== aSource) {
       changes.push(`Holiday calendar: ${bSource} → ${aSource}`);
+    }
+  }
+
+  const bLeave = String(before?.leave_config_id ?? '').trim() || null;
+  const aLeave = String(after?.leave_config_id ?? '').trim() || null;
+  const bLeaveName = String(before?.leave_config_name ?? '').trim()
+    || (bLeave ? 'named leave config' : 'Default');
+  const aLeaveName = String(after?.leave_config_name ?? '').trim()
+    || (aLeave ? 'named leave config' : 'Default');
+  if (bLeave !== aLeave) {
+    changes.push(`Leave configuration: ${bLeaveName} → ${aLeaveName}`);
+  } else {
+    const bLeaveSource = String(before?.leave_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
+    const aLeaveSource = String(after?.leave_source ?? 'custom').toLowerCase() === 'default' ? 'default' : 'custom';
+    if (bLeaveSource !== aLeaveSource) {
+      changes.push(`Leave configuration: ${bLeaveSource} → ${aLeaveSource}`);
+    }
+  }
+
+  const bRules = leaveRuleKeys(before?.leave_rules);
+  const aRules = leaveRuleKeys(after?.leave_rules);
+  for (const key of aRules) {
+    if (!bRules.has(key)) {
+      changes.push(`Leave rule added: ${key}`);
+    } else if (bRules.get(key) !== aRules.get(key)) {
+      changes.push(`Leave rule updated: ${key}`);
+    }
+  }
+  for (const key of bRules.keys()) {
+    if (!aRules.has(key)) {
+      changes.push(`Leave rule removed: ${key}`);
     }
   }
 

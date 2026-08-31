@@ -198,6 +198,7 @@ function SuperAdminLayoutInner() {
   const isActivityPage = pathname.startsWith('/super-admin/activity');
   const isSalaryPage = pathname.startsWith('/super-admin/salary-config');
   const isHolidayCalendarPage = pathname.startsWith('/super-admin/holiday-calendar');
+  const isLeaveConfigPage = pathname.startsWith('/super-admin/leave-config');
   const isRegionZonesPage = pathname.startsWith('/super-admin/region-zones');
   const isTaskRemindersPage = pathname.startsWith('/super-admin/task-reminders');
   const isBulkAlertsPage = pathname.startsWith('/super-admin/bulk-alerts');
@@ -414,6 +415,14 @@ function SuperAdminLayoutInner() {
       label: 'Holiday Calendar',
       active: isHolidayCalendarPage,
       icon: <IconCalendar className="h-full w-full" />,
+      onClick: () => setPanelOpenPersist(false)
+    },
+    {
+      id: 'leave-config',
+      to: '/super-admin/leave-config',
+      label: 'Leave Config',
+      active: isLeaveConfigPage,
+      icon: <IconClipboardCheck className="h-full w-full" />,
       onClick: () => setPanelOpenPersist(false)
     },
     {

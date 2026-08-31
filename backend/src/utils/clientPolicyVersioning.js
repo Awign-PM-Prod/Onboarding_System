@@ -35,7 +35,24 @@ export function normalizePolicyBundleFromJson(policyJson, normalizeAttendancePol
     holiday_calendar_name: String(raw.holiday_calendar_name ?? '').trim() || null,
     holiday_source: String(raw.holiday_calendar_id ?? '').trim()
       ? 'custom'
-      : (String(raw.holiday_source ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom')
+      : (String(raw.holiday_source ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom'),
+    leave_config_id: String(raw.leave_config_id ?? '').trim() || null,
+    leave_config_name: String(raw.leave_config_name ?? '').trim() || null,
+    leave_source: String(raw.leave_config_id ?? '').trim()
+      ? 'custom'
+      : (String(raw.leave_source ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom'),
+    leave_rules: (raw.leave_rules ?? []).map((r) => ({
+      id: r.id ?? null,
+      state: String(r.state ?? '').trim(),
+      leave_type: String(r.leave_type ?? '').trim(),
+      not_applicable: r.not_applicable === true,
+      accrual_rules: Array.isArray(r.accrual_rules) ? r.accrual_rules : [],
+      fixed_days: r.fixed_days == null || r.fixed_days === '' ? null : Number(r.fixed_days),
+      accumulation_limit:
+        r.accumulation_limit == null || r.accumulation_limit === ''
+          ? null
+          : Number(r.accumulation_limit)
+    }))
   };
 }
 
@@ -53,7 +70,23 @@ export function bundleToPolicyJson(bundle) {
     holiday_calendar_name: String(bundle.holiday_calendar_name ?? '').trim() || null,
     holiday_source: String(bundle.holiday_calendar_id ?? '').trim()
       ? 'custom'
-      : (String(bundle.holiday_source ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom')
+      : (String(bundle.holiday_source ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom'),
+    leave_config_id: String(bundle.leave_config_id ?? '').trim() || null,
+    leave_config_name: String(bundle.leave_config_name ?? '').trim() || null,
+    leave_source: String(bundle.leave_config_id ?? '').trim()
+      ? 'custom'
+      : (String(bundle.leave_source ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom'),
+    leave_rules: (bundle.leave_rules ?? []).map((r) => ({
+      state: String(r.state ?? '').trim(),
+      leave_type: String(r.leave_type ?? '').trim(),
+      not_applicable: r.not_applicable === true,
+      accrual_rules: Array.isArray(r.accrual_rules) ? r.accrual_rules : [],
+      fixed_days: r.fixed_days == null || r.fixed_days === '' ? null : Number(r.fixed_days),
+      accumulation_limit:
+        r.accumulation_limit == null || r.accumulation_limit === ''
+          ? null
+          : Number(r.accumulation_limit)
+    }))
   };
 }
 

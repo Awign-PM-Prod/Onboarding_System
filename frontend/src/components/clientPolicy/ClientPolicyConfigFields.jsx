@@ -4,6 +4,7 @@ import CompOffSettings from './CompOffSettings';
 import IncentiveSettings from './IncentiveSettings';
 import LeaveAllowancesTable from './LeaveAllowancesTable';
 import ClientHolidaysInput from './ClientHolidaysInput';
+import ClientLeaveConfigInput from './ClientLeaveConfigInput';
 import DesignationsInput from '../DesignationsInput';
 import {
   ATTENDANCE_POLICY_ROLES,
@@ -21,6 +22,10 @@ export default function ClientPolicyConfigFields({
   holidayCalendarId = null,
   holidaySource = 'default',
   createHolidayCalendar = false,
+  leaveConfigId = null,
+  leaveSource = 'default',
+  createLeaveConfig = false,
+  leaveRules = [],
   fieldErrors = {},
   onAttendancePolicyChange,
   onLeaveAllowancesChange,
@@ -28,6 +33,10 @@ export default function ClientPolicyConfigFields({
   onHolidayCalendarIdChange,
   onHolidaySourceChange,
   onCreateHolidayCalendarChange,
+  onLeaveConfigIdChange,
+  onLeaveSourceChange,
+  onCreateLeaveConfigChange,
+  onLeaveRulesChange,
   designations = [],
   onDesignationsChange = null,
   showDesignations = false,
@@ -79,8 +88,8 @@ export default function ClientPolicyConfigFields({
             <p className="text-xs text-red-600">{fieldErrors.designations}</p>
           )}
           <p className="text-xs text-slate-500">
-            Each role below gets a row in Leave Allowances per Role. Add Engineer, Operator, Inspector,
-            and Supervisor for attendance testing.
+            Used as a fallback when a state-wise leave rule is missing for an employee&apos;s work state.
+            Add Engineer, Operator, Inspector, and Supervisor for attendance testing.
           </p>
         </div>
       )}
@@ -94,6 +103,19 @@ export default function ClientPolicyConfigFields({
         value={leaveAllowances}
         onChange={onLeaveAllowancesChange}
         error={fieldErrors.leave_allowances}
+      />
+      <ClientLeaveConfigInput
+        value={leaveRules}
+        onChange={onLeaveRulesChange}
+        leaveConfigId={leaveConfigId}
+        onLeaveConfigIdChange={onLeaveConfigIdChange}
+        leaveSource={leaveSource}
+        createLeaveConfig={createLeaveConfig}
+        onLeaveSourceChange={onLeaveSourceChange}
+        onCreateLeaveConfigChange={onCreateLeaveConfigChange}
+        clientId={clientId}
+        clientName={clientName}
+        error={fieldErrors.leave_source || fieldErrors.leave_rules || fieldErrors.leave_config_id}
       />
       <ClientHolidaysInput
         value={holidays}

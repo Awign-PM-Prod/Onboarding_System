@@ -11,7 +11,10 @@ import {
   validateHolidaysPayload,
   validateLeaveAllowancesPayload,
   normalizeHolidaySource,
-  applyHolidayCalendarPayload
+  normalizeLeaveSource,
+  applyHolidayCalendarPayload,
+  applyLeaveConfigPayload,
+  validateLeaveConfigRulesPayload
 } from '../utils/clientPolicy.js';
 import { normalizeAttendancePolicy } from '../utils/clientPolicyCore.js';
 import { recalculateAllAttendanceSheetsForClient } from '../utils/attendanceRecalc.js';
@@ -285,6 +288,10 @@ function validateClientPayload(body) {
   applyHolidayCalendarPayload(body);
   if (body.holiday_calendar_id || body.create_holiday_calendar) {
     validateHolidaysPayload(body.holidays ?? [], errors);
+  }
+  applyLeaveConfigPayload(body);
+  if (body.leave_config_id || body.create_leave_config) {
+    validateLeaveConfigRulesPayload(body.leave_rules ?? [], errors);
   }
 
   return errors;
@@ -992,6 +999,13 @@ router.put('/:id/policy', async (req, res, next) => {
     applyHolidayCalendarPayload(req.body);
     if (req.body.holiday_calendar_id || req.body.create_holiday_calendar) {
       validateHolidaysPayload(req.body.holidays ?? [], errors);
+    }
+    req.body.leave_source = normalizeLeaveSource(
+      req.body?.leave_source ?? req.body?.attendance_policy?.leave_source
+    );
+    applyLeaveConfigPayload(req.body);
+    if (req.body.leave_config_id || req.body.create_leave_config) {
+      validateLeaveConfigRulesPayload(req.body.leave_rules ?? [], errors);
     }
     const effectiveFrom = req.body?.effective_from_month ?? req.body?.effectiveFromMonth;
     if (effectiveFrom && !monthYmToDate(effectiveFrom)) {

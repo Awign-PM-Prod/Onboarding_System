@@ -37,7 +37,7 @@ export default function LeaveAllowancesTable({ value, onChange, error }) {
     <div>
       <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
         <label className="block text-sm font-medium text-slate-700">
-          Leave Allowances per Role (annual)
+          Leave Allowances per Role (annual fallback)
         </label>
         {canApplyToAll && (
           <p className="text-xs text-slate-500">

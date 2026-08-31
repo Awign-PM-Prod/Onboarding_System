@@ -285,6 +285,10 @@ export function normalizeHolidaySource(raw) {
   return String(raw ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom';
 }
 
+export function normalizeLeaveSource(raw) {
+  return String(raw ?? '').trim().toLowerCase() === 'default' ? 'default' : 'custom';
+}
+
 export function validateHolidaysPayload(holidays, errors) {
   if (!Array.isArray(holidays)) {
     errors.holidays = 'must be an array';
@@ -309,5 +313,12 @@ export function validateHolidaysPayload(holidays, errors) {
       errors[`holidays.${i}`] = 'duplicate';
     }
     seen.add(key);
+  }
+}
+
+export function validateLeaveConfigRulesPayload(rules, errors) {
+  if (rules == null) return;
+  if (!Array.isArray(rules)) {
+    errors.leave_rules = 'must be an array';
   }
 }

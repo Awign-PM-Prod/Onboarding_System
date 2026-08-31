@@ -33,6 +33,14 @@ import {
   findClientIdsForCalendarRecalc
 } from '../utils/holidayCalendar.js';
 import { buildHolidayCalendarTemplateCsv } from '../utils/holidayCalendarCsv.js';
+import {
+  listLeaveConfigRules,
+  replaceLeaveConfigRules,
+  listLeaveConfigDefs,
+  createLeaveConfigDef,
+  findClientIdsForLeaveConfigRecalc
+} from '../utils/leaveConfig.js';
+import { buildLeaveConfigTemplateCsv } from '../utils/leaveConfigCsv.js';
 import { recalculateAllAttendanceSheetsForClient } from '../utils/attendanceRecalc.js';
 
 const router = Router();
@@ -1529,6 +1537,124 @@ router.put('/holiday-calendars', async (req, res, next) => {
       items,
       replaced,
       calendar_id,
+      is_default,
+      sheets_recalculated: sheetsRecalculated,
+      recalc_errors: recalcErrors
+    });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message, details: err.details });
+    }
+    next(err);
+  }
+});
+
+// GET /api/super-admin/leave-config-defs
+router.get('/leave-config-defs', async (_req, res, next) => {
+  try {
+    const items = await listLeaveConfigDefs({ includeAll: true });
+    res.json(items);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// POST /api/super-admin/leave-config-defs
+router.post('/leave-config-defs', async (req, res, next) => {
+  try {
+    const created = await createLeaveConfigDef({
+      name: req.body?.name,
+      states: req.body?.states,
+      items: req.body?.items
+    });
+    const imported = Array.isArray(req.body?.items) ? req.body.items.length : 0;
+    await logOrgActivityFromReq(req, {
+      action: 'LEAVE_CONFIG_CREATED',
+      entityType: 'leave_config_defs',
+      entityId: created.id,
+      summary: imported
+        ? `Created leave configuration ${created.name} from CSV (${imported} rule(s))`
+        : `Created leave configuration ${created.name}`,
+      metadata: {
+        config_id: created.id,
+        states: req.body?.states ?? [],
+        imported_count: imported
+      }
+    });
+    res.status(201).json(created);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, details: err.details });
+    next(err);
+  }
+});
+
+// GET /api/super-admin/leave-config-rules?state=&config_id=&leave_type=
+router.get('/leave-config-rules', async (req, res, next) => {
+  try {
+    const items = await listLeaveConfigRules({
+      configId: req.query.config_id ?? req.query.configId,
+      state: req.query.state,
+      leaveType: req.query.leave_type ?? req.query.leaveType
+    });
+    res.json(items);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+// GET /api/super-admin/leave-config-rules/template
+router.get('/leave-config-rules/template', (_req, res) => {
+  const csv = buildLeaveConfigTemplateCsv();
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="leave-config-template.csv"');
+  return res.send(csv);
+});
+
+// PUT /api/super-admin/leave-config-rules — replace each (state, leave_type) present in items
+router.put('/leave-config-rules', async (req, res, next) => {
+  try {
+    const rawItems = Array.isArray(req.body?.items) ? req.body.items : null;
+    if (!rawItems) {
+      return res.status(400).json({ error: 'items array is required' });
+    }
+
+    const configId = req.body?.config_id ?? req.body?.configId ?? req.query.config_id;
+    const { items, replaced, config_id, is_default } = await replaceLeaveConfigRules(rawItems, {
+      configId
+    });
+
+    let sheetsRecalculated = 0;
+    const recalcErrors = [];
+    try {
+      const clientIds = await findClientIdsForLeaveConfigRecalc(config_id);
+      for (const clientId of clientIds) {
+        const result = await recalculateAllAttendanceSheetsForClient(clientId);
+        sheetsRecalculated += Number(result?.sheets_recalculated) || 0;
+      }
+    } catch (recalcErr) {
+      recalcErrors.push(recalcErr?.message || String(recalcErr));
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'LEAVE_CONFIG_UPDATED',
+      entityType: 'leave_config_rules',
+      entityId: config_id,
+      summary: `Updated leave configuration for ${replaced.length} state-type rule(s)`,
+      metadata: {
+        config_id,
+        is_default,
+        replaced,
+        item_count: items.length,
+        sheets_recalculated: sheetsRecalculated
+      }
+    });
+
+    res.json({
+      items,
+      replaced,
+      config_id,
       is_default,
       sheets_recalculated: sheetsRecalculated,
       recalc_errors: recalcErrors

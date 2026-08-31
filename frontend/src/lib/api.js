@@ -650,6 +650,40 @@ export const api = {
     }),
   downloadHolidayCalendarTemplate: () =>
     fileRequest('/api/super-admin/holiday-calendars/template'),
+  listSuperAdminLeaveConfigDefs: () => request('/api/super-admin/leave-config-defs'),
+  createSuperAdminLeaveConfigDef: ({ name, states, items } = {}) =>
+    request('/api/super-admin/leave-config-defs', {
+      method: 'POST',
+      body: JSON.stringify({ name, states, items })
+    }),
+  listSuperAdminLeaveConfigRules: ({ state, configId, leaveType } = {}) => {
+    const q = new URLSearchParams();
+    if (state) q.set('state', state);
+    if (configId) q.set('config_id', configId);
+    if (leaveType) q.set('leave_type', leaveType);
+    const qs = q.toString();
+    return request(`/api/super-admin/leave-config-rules${qs ? `?${qs}` : ''}`);
+  },
+  saveSuperAdminLeaveConfigRules: (items, { configId } = {}) =>
+    request('/api/super-admin/leave-config-rules', {
+      method: 'PUT',
+      body: JSON.stringify({ items, config_id: configId || undefined })
+    }),
+  downloadLeaveConfigTemplate: () =>
+    fileRequest('/api/super-admin/leave-config-rules/template'),
+  listLeaveConfigDefs: ({ forClientId } = {}) => {
+    const q = new URLSearchParams();
+    if (forClientId) q.set('for_client_id', forClientId);
+    const qs = q.toString();
+    return request(`/api/leave-configs/defs${qs ? `?${qs}` : ''}`);
+  },
+  listLeaveConfigRules: ({ state, configId, leaveType } = {}) => {
+    const q = new URLSearchParams();
+    if (state) q.set('state', state);
+    if (configId) q.set('config_id', configId);
+    if (leaveType) q.set('leave_type', leaveType);
+    return request(`/api/leave-configs?${q.toString()}`);
+  },
   listHolidayCalendarDefs: ({ forClientId } = {}) => {
     const q = new URLSearchParams();
     if (forClientId) q.set('for_client_id', forClientId);

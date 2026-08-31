@@ -17,6 +17,13 @@ export function ytdTakenBeforeCurrentPeriod(row) {
   return ytd;
 }
 
+function ytdDaysWorkedBeforeCurrentPeriod(row) {
+  const ls = row?.leave_summary ?? {};
+  const ytd = Number(ls.days_worked_ytd) || 0;
+  const period = Number(ls.days_worked_period) || 0;
+  return Math.max(0, ytd - period);
+}
+
 /**
  * Client-side row summary preview (same rules as backend computeRowSummary).
  * Used for immediate paid_days / LOP updates when PL edits a cell.
@@ -35,6 +42,7 @@ export function previewRowSummary(row, clientPolicy, monthYm) {
       state: row.state
     },
     monthYm: month,
-    ytdTaken: ytdTakenBeforeCurrentPeriod(row)
+    ytdTaken: ytdTakenBeforeCurrentPeriod(row),
+    ytdDaysWorked: ytdDaysWorkedBeforeCurrentPeriod(row)
   });
 }

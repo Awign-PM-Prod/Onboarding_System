@@ -53,8 +53,11 @@ describe('formatLeaveSummaryCell', () => {
     })).toBe('2/3');
   });
 
-  it('returns dash when no leave summary', () => {
-    expect(formatLeaveSummaryCell('EL', { gender: 'Male' })).toBe('—');
+  it('shows N/A when the leave type is not applicable', () => {
+    expect(formatLeaveSummaryCell('EL', {
+      gender: 'Male',
+      leave_summary: { EL_taken: 0, EL_left: 0, EL_annual: 0, EL_not_applicable: true }
+    })).toBe('N/A');
   });
 
   it('provides values for every leave column when summary present', () => {

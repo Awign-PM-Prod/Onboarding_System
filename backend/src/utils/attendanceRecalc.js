@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '../supabase.js';
 import { computeRowSummary, mergeYtdTaken, suggestDefaultMarks } from './attendanceCalculator.js';
 import { parseIsoDate } from './attendanceLwd.js';
+import { daysWorkedFromLegendTotals } from './leaveConfigCore.js';
 import {
   fetchClientPolicyBundle,
   fetchClientPolicyBundleForMonth,
@@ -133,7 +134,7 @@ export async function recalculateAllAttendanceSheetsForClient(clientId, options 
 
 /**
  * Sum legend_totals from prior attendance rows in the same calendar year.
- * Returns Map<employee_id, ytd object>.
+ * Returns Map<employee_id, { taken, daysWorked }>.
  */
 export async function fetchYtdTakenByEmployee(clientId, year, beforeMonthYm, employeeIds) {
   const ytdMap = new Map();
@@ -169,9 +170,81 @@ export async function fetchYtdTakenByEmployee(clientId, year, beforeMonthYm, emp
   }
 
   for (const empId of employeeIds) {
-    ytdMap.set(empId, mergeYtdTaken(byEmployee.get(empId) ?? []));
+    const totalsList = byEmployee.get(empId) ?? [];
+    let daysWorked = 0;
+    for (const totals of totalsList) {
+      daysWorked += daysWorkedFromLegendTotals(totals);
+    }
+    ytdMap.set(empId, {
+      taken: mergeYtdTaken(totalsList),
+      daysWorked
+    });
   }
   return ytdMap;
+}
+
+function emptyCarryIn() {
+  return { EL: 0, SL: 0, CL: 0, PL: 0, ML: 0 };
+}
+
+/** Last sheet of previous calendar year: leftover leave as carry-in. */
+export async function fetchCarryInByEmployee(clientId, year, employeeIds) {
+  const carryMap = new Map();
+  const ids = [...new Set((employeeIds ?? []).filter(Boolean))];
+  if (!ids.length) return carryMap;
+
+  const prevYear = Number(year) - 1;
+  if (!Number.isInteger(prevYear) || prevYear < 1900) return carryMap;
+
+  const { data: sheets, error: sErr } = await supabaseAdmin
+    .from('attendance_sheets')
+    .select('id, attendance_month')
+    .eq('client_id', clientId)
+    .gte('attendance_month', `${prevYear}-01-01`)
+    .lte('attendance_month', `${prevYear}-12-31`)
+    .order('attendance_month', { ascending: false });
+  if (sErr) throw sErr;
+  if (!sheets?.length) return carryMap;
+
+  const sheetIds = sheets.map((s) => s.id);
+  const { data: rows, error: rErr } = await supabaseAdmin
+    .from('attendance_rows')
+    .select('employee_id, sheet_id, leave_summary')
+    .in('sheet_id', sheetIds)
+    .in('employee_id', ids);
+  if (rErr) throw rErr;
+
+  const sheetMonth = new Map((sheets ?? []).map((s) => [s.id, String(s.attendance_month ?? '').slice(0, 7)]));
+  const best = new Map();
+  for (const row of rows ?? []) {
+    if (!row.employee_id) continue;
+    const ym = sheetMonth.get(row.sheet_id) || '';
+    const prev = best.get(row.employee_id);
+    if (!prev || ym > prev.ym) {
+      best.set(row.employee_id, { ym, leave_summary: row.leave_summary ?? {} });
+    }
+  }
+
+  for (const empId of ids) {
+    const ls = best.get(empId)?.leave_summary ?? {};
+    carryMap.set(empId, {
+      EL: Math.max(0, Number(ls.EL_left) || 0),
+      SL: Math.max(0, Number(ls.SL_left) || 0),
+      CL: Math.max(0, Number(ls.CL_left) || 0),
+      PL: Math.max(0, Number(ls.PL_left) || 0),
+      ML: Math.max(0, Number(ls.ML_left) || 0)
+    });
+  }
+  return carryMap;
+}
+
+export function leaveYtdContext(ytdMap, carryMap, employeeId) {
+  const ytd = ytdMap.get(employeeId) ?? { taken: mergeYtdTaken([]), daysWorked: 0 };
+  return {
+    ytdTaken: ytd.taken ?? mergeYtdTaken([]),
+    ytdDaysWorked: Number(ytd.daysWorked) || 0,
+    carryIn: carryMap.get(employeeId) ?? emptyCarryIn()
+  };
 }
 
 /**
@@ -249,7 +322,9 @@ export async function recalculateRowSummary({
   dayMarks,
   policyBundle,
   monthYm: monthYmParam,
-  ytdTaken
+  ytdTaken,
+  ytdDaysWorked = 0,
+  carryIn
 }) {
   return computeRowSummary({
     dayMarks,
@@ -262,7 +337,9 @@ export async function recalculateRowSummary({
       state: row.state
     },
     monthYm: monthYmParam,
-    ytdTaken: ytdTaken ?? mergeYtdTaken([])
+    ytdTaken: ytdTaken ?? mergeYtdTaken([]),
+    ytdDaysWorked,
+    carryIn
   });
 }
 
@@ -307,13 +384,17 @@ export async function recalculateForwardYtdForEmployees(clientId, fromMonthYm, e
     if (!rowsWithMarks.length) continue;
 
     const ytdMap = await fetchYtdTakenByEmployee(clientId, year, monthYmVal, ids);
+    const carryMap = await fetchCarryInByEmployee(clientId, year, ids);
     for (const row of rowsWithMarks) {
+      const ctx = leaveYtdContext(ytdMap, carryMap, row.employee_id);
       const summary = await recalculateRowSummary({
         row,
         dayMarks: row.day_marks ?? [],
         policyBundle,
         monthYm: monthYmVal,
-        ytdTaken: ytdMap.get(row.employee_id) ?? mergeYtdTaken([])
+        ytdTaken: ctx.ytdTaken,
+        ytdDaysWorked: ctx.ytdDaysWorked,
+        carryIn: ctx.carryIn
       });
       const { error: upErr } = await supabaseAdmin
         .from('attendance_rows')
@@ -344,6 +425,7 @@ export async function recalculateSheetRows(sheet, rowsWithMarks, clientId) {
   const year = Number(monthYmVal?.slice(0, 4)) || new Date().getFullYear();
   const employeeIds = rowsWithMarks.map((r) => r.employee_id).filter(Boolean);
   const ytdMap = await fetchYtdTakenByEmployee(clientId, year, monthYmVal, employeeIds);
+  const carryMap = await fetchCarryInByEmployee(clientId, year, employeeIds);
 
   const period = getPayrollPeriod(policyBundle.attendance_policy, monthYmVal);
   const payrollMeta = {
@@ -354,12 +436,15 @@ export async function recalculateSheetRows(sheet, rowsWithMarks, clientId) {
 
   const updates = [];
   for (const row of rowsWithMarks) {
+    const ctx = leaveYtdContext(ytdMap, carryMap, row.employee_id);
     const summary = await recalculateRowSummary({
       row,
       dayMarks: row.day_marks ?? [],
       policyBundle,
       monthYm: monthYmVal,
-      ytdTaken: ytdMap.get(row.employee_id) ?? mergeYtdTaken([])
+      ytdTaken: ctx.ytdTaken,
+      ytdDaysWorked: ctx.ytdDaysWorked,
+      carryIn: ctx.carryIn
     });
     updates.push({
       id: row.id,

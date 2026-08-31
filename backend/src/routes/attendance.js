@@ -9,6 +9,8 @@ import {
 } from '../utils/attendanceLegend.js';
 import {
   fetchYtdTakenByEmployee,
+  fetchCarryInByEmployee,
+  leaveYtdContext,
   applyDefaultMarksForRow,
   attachEmployeeStatesToRows,
   loadClientPolicyForResponse,
@@ -17,7 +19,6 @@ import {
   recalculateRowSummary,
   recalculateSheetRows
 } from '../utils/attendanceRecalc.js';
-import { mergeYtdTaken } from '../utils/attendanceCalculator.js';
 import {
   applyLwdToDayMarks,
   exitCodeFromStatus,
@@ -1530,12 +1531,18 @@ router.patch('/:sheetId/rows', async (req, res, next) => {
       const ytdMap = row.employee_id
         ? await fetchYtdTakenByEmployee(clientId, year, monthYmVal, [row.employee_id])
         : new Map();
+      const carryMap = row.employee_id
+        ? await fetchCarryInByEmployee(clientId, year, [row.employee_id])
+        : new Map();
+      const ctx = leaveYtdContext(ytdMap, carryMap, row.employee_id);
       const summary = await recalculateRowSummary({
         row: rowForCalc,
         dayMarks: allMarks ?? [],
         policyBundle: client_policy,
         monthYm: monthYmVal,
-        ytdTaken: ytdMap.get(row.employee_id) ?? mergeYtdTaken([])
+        ytdTaken: ctx.ytdTaken,
+        ytdDaysWorked: ctx.ytdDaysWorked,
+        carryIn: ctx.carryIn
       });
 
       Object.assign(rowUpdate, {
@@ -1756,12 +1763,18 @@ router.patch('/:sheetId/rows/:rowId/days/:date', async (req, res, next) => {
     const ytdMap = row.employee_id
       ? await fetchYtdTakenByEmployee(clientId, year, monthYmVal, [row.employee_id])
       : new Map();
+    const carryMap = row.employee_id
+      ? await fetchCarryInByEmployee(clientId, year, [row.employee_id])
+      : new Map();
+    const ctx = leaveYtdContext(ytdMap, carryMap, row.employee_id);
     const summary = await recalculateRowSummary({
       row,
       dayMarks: allMarks ?? [],
       policyBundle: client_policy,
       monthYm: monthYmVal,
-      ytdTaken: ytdMap.get(row.employee_id) ?? mergeYtdTaken([])
+      ytdTaken: ctx.ytdTaken,
+      ytdDaysWorked: ctx.ytdDaysWorked,
+      carryIn: ctx.carryIn
     });
 
     const rowPatch = {

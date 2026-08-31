@@ -87,6 +87,7 @@ export function formatLeaveSummaryCell(colKey, row, policyAllowance = null) {
   const takenKey = `${colKey}_taken`;
   const leftKey = `${colKey}_left`;
   const annualKey = `${colKey}_annual`;
+  if (ls[`${colKey}_not_applicable`]) return 'N/A';
   const taken = ls[takenKey];
   const left = ls[leftKey];
   const annualFromSummary = ls[annualKey];
