@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const D360_API_URL = "https://waba-v2.360dialog.io/messages";
-const DEFAULT_TEMPLATE_NAME = "onboarding_form";
+const DEFAULT_TEMPLATE_NAME = "new_onboarding_form";
 const DEFAULT_TEMPLATE_LANGUAGE = "en";
 
 function json(status: number, payload: Record<string, unknown>) {
