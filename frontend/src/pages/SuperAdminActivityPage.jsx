@@ -18,9 +18,12 @@ const ACTION_OPTIONS = [
   { value: '', label: 'All actions' },
   { value: 'CLIENT_CREATED', label: 'Client created' },
   { value: 'CLIENT_UPDATED', label: 'Client updated' },
+  { value: 'CLIENT_ACTIVATED', label: 'Client marked active' },
+  { value: 'CLIENT_DEACTIVATED', label: 'Client marked inactive' },
   { value: 'PM_ASSIGNED', label: 'PM assigned' },
   { value: 'POLICY_UPDATED', label: 'Policy updated' },
   { value: 'EMPLOYEE_CREATED', label: 'Employee created' },
+  { value: 'EMPLOYEE_MOBILE_UPDATED', label: 'Employee mobile corrected' },
   { value: 'ROLE_DETAILS_SET', label: 'Role details set' },
   { value: 'ONBOARDING_INITIATED', label: 'Onboarding initiated' },
   { value: 'JOINING_STATUS_UPDATED', label: 'Joining status updated' },
@@ -43,6 +46,10 @@ const ACTION_OPTIONS = [
   { value: 'SALARY_CHANGE_REJECTED', label: 'Salary change rejected' },
   { value: 'SALARY_MINIMUMS_UPDATED', label: 'Salary minimums updated' },
   { value: 'PASSWORD_RESET', label: 'Password reset' },
+  { value: 'PASSWORD_RESET_REJECTED', label: 'Password reset rejected' },
+  { value: 'STAFF_INVITE_RESENT', label: 'Staff invite resent' },
+  { value: 'STAFF_ACCESS_REVOKED', label: 'Staff access revoked' },
+  { value: 'STAFF_ACCESS_RESTORED', label: 'Staff access restored' },
   { value: 'REMAINING_TASK_DIGEST_TRIGGERED', label: 'Task digest triggered' }
 ];
 

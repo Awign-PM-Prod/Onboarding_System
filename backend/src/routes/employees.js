@@ -4174,4 +4174,126 @@ router.put('/:id/role-details', async (req, res, next) => {
   }
 });
 
+function normalizeTenDigitMobile(raw) {
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith(WHATSAPP_COUNTRY_CODE)) return digits.slice(-10);
+  return digits;
+}
+
+async function resendOnboardingWhatsapp(employee) {
+  const to = formatWhatsAppNumber(employee.mobile);
+  if (!to) return { status: 'skipped', reason: 'no_mobile' };
+  try {
+    const result = await invokeSendOnboardingWhatsappEdge({
+      recipients: [
+        {
+          employee_id: employee.id,
+          name: String(employee.name ?? '').trim(),
+          empid: String(employee.id),
+          to
+        }
+      ]
+    });
+    const failed = Array.isArray(result?.failed) ? result.failed : [];
+    if (failed.length > 0) {
+      return { status: 'failed', error: String(failed[0]?.error ?? 'WhatsApp send failed') };
+    }
+    return { status: 'sent', to };
+  } catch (sendErr) {
+    return { status: 'failed', error: String(sendErr?.message || 'WhatsApp service unavailable') };
+  }
+}
+
+router.put('/:id/mobile', async (req, res, next) => {
+  try {
+    const employeeId = req.params.id;
+    const mobile = normalizeTenDigitMobile(req.body?.mobile);
+    if (!/^\d{10}$/.test(mobile)) {
+      return res.status(400).json({ error: 'Mobile number must be exactly 10 digits.' });
+    }
+
+    const { data: row, error: rowErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, mobile, onboarding_initiated')
+      .eq('id', employeeId)
+      .maybeSingle();
+    if (rowErr) throw rowErr;
+    if (!row) return res.status(404).json({ error: 'Employee not found' });
+
+    const owned = await fetchOwnedClient(req, row.client_id);
+    if (!owned) return res.status(403).json({ error: 'Not authorized for this employee' });
+    if (req.user.role !== 'PROGRAM_MANAGER' && req.user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Only a Program Manager or Super Admin can correct mobile numbers.' });
+    }
+
+    if (row.mobile === mobile) {
+      return res.status(400).json({ error: 'New mobile number is the same as the current one.' });
+    }
+
+    const { data: form, error: formErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('employee_id, submission_status')
+      .eq('employee_id', employeeId)
+      .maybeSingle();
+    if (formErr) throw formErr;
+    if (String(form?.submission_status ?? '') === 'Submitted') {
+      return res.status(409).json({
+        error: 'The employee has already submitted the onboarding form; the mobile number can no longer be changed.'
+      });
+    }
+
+    const { data: clash, error: clashErr } = await supabaseAdmin
+      .from('employees')
+      .select('id')
+      .eq('mobile', mobile)
+      .neq('id', employeeId)
+      .limit(1);
+    if (clashErr) throw clashErr;
+    if ((clash ?? []).length > 0) {
+      return res.status(409).json({ error: `Mobile "${mobile}" is already used by another employee.` });
+    }
+
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from('employees')
+      .update({ mobile })
+      .eq('id', employeeId)
+      .select('*')
+      .maybeSingle();
+    if (updErr) {
+      const conflict = uniqueContactConflictMessage(updErr);
+      if (conflict) return res.status(409).json({ error: conflict });
+      throw updErr;
+    }
+
+    if (form) {
+      const { error: formUpdErr } = await supabaseAdmin
+        .from('job_app_form')
+        .update({ mobile, updated_at: new Date().toISOString() })
+        .eq('employee_id', employeeId);
+      if (formUpdErr) throw formUpdErr;
+    }
+
+    const whatsapp = row.onboarding_initiated
+      ? await resendOnboardingWhatsapp(updated)
+      : { status: 'not_applicable' };
+
+    await logOrgActivityFromReq(req, {
+      action: 'EMPLOYEE_MOBILE_UPDATED',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId: row.client_id,
+      summary: `Corrected mobile for ${row.name || employeeId}`,
+      metadata: {
+        old_mobile: row.mobile,
+        new_mobile: mobile,
+        whatsapp_resend: whatsapp.status
+      }
+    });
+
+    res.json({ employee: updated, whatsapp });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

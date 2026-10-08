@@ -7,6 +7,8 @@ import { ACTION_BTN_PRIMARY } from '../lib/actionButtonStyles';
 function roleLabel(role) {
   if (role === 'PROGRAM_MANAGER') return 'Program Manager';
   if (role === 'PAYROLL_LEAD') return 'Payroll Lead';
+  if (role === 'SUPER_ADMIN') return 'Super Admin';
+  if (role === 'PAYROLL_HEAD') return 'Payroll Head';
   return role || '—';
 }
 
@@ -17,6 +19,31 @@ function formatRequestedAt(value) {
   } catch {
     return String(value);
   }
+}
+
+function formatDate(value) {
+  if (!value) return '';
+  try {
+    return new Date(value).toLocaleDateString();
+  } catch {
+    return String(value);
+  }
+}
+
+const STATUS_BADGES = {
+  ACTIVE: { label: 'Active', className: 'border-emerald-200 bg-emerald-50 text-emerald-800' },
+  INVITE_PENDING: { label: 'Invite pending', className: 'border-sky-200 bg-sky-50 text-sky-800' },
+  INVITE_EXPIRED: { label: 'Invite expired', className: 'border-slate-200 bg-slate-100 text-slate-700' },
+  REVOKED: { label: 'Access revoked', className: 'border-rose-200 bg-rose-50 text-rose-800' }
+};
+
+function StatusBadge({ status }) {
+  const badge = STATUS_BADGES[status] || STATUS_BADGES.ACTIVE;
+  return (
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${badge.className}`}>
+      {badge.label}
+    </span>
+  );
 }
 
 function PasswordVisibilityToggle({ visible, onToggle }) {
@@ -59,6 +86,17 @@ export default function SuperAdminStaffAccountsPage() {
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState('');
 
+  const [accessTarget, setAccessTarget] = useState(null);
+  const [accessSaving, setAccessSaving] = useState(false);
+  const [accessError, setAccessError] = useState('');
+
+  const [resendingId, setResendingId] = useState(null);
+  const [resendError, setResendError] = useState('');
+
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectError, setRejectError] = useState('');
+
   const load = async () => {
     setLoading(true);
     setError('');
@@ -95,10 +133,102 @@ export default function SuperAdminStaffAccountsPage() {
     const q = search.trim().toLowerCase();
     if (!q) return users;
     return users.filter((u) => {
-      const hay = `${u.name || ''} ${u.email || ''} ${u.role || ''}`.toLowerCase();
+      const hay = [
+        u.name,
+        u.email,
+        roleLabel(u.role),
+        u.invited_by?.name,
+        u.invited_by?.email,
+        STATUS_BADGES[u.status]?.label
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
       return hay.includes(q);
     });
   }, [users, search]);
+
+  const handleResendInvite = async (user) => {
+    setResendingId(user.id);
+    setSuccess('');
+    setResendError('');
+    try {
+      const result = await api.resendSuperAdminStaffInvite(user.id);
+      setSuccess(
+        result?.invite_email_sent
+          ? `Invite resent to ${user.email}. The new link is valid for 7 days; the old link no longer works.`
+          : `A new invite link was created for ${user.email}, but the email could not be sent. Try again shortly.`
+      );
+      await load();
+    } catch (err) {
+      setResendError(err.message || 'Could not resend the invite.');
+    } finally {
+      setResendingId(null);
+    }
+  };
+
+  const openReject = (req) => {
+    setRejectTarget(req);
+    setRejectError('');
+    setSuccess('');
+  };
+
+  const closeReject = () => {
+    if (rejecting) return;
+    setRejectTarget(null);
+    setRejectError('');
+  };
+
+  const handleReject = async () => {
+    if (!rejectTarget) return;
+    setRejecting(true);
+    setRejectError('');
+    try {
+      await api.rejectPasswordResetRequest(rejectTarget.id);
+      setSuccess(`Password reset request from ${rejectTarget.name || rejectTarget.email} was rejected.`);
+      setRejectTarget(null);
+      await load();
+    } catch (err) {
+      setRejectError(err.message || 'Could not reject the request.');
+    } finally {
+      setRejecting(false);
+    }
+  };
+
+  const openAccessChange = (user) => {
+    setAccessTarget(user);
+    setAccessError('');
+    setSuccess('');
+  };
+
+  const closeAccessChange = () => {
+    if (accessSaving) return;
+    setAccessTarget(null);
+    setAccessError('');
+  };
+
+  const handleAccessChange = async () => {
+    if (!accessTarget) return;
+    const revoking = accessTarget.status !== 'REVOKED';
+    const who = accessTarget.name || accessTarget.email;
+    setAccessSaving(true);
+    setAccessError('');
+    try {
+      if (revoking) {
+        await api.revokeSuperAdminStaffAccess(accessTarget.id);
+        setSuccess(`Portal access revoked for ${who}. They have been signed out and can no longer log in.`);
+      } else {
+        await api.restoreSuperAdminStaffAccess(accessTarget.id);
+        setSuccess(`Portal access restored for ${who}.`);
+      }
+      setAccessTarget(null);
+      await load();
+    } catch (err) {
+      setAccessError(err.message || 'Could not update access.');
+    } finally {
+      setAccessSaving(false);
+    }
+  };
 
   const openReset = (user) => {
     setResetUser(user);
@@ -164,8 +294,8 @@ export default function SuperAdminStaffAccountsPage() {
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Staff Accounts</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Invite Program Managers and Payroll Leads by email and fulfill password reset requests for
-            both roles.
+            Invite Program Managers and Payroll Leads by email, see who invited them, fulfill password
+            reset requests, and revoke portal access.
           </p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
@@ -214,6 +344,12 @@ export default function SuperAdminStaffAccountsPage() {
         </div>
       )}
 
+      {resendError && !loading && (
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+          {resendError}
+        </div>
+      )}
+
       {!loading && !error && pendingRequests.length > 0 && (
         <div className="mb-6 overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
           <div className="border-b border-amber-200 bg-amber-50 px-4 py-3">
@@ -221,7 +357,7 @@ export default function SuperAdminStaffAccountsPage() {
               Pending password reset requests ({pendingRequests.length})
             </h2>
             <p className="mt-0.5 text-xs text-amber-800">
-              Set a new password and email it to the requester.
+              Set a new password and email it to the requester, or reject the request.
             </p>
           </div>
           <div className="overflow-x-auto">
@@ -243,20 +379,29 @@ export default function SuperAdminStaffAccountsPage() {
                     <td className="px-4 py-3 text-slate-700">{roleLabel(req.role)}</td>
                     <td className="px-4 py-3 text-slate-700">{formatRequestedAt(req.requested_at)}</td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          openReset({
-                            id: req.user_id,
-                            name: req.name,
-                            email: req.email,
-                            role: req.role
-                          })
-                        }
-                        className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100"
-                      >
-                        Reset &amp; send
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openReset({
+                              id: req.user_id,
+                              name: req.name,
+                              email: req.email,
+                              role: req.role
+                            })
+                          }
+                          className="whitespace-nowrap rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100"
+                        >
+                          Reset &amp; send
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openReject(req)}
+                          className="whitespace-nowrap rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                        >
+                          Reject
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -290,23 +435,82 @@ export default function SuperAdminStaffAccountsPage() {
                   <th className="px-4 py-2.5 text-left font-medium">Name</th>
                   <th className="px-4 py-2.5 text-left font-medium">Email</th>
                   <th className="px-4 py-2.5 text-left font-medium">Role</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Invited by</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Status</th>
                   <th className="px-4 py-2.5 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((user) => (
-                  <tr key={user.id} className="hover:bg-slate-50">
+                  <tr
+                    key={user.id}
+                    className={user.status === 'REVOKED' ? 'bg-slate-50/60 text-slate-500' : 'hover:bg-slate-50'}
+                  >
                     <td className="px-4 py-3 font-medium text-slate-900">{user.name}</td>
                     <td className="px-4 py-3 text-slate-700">{user.email}</td>
                     <td className="px-4 py-3 text-slate-700">{roleLabel(user.role)}</td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {user.invited_by ? (
+                        <div>
+                          <div className="font-medium text-slate-800">
+                            {user.invited_by.name || user.invited_by.email}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {roleLabel(user.invited_by.role)}
+                            {user.invited_at ? ` · ${formatDate(user.invited_at)}` : ''}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={user.status} />
+                      {user.status === 'REVOKED' && user.access_revoked_at && (
+                        <div className="mt-1 text-xs text-slate-500">
+                          since {formatDate(user.access_revoked_at)}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => openReset(user)}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50"
-                      >
-                        Reset password
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        {user.status === 'ACTIVE' && (
+                          <button
+                            type="button"
+                            onClick={() => openReset(user)}
+                            className="whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 hover:bg-slate-50"
+                          >
+                            Reset password
+                          </button>
+                        )}
+                        {(user.status === 'INVITE_PENDING' || user.status === 'INVITE_EXPIRED') && (
+                          <button
+                            type="button"
+                            onClick={() => handleResendInvite(user)}
+                            disabled={resendingId === user.id}
+                            className="whitespace-nowrap rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800 hover:bg-indigo-100 disabled:opacity-50"
+                          >
+                            {resendingId === user.id ? 'Sending…' : 'Resend invite'}
+                          </button>
+                        )}
+                        {user.status === 'REVOKED' ? (
+                          <button
+                            type="button"
+                            onClick={() => openAccessChange(user)}
+                            className="whitespace-nowrap rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                          >
+                            Restore access
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openAccessChange(user)}
+                            className="whitespace-nowrap rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                          >
+                            Revoke access
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -393,6 +597,100 @@ export default function SuperAdminStaffAccountsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {rejectTarget && (
+        <ModalOverlay onClose={closeReject}>
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+            <h2 className="text-lg font-semibold text-slate-900">Reject password reset request</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              The request from{' '}
+              <span className="font-medium text-slate-800">{rejectTarget.name || rejectTarget.email}</span> (
+              {roleLabel(rejectTarget.role)}) will be removed and their password will stay unchanged.
+            </p>
+
+            {rejectError && (
+              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {rejectError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-4">
+              <button
+                type="button"
+                onClick={closeReject}
+                disabled={rejecting}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleReject}
+                disabled={rejecting}
+                className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {rejecting ? 'Rejecting…' : 'Reject request'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
+
+      {accessTarget && (
+        <ModalOverlay onClose={closeAccessChange}>
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+            <h2 className="text-lg font-semibold text-slate-900">
+              {accessTarget.status === 'REVOKED' ? 'Restore portal access' : 'Revoke portal access'}
+            </h2>
+            {accessTarget.status === 'REVOKED' ? (
+              <p className="mt-2 text-sm text-slate-600">
+                <span className="font-medium text-slate-800">{accessTarget.name || accessTarget.email}</span> (
+                {roleLabel(accessTarget.role)}) will be able to sign in again with their existing
+                password.
+              </p>
+            ) : (
+              <p className="mt-2 text-sm text-slate-600">
+                <span className="font-medium text-slate-800">{accessTarget.name || accessTarget.email}</span> (
+                {roleLabel(accessTarget.role)}) will be signed out immediately and blocked from logging
+                in. Their clients and history are kept, and you can restore access later.
+              </p>
+            )}
+
+            {accessError && (
+              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {accessError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-4">
+              <button
+                type="button"
+                onClick={closeAccessChange}
+                disabled={accessSaving}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAccessChange}
+                disabled={accessSaving}
+                className={
+                  accessTarget.status === 'REVOKED'
+                    ? 'rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
+                    : 'rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50'
+                }
+              >
+                {accessSaving
+                  ? 'Saving…'
+                  : accessTarget.status === 'REVOKED'
+                    ? 'Restore access'
+                    : 'Revoke access'}
+              </button>
+            </div>
           </div>
         </ModalOverlay>
       )}

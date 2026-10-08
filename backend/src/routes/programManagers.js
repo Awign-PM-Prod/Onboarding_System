@@ -12,6 +12,7 @@ router.get('/', async (_req, res, next) => {
       .from('users')
       .select('id, name, email')
       .eq('role', 'PROGRAM_MANAGER')
+      .is('access_revoked_at', null)
       .order('name', { ascending: true });
     if (error) throw error;
     // Hide invited PMs until they finish set-password / name setup.

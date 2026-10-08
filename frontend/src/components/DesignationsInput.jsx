@@ -1,4 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { triggerCsvDownload } from '../lib/clientCsv';
+import {
+  buildDesignationTemplateCsv,
+  mergeDesignations,
+  parseDesignationCsvText
+} from '../lib/designationCsv';
 import { formatDesignationLabel } from '../lib/formatLabels';
 import {
   SKILL_LEVELS,
@@ -42,8 +48,10 @@ export default function DesignationsInput({ value = [], onChange }) {
   const [otherName, setOtherName] = useState('');
   const [otherSkill, setOtherSkill] = useState('SEMI_SKILLED');
   const [otherError, setOtherError] = useState('');
+  const [csvStatus, setCsvStatus] = useState(null);
   const rootRef = useRef(null);
   const otherInputRef = useRef(null);
+  const csvInputRef = useRef(null);
 
   const selected = useMemo(() => normalizeDesignationList(value), [value]);
 
@@ -137,6 +145,24 @@ export default function DesignationsInput({ value = [], onChange }) {
     setShowOtherInput(false);
   };
 
+  const onCsvSelected = async (e) => {
+    const file = e.target.files?.[0] ?? null;
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const { designations, warnings } = parseDesignationCsvText(await file.text());
+      const { designations: merged, added, updated } = mergeDesignations(selected, designations);
+      emit(merged);
+      setCsvStatus({
+        type: 'success',
+        message: `Imported ${designations.length} designation${designations.length === 1 ? '' : 's'} (${added} new, ${updated} updated).`,
+        warnings
+      });
+    } catch (err) {
+      setCsvStatus({ type: 'error', message: err.message || 'Could not read CSV.', warnings: [] });
+    }
+  };
+
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -187,6 +213,41 @@ export default function DesignationsInput({ value = [], onChange }) {
       <p className="mt-1 text-xs text-slate-500">
         Select designations and set each as Skilled, Semi-skilled, or Unskilled (used for wage floors).
       </p>
+
+      <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+        <input
+          ref={csvInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          onChange={onCsvSelected}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => csvInputRef.current?.click()}
+          className="rounded-md border border-indigo-200 bg-white px-2.5 py-1 font-semibold text-indigo-700 hover:bg-indigo-50"
+        >
+          Upload CSV
+        </button>
+        <button
+          type="button"
+          onClick={() => triggerCsvDownload('designations-template.csv', buildDesignationTemplateCsv())}
+          className="text-indigo-600 underline hover:text-indigo-800"
+        >
+          Download template
+        </button>
+        <span className="text-slate-500">Columns: designation, skill_level (optional)</span>
+      </div>
+      {csvStatus && (
+        <div className="mt-1 space-y-0.5 text-xs">
+          <p className={csvStatus.type === 'error' ? 'text-red-600' : 'text-emerald-700'}>
+            {csvStatus.message}
+          </p>
+          {csvStatus.warnings.map((w) => (
+            <p key={w} className="text-amber-700">{w}</p>
+          ))}
+        </div>
+      )}
 
       {open && (
         <div className="absolute z-30 mt-2 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">

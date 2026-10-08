@@ -2,6 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { formatContractPeriod } from '../lib/clientCsv';
+import { isClientActive, matchesClientStatusFilter } from '../lib/clientStatus';
+import ClientStatusBadge from '../components/ClientStatusBadge';
+import ClientStatusFilter from '../components/ClientStatusFilter';
+import GlobalSearch from '../components/GlobalSearch';
 
 const REMARK_BADGES = {
   PL_REJECTED: {
@@ -59,6 +63,7 @@ export default function PmClientsPage() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [sortDir, setSortDir] = useState('desc');
+  const [statusFilter, setStatusFilter] = useState('ALL');
 
   const load = async () => {
     setLoading(true);
@@ -79,6 +84,7 @@ export default function PmClientsPage() {
 
   const filtered = clients
     .filter((c) => {
+      if (!matchesClientStatusFilter(c, statusFilter)) return false;
       const q = search.trim().toLowerCase();
       if (!q) return true;
       return (
@@ -97,15 +103,19 @@ export default function PmClientsPage() {
           <p className="mt-1 text-sm text-slate-500">
             Clients where you are the Program Manager. Select one to open its workspace.
           </p>
+          <GlobalSearch className="mt-4" />
         </div>
-        <div className="w-full min-w-0 sm:w-64 sm:shrink-0">
-          <input
-            type="search"
-            placeholder="Search clients…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
+        <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
+          <div className="min-w-0 flex-1 sm:w-64 sm:flex-none">
+            <input
+              type="search"
+              placeholder="Filter this list…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+          <ClientStatusFilter value={statusFilter} onChange={setStatusFilter} />
         </div>
       </div>
 
@@ -127,7 +137,7 @@ export default function PmClientsPage() {
       {!loading && !error && filtered.length === 0 && (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
           <p className="font-medium text-slate-700">
-            {search ? 'No clients match your search.' : 'No assigned clients found.'}
+            {search || statusFilter !== 'ALL' ? 'No clients match your filters.' : 'No assigned clients found.'}
           </p>
         </div>
       )}
@@ -136,7 +146,7 @@ export default function PmClientsPage() {
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
             <h2 className="text-sm font-semibold text-slate-900">
-              {search
+              {search || statusFilter !== 'ALL'
                 ? `${filtered.length} result${filtered.length !== 1 ? 's' : ''}`
                 : `${clients.length} client${clients.length !== 1 ? 's' : ''}`}
             </h2>
@@ -160,6 +170,7 @@ export default function PmClientsPage() {
                       </span>
                     </button>
                   </th>
+                  <th className="px-4 py-2.5 text-left font-medium">Status</th>
                   <th className="px-4 py-2.5 text-left font-medium">Contract Code</th>
                   <th className="px-4 py-2.5 text-left font-medium">Contract Period</th>
                   <th className="px-4 py-2.5 text-left font-medium">Designations</th>
@@ -168,7 +179,10 @@ export default function PmClientsPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((c) => (
-                  <tr key={c.id} className="hover:bg-slate-50">
+                  <tr
+                    key={c.id}
+                    className={isClientActive(c) ? 'hover:bg-slate-50' : 'bg-slate-50/60 hover:bg-slate-100/60'}
+                  >
                     <td className="px-4 py-3">
                       <Link
                         to={`/pm-dashboard/client/${c.id}/dashboard`}
@@ -176,6 +190,9 @@ export default function PmClientsPage() {
                       >
                         {c.client_name}
                       </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <ClientStatusBadge active={isClientActive(c)} />
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-700">
                       {c.contract_code || '—'}

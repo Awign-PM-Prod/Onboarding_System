@@ -10,6 +10,7 @@ import {
   isPlRejectedReview
 } from '../lib/employeeStatusBadge';
 import { isNonComplianceClient } from '../lib/clientType';
+import { isClientActive } from '../lib/clientStatus';
 
 const LEAVE_CODES = ['EL', 'SL', 'CL', 'PL', 'ML', 'RH', 'CO'];
 const RECORDS_PREVIEW_COUNT = 5;
@@ -340,6 +341,7 @@ export default function PayrollClientDashboardHome() {
         plApprovedCount={plApprovedCount}
         plRejectedCount={plRejectedCount}
         insuranceApplicable={Boolean(client?.insurance_applicable)}
+        isActive={client ? isClientActive(client) : undefined}
         month={month}
         onMonthChange={setMonth}
       />

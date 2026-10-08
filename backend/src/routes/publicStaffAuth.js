@@ -14,7 +14,7 @@ async function findValidInvite(rawToken) {
   const tokenHash = hashToken(token);
   const { data: invite, error } = await supabaseAdmin
     .from('staff_account_invites')
-    .select('id, user_id, email, expires_at, consumed_at')
+    .select('id, user_id, email, expires_at, consumed_at, users:user_id ( access_revoked_at )')
     .eq('token_hash', tokenHash)
     .is('consumed_at', null)
     .maybeSingle();
@@ -22,8 +22,11 @@ async function findValidInvite(rawToken) {
   if (!invite) {
     return { error: 'This invite link is invalid or has already been used.' };
   }
+  if (invite.users?.access_revoked_at) {
+    return { error: 'This invite has been revoked. Contact Super Admin.' };
+  }
   if (new Date(invite.expires_at).getTime() < Date.now()) {
-    return { error: 'This invite link has expired. Ask Super Admin or Payroll Lead to send a new invite.' };
+    return { error: 'This invite link has expired. Ask Super Admin to resend the invite.' };
   }
   return { invite };
 }
@@ -110,10 +113,16 @@ router.post('/forgot-password', async (req, res, next) => {
 
     const { data: user, error: userErr } = await supabaseAdmin
       .from('users')
-      .select('id, role')
+      .select('id, role, access_revoked_at')
       .eq('email', email)
       .maybeSingle();
     if (userErr) throw userErr;
+
+    if (user && STAFF_ROLES.includes(user.role) && user.access_revoked_at) {
+      return res.status(403).json({
+        error: 'Your access to the portal has been revoked, so a password reset cannot be requested. Contact Super Admin.'
+      });
+    }
 
     if (user && STAFF_ROLES.includes(user.role)) {
       const { data: existing, error: existingErr } = await supabaseAdmin

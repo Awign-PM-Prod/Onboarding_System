@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { api } from '../../lib/api';
+import DatePicker from '../DatePicker';
 import { formatHolidayDisplayDate, normalizeHolidayName, parseHolidayCalendarCsvText, weekdayFromIsoDate } from '../../lib/holidayCalendarCsv';
 import { INDIAN_STATES } from '../../lib/indianStates';
 
@@ -589,11 +590,11 @@ export default function ClientHolidaysInput({
                         const abs = indexOfRow(h);
                         return (
                           <div key={abs < 0 ? `${h.state}-${h.holiday_date}` : abs} className="flex flex-wrap items-center gap-2">
-                            <input
-                              type="date"
+                            <DatePicker
                               value={h.holiday_date ?? ''}
-                              onChange={(e) => updateRow(abs, { holiday_date: e.target.value })}
-                              className="input w-full min-w-0 sm:w-auto sm:shrink-0"
+                              onChange={(next) => updateRow(abs, { holiday_date: next })}
+                              aria-label="Holiday date"
+                              className="input w-full min-w-0 sm:w-[10.5rem] sm:shrink-0"
                             />
                             <input
                               type="text"
@@ -629,11 +630,11 @@ export default function ClientHolidaysInput({
                       })}
                       {draftByState[group.state] && (
                         <div className="flex flex-wrap items-center gap-2">
-                          <input
-                            type="date"
+                          <DatePicker
                             value={draftByState[group.state].holiday_date ?? ''}
-                            onChange={(e) => commitDraft(group.state, { holiday_date: e.target.value })}
-                            className="input w-full min-w-0 sm:w-auto sm:shrink-0"
+                            onChange={(next) => commitDraft(group.state, { holiday_date: next })}
+                            aria-label="Holiday date"
+                            className="input w-full min-w-0 sm:w-[10.5rem] sm:shrink-0"
                           />
                           <input
                             type="text"

@@ -425,7 +425,8 @@ export async function runRemainingTaskDigest({ userIds, remarks } = {}) {
   let query = supabaseAdmin
     .from('users')
     .select('id, name, email, role')
-    .in('role', ['PROGRAM_MANAGER', 'PAYROLL_LEAD']);
+    .in('role', ['PROGRAM_MANAGER', 'PAYROLL_LEAD'])
+    .is('access_revoked_at', null);
 
   const filterIds = Array.isArray(userIds)
     ? [...new Set(userIds.map((id) => String(id || '').trim()).filter(Boolean))]

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import DashboardStatCard, { DASHBOARD_STAT_GRID_CLASS, DASHBOARD_STAT_ICONS } from '../components/DashboardStatCard';
 import SuperAdminDashboardCharts from '../components/SuperAdminDashboardCharts';
+import GlobalSearch from '../components/GlobalSearch';
 import SuperAdminDateRangeFilters, { FilterSelect } from '../components/SuperAdminDateRangeFilters';
 import { resolveDashboardDateRange } from '../lib/superAdminDateRange';
 
@@ -187,6 +188,7 @@ export default function SuperAdminDashboardHome() {
         <p className="mt-1 text-sm text-slate-500">
           Org-wide analytics, compliance, and client operations. Charts refresh automatically.
         </p>
+        <GlobalSearch className="mt-4" />
       </div>
 
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-start">

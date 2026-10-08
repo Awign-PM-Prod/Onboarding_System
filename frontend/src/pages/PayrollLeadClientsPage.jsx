@@ -6,6 +6,11 @@ import { ACTION_BTN_PRIMARY, ACTION_BTN_SECONDARY } from '../lib/actionButtonSty
 import { formatContractPeriod } from '../lib/clientCsv';
 import { CLIENT_TYPE_LABELS, clientTypeOrDefault } from '../lib/clientType';
 import ClientCsvImportModal from '../components/ClientCsvImportModal';
+import ModalOverlay from '../components/ModalOverlay';
+import ClientStatusBadge from '../components/ClientStatusBadge';
+import ClientStatusFilter from '../components/ClientStatusFilter';
+import GlobalSearch from '../components/GlobalSearch';
+import { isClientActive, matchesClientStatusFilter } from '../lib/clientStatus';
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -63,9 +68,34 @@ function compareInsurance(a, b, dir) {
   return compareByName(a, b);
 }
 
+const ROW_BTN_BASE =
+  'inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md border px-3 text-xs font-medium shadow-sm disabled:opacity-60';
+const ROW_BTN_NEUTRAL = `${ROW_BTN_BASE} border-slate-300 bg-white text-slate-700 hover:bg-slate-50`;
+const ROW_BTN_DANGER = `${ROW_BTN_BASE} border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100`;
+const ROW_BTN_SUCCESS = `${ROW_BTN_BASE} border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100`;
+
+function PencilIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4"
+      aria-hidden
+    >
+      <path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+      <path d="M19.5 7.125L16.862 4.487" />
+    </svg>
+  );
+}
+
 function SortableColumnHeader({ label, active, sortDir, onClick, ariaLabel }) {
   return (
-    <th className="px-4 py-2.5 text-left font-medium">
+    <th className="px-3 py-2.5 text-left font-medium">
       <button
         type="button"
         onClick={onClick}
@@ -94,7 +124,47 @@ export default function PayrollLeadClientsPage() {
   const [exportingId, setExportingId] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [downloadingMaster, setDownloadingMaster] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [statusTarget, setStatusTarget] = useState(null);
+  const [statusSaving, setStatusSaving] = useState(false);
+  const [statusError, setStatusError] = useState('');
+  const [success, setSuccess] = useState('');
   const isSuperAdminWorkspace = paths.basePath === '/super-admin';
+
+  const openStatusChange = (client) => {
+    setStatusTarget(client);
+    setStatusError('');
+    setSuccess('');
+  };
+
+  const closeStatusChange = () => {
+    if (statusSaving) return;
+    setStatusTarget(null);
+    setStatusError('');
+  };
+
+  const handleStatusChange = async () => {
+    if (!statusTarget) return;
+    const nextActive = !isClientActive(statusTarget);
+    setStatusSaving(true);
+    setStatusError('');
+    try {
+      const updated = await api.setClientActive(statusTarget.id, nextActive);
+      setClients((prev) =>
+        prev.map((c) => (c.id === statusTarget.id ? { ...c, ...updated } : c))
+      );
+      setSuccess(
+        `${statusTarget.client_name || statusTarget.contract_code} marked as ${
+          nextActive ? 'Active' : 'Inactive'
+        }.`
+      );
+      setStatusTarget(null);
+    } catch (err) {
+      setStatusError(err.message || 'Could not update client status.');
+    } finally {
+      setStatusSaving(false);
+    }
+  };
 
   const handleDownloadMaster = async () => {
     setDownloadingMaster(true);
@@ -154,6 +224,7 @@ export default function PayrollLeadClientsPage() {
 
   const filtered = clients
     .filter((c) => {
+      if (!matchesClientStatusFilter(c, statusFilter)) return false;
       const q = search.trim().toLowerCase();
       if (!q) return true;
       return (
@@ -172,7 +243,7 @@ export default function PayrollLeadClientsPage() {
     });
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+    <main className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
@@ -183,17 +254,19 @@ export default function PayrollLeadClientsPage() {
               ? 'Org-wide client workspace — create, edit, operate any client. Download a master employee report.'
               : 'Select a client to open its workspace, or add a new client.'}
           </p>
+          <GlobalSearch className="mt-4" />
         </div>
         <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
           <div className="min-w-0 flex-1 sm:w-64 sm:flex-none">
             <input
               type="search"
-              placeholder="Search clients…"
+              placeholder="Filter this list…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
+          <ClientStatusFilter value={statusFilter} onChange={setStatusFilter} />
           {isSuperAdminWorkspace && (
             <button
               type="button"
@@ -241,12 +314,18 @@ export default function PayrollLeadClientsPage() {
         </div>
       )}
 
+      {success && !loading && (
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+          {success}
+        </div>
+      )}
+
       {!loading && !error && filtered.length === 0 && (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
           <p className="font-medium text-slate-700">
-            {search ? 'No clients match your search.' : 'No clients yet.'}
+            {search || statusFilter !== 'ALL' ? 'No clients match your filters.' : 'No clients yet.'}
           </p>
-          {!search && (
+          {!search && statusFilter === 'ALL' && (
             <Link
               to={paths.clientNew}
               className="mt-3 inline-flex text-sm font-medium text-indigo-700 hover:underline"
@@ -261,7 +340,7 @@ export default function PayrollLeadClientsPage() {
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
             <h2 className="text-sm font-semibold text-slate-900">
-              {search
+              {search || statusFilter !== 'ALL'
                 ? `${filtered.length} result${filtered.length !== 1 ? 's' : ''}`
                 : `${clients.length} client${clients.length !== 1 ? 's' : ''}`}
             </h2>
@@ -270,12 +349,13 @@ export default function PayrollLeadClientsPage() {
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
-                  <th className="px-4 py-2.5 text-left font-medium">Client</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Entity</th>
-                  <th className="px-4 py-2.5 text-left font-medium">State</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Type</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Contract Code</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Program Manager</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Client</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Status</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Entity</th>
+                  <th className="px-3 py-2.5 text-left font-medium">State</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Type</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Contract Code</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Program Manager</th>
                   <SortableColumnHeader
                     label="Contract Period"
                     active={sortKey === 'contract_period'}
@@ -302,13 +382,16 @@ export default function PayrollLeadClientsPage() {
                         : 'unsorted'
                     }`}
                   />
-                  <th className="px-4 py-2.5 text-right font-medium">Actions</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((c) => (
-                  <tr key={c.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3">
+                  <tr
+                    key={c.id}
+                    className={isClientActive(c) ? 'hover:bg-slate-50' : 'bg-slate-50/60 hover:bg-slate-100/60'}
+                  >
+                    <td className="px-3 py-3">
                       <Link
                         to={paths.client(c.id, 'dashboard')}
                         className="font-medium text-indigo-700 hover:underline"
@@ -326,9 +409,12 @@ export default function PayrollLeadClientsPage() {
                         </p>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">{c.entity || '—'}</td>
-                    <td className="px-4 py-3 text-slate-700">{c.state || '—'}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
+                      <ClientStatusBadge active={isClientActive(c)} />
+                    </td>
+                    <td className="px-3 py-3 text-slate-700">{c.entity || '—'}</td>
+                    <td className="px-3 py-3 text-slate-700">{c.state || '—'}</td>
+                    <td className="px-3 py-3">
                       {clientTypeOrDefault(c.client_type) === 'NON_COMPLIANCE' ? (
                         <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-500/20">
                           {CLIENT_TYPE_LABELS.NON_COMPLIANCE}
@@ -339,18 +425,18 @@ export default function PayrollLeadClientsPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-700">
+                    <td className="px-3 py-3 font-mono text-xs text-slate-700">
                       {c.contract_code || '—'}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">{c.program_manager_name || '—'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-slate-500">
+                    <td className="px-3 py-3 text-slate-700">{c.program_manager_name || '—'}</td>
+                    <td className="px-3 py-3 whitespace-nowrap text-slate-500">
                       {formatContractPeriod(
                         c.contract_start_date,
                         c.contract_end_date,
                         c.open_ended_contract
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       {c.insurance_applicable ? (
                         <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
                           {c.insurance_name || 'Yes'}
@@ -362,22 +448,33 @@ export default function PayrollLeadClientsPage() {
                         <span className="text-xs text-slate-400">None</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-3">
+                    <td className="px-3 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
                         <button
                           type="button"
                           disabled={exportingId === c.id}
                           onClick={() => exportClient(c)}
-                          className="text-sm font-medium text-slate-600 hover:text-indigo-700 hover:underline disabled:opacity-60"
+                          className={ROW_BTN_NEUTRAL}
                         >
                           {exportingId === c.id ? 'Exporting…' : 'Export'}
                         </button>
                         <Link
                           to={paths.clientEdit(c.id)}
-                          className="text-sm font-medium text-slate-600 hover:text-indigo-700 hover:underline"
+                          title="Edit client"
+                          aria-label={`Edit ${c.client_name}`}
+                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 shadow-sm hover:bg-slate-50 hover:text-indigo-700"
                         >
-                          Edit
+                          <PencilIcon />
                         </Link>
+                        {isSuperAdminWorkspace && (
+                          <button
+                            type="button"
+                            onClick={() => openStatusChange(c)}
+                            className={isClientActive(c) ? ROW_BTN_DANGER : ROW_BTN_SUCCESS}
+                          >
+                            {isClientActive(c) ? 'Mark inactive' : 'Mark active'}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -396,6 +493,60 @@ export default function PayrollLeadClientsPage() {
             load();
           }}
         />
+      )}
+
+      {statusTarget && (
+        <ModalOverlay onClose={closeStatusChange}>
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+            <h2 className="text-lg font-semibold text-slate-900">
+              {isClientActive(statusTarget) ? 'Mark client as Inactive?' : 'Mark client as Active?'}
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Are you sure you want to mark{' '}
+              <span className="font-medium text-slate-800">
+                {statusTarget.client_name || statusTarget.contract_code}
+              </span>
+              {statusTarget.client_name && statusTarget.contract_code
+                ? ` (${statusTarget.contract_code})`
+                : ''}{' '}
+              as{' '}
+              {isClientActive(statusTarget) ? 'Inactive' : 'Active'}? You can change this again later.
+            </p>
+
+            {statusError && (
+              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {statusError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-4">
+              <button
+                type="button"
+                onClick={closeStatusChange}
+                disabled={statusSaving}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleStatusChange}
+                disabled={statusSaving}
+                className={
+                  isClientActive(statusTarget)
+                    ? 'rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50'
+                    : 'rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
+                }
+              >
+                {statusSaving
+                  ? 'Saving…'
+                  : isClientActive(statusTarget)
+                    ? 'Mark inactive'
+                    : 'Mark active'}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
       )}
     </main>
   );

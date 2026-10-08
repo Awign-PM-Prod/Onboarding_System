@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import DashboardStatCard, { DASHBOARD_STAT_GRID_CLASS, DASHBOARD_STAT_ICONS } from '../components/DashboardStatCard';
 import SuperAdminDateRangeFilters, { FilterSelect } from '../components/SuperAdminDateRangeFilters';
 import RoleDashboardCharts from '../components/RoleDashboardCharts';
+import GlobalSearch from '../components/GlobalSearch';
 import { resolveDashboardDateRange } from '../lib/superAdminDateRange';
 
 const STAT_ICONS = DASHBOARD_STAT_ICONS;
@@ -113,6 +114,7 @@ export default function PmDashboardHome() {
         <p className="mt-1 text-sm text-slate-500">
           Role analytics for review queue, corrections, and joining follow-ups across your assigned clients.
         </p>
+        <GlobalSearch className="mt-4" />
       </div>
 
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-start">

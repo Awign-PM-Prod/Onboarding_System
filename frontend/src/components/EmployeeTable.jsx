@@ -30,6 +30,18 @@ function IconEye({ className }) {
   );
 }
 
+function IconPencil({ className }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" aria-hidden>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
+      />
+    </svg>
+  );
+}
+
 export default function EmployeeTable({
   rows,
   selectedIds,
@@ -68,6 +80,8 @@ export default function EmployeeTable({
   showRemarksColumn = false,
   remarksColumnLabel = 'Remarks',
   remarksForRow = null,
+  canEditMobileForRow = null,
+  onEditMobile = null,
 }) {
   const joiningStatusLabel = (row) => {
     const status = String(row.joining_status ?? '').trim().toUpperCase();
@@ -250,7 +264,22 @@ export default function EmployeeTable({
                 >
                   {r.emp_code || '—'}
                 </td>
-                <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{r.mobile}</td>
+                <td className="whitespace-nowrap border-b border-slate-100 px-4 py-3 text-slate-700">
+                  <span className="inline-flex items-center gap-1.5">
+                    {r.mobile}
+                    {onEditMobile && canEditMobileForRow?.(r) ? (
+                      <button
+                        type="button"
+                        onClick={() => onEditMobile(r)}
+                        className="rounded p-1 text-slate-400 hover:bg-indigo-50 hover:text-indigo-700"
+                        title="Correct mobile number"
+                        aria-label={`Correct mobile number for ${r.name}`}
+                      >
+                        <IconPencil className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
+                  </span>
+                </td>
                 <td className="border-b border-slate-100 px-4 py-3 text-slate-700">{r.email}</td>
                 {showJobColumns && (
                   <td className="border-b border-slate-100 px-4 py-3 text-slate-700">

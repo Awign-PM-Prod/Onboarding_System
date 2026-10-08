@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
 import { ACTION_BTN_SECONDARY } from '../lib/actionButtonStyles';
+import DatePicker, { MonthPicker } from './DatePicker';
 import ModalOverlay from './ModalOverlay';
 import {
   LEGEND_LABELS,
@@ -1517,14 +1518,13 @@ export default function AttendancePanel({ clientId, role, projectName }) {
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-sm text-slate-600">
               Attendance Month
-              <input
-                type="month"
-                className="ml-2 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              <MonthPicker
+                className="ml-2 w-[9rem] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800"
                 value={month}
-                onChange={(e) => {
+                onChange={(next) => {
                   setUploadSkipWarning(null);
                   setUploadSkipModalOpen(false);
-                  setMonth(e.target.value);
+                  setMonth(next);
                 }}
               />
             </label>
@@ -1975,12 +1975,13 @@ export default function AttendancePanel({ clientId, role, projectName }) {
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">{row.doj || '—'}</td>
                       <td className="whitespace-nowrap border-b border-slate-100 px-2 py-1.5 tabular-nums text-slate-700">
                         {canEdit ? (
-                          <input
-                            type="date"
+                          <DatePicker
                             value={toDateKey(row.lwd) || ''}
                             min={gridDayDates[0] || undefined}
                             max={gridDayDates[gridDayDates.length - 1] || undefined}
-                            onChange={(e) => onChangeLwd(row.id, e.target.value)}
+                            onChange={(next) => onChangeLwd(row.id, next)}
+                            placeholder="Set LWD"
+                            aria-label={`Last working day for ${row.employee_name_snapshot || 'employee'}`}
                             className="w-[9.5rem] rounded border border-slate-200 bg-white px-1.5 py-1 text-xs tabular-nums text-slate-800"
                           />
                         ) : (

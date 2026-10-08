@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useWorkspacePaths } from '../context/WorkspaceBasePath';
+import DatePicker from '../components/DatePicker';
 import DesignationsInput from '../components/DesignationsInput';
 import ProgramManagersMultiSelect from '../components/ProgramManagersMultiSelect';
 import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyConfigFields';
@@ -603,19 +604,21 @@ export default function ClientForm() {
             </Field>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label="Contract Start Date" error={fieldErrors.contract_start_date}>
-                <input
-                  type="date"
+                <DatePicker
                   value={form.contract_start_date}
-                  onChange={e => set({ contract_start_date: e.target.value })}
+                  onChange={next => set({ contract_start_date: next })}
+                  max={form.contract_end_date || undefined}
+                  aria-label="Contract start date"
                   className="input"
                 />
               </Field>
               <Field label="Contract End Date" error={fieldErrors.contract_end_date}>
-                <input
-                  type="date"
+                <DatePicker
                   value={form.contract_end_date}
-                  onChange={e => set({ contract_end_date: e.target.value })}
+                  onChange={next => set({ contract_end_date: next })}
+                  min={form.contract_start_date || undefined}
                   disabled={form.open_ended_contract}
+                  aria-label="Contract end date"
                   className="input disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                 />
                 {form.open_ended_contract && (

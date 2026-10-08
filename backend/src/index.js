@@ -19,6 +19,7 @@ import regionZonesRouter from './routes/regionZones.js';
 import holidayCalendarsRouter from './routes/holidayCalendars.js';
 import leaveConfigsRouter from './routes/leaveConfigs.js';
 import attendanceRouter from './routes/attendance.js';
+import searchRouter from './routes/search.js';
 import { startSupabaseKeepAlive } from './jobs/supabaseKeepAlive.js';
 
 const app = express();
@@ -61,6 +62,7 @@ app.use('/api/salary-minimums', requireAuth, salaryMinimumsRouter);
 app.use('/api/region-zones', requireAuth, regionZonesRouter);
 app.use('/api/holiday-calendars', requireAuth, holidayCalendarsRouter);
 app.use('/api/leave-configs', requireAuth, leaveConfigsRouter);
+app.use('/api/search', requireAuth, searchRouter);
 
 app.use((err, _req, res, _next) => {
   console.error('[api error]', err);

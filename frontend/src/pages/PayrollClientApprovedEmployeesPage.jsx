@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import EmployeeFormResponseModal from '../components/EmployeeFormResponseModal';
+import SearchEmployeeFilterBanner from '../components/SearchEmployeeFilterBanner';
+import { useSearchEmployeeFilter } from '../hooks/useSearchEmployeeFilter';
 import {
   employeeStatusBadgeClass,
   resolveEmployeeStatusLabel,
@@ -49,6 +51,11 @@ export default function PayrollClientApprovedEmployeesPage() {
   const [responseModalError, setResponseModalError] = useState('');
   const [responseDecisionLoading, setResponseDecisionLoading] = useState(false);
   const [toast, setToast] = useState(null);
+  const {
+    employeeId: searchEmployeeId,
+    clear: clearSearchEmployee,
+    filterRows: filterSearchEmployee
+  } = useSearchEmployeeFilter();
 
   useEffect(() => {
     let active = true;
@@ -71,7 +78,7 @@ export default function PayrollClientApprovedEmployeesPage() {
   }, [id]);
 
   const client = useMemo(() => clients.find((c) => c.id === id) || null, [clients, id]);
-  const awaitingPlRows = useMemo(
+  const allAwaitingPlRows = useMemo(
     () =>
       employees.filter(
         (row) =>
@@ -79,6 +86,10 @@ export default function PayrollClientApprovedEmployeesPage() {
           String(row.form_payroll_review_status || '').trim() === 'PENDING_PAYROLL_LEAD'
       ),
     [employees]
+  );
+  const awaitingPlRows = useMemo(
+    () => filterSearchEmployee(allAwaitingPlRows),
+    [allAwaitingPlRows, filterSearchEmployee]
   );
 
   const closeResponseModal = (opts = {}) => {
@@ -164,6 +175,14 @@ export default function PayrollClientApprovedEmployeesPage() {
           </p>
         </div>
       </div>
+
+      {searchEmployeeId && !loading && !error && (
+        <SearchEmployeeFilterBanner
+          employeeName={awaitingPlRows[0]?.name}
+          found={awaitingPlRows.length > 0}
+          onClear={clearSearchEmployee}
+        />
+      )}
 
       {loading && (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500">

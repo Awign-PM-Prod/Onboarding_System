@@ -3,6 +3,7 @@ import { formatDesignationLabel } from '../lib/formatLabels';
 import { INDIAN_STATES } from '../lib/indianStates';
 import { displayNumericValue } from '../lib/numericInput';
 import { api } from '../lib/api';
+import DatePicker from './DatePicker';
 import ModalOverlay from './ModalOverlay';
 import {
   CUSHION_TYPE_LABELS,
@@ -271,11 +272,11 @@ export default function RoleDetailsModal({
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Expected Date of Joining" error={fieldErrors.date_of_joining}>
-              <input
+              <DatePicker
                 className="input"
-                type="date"
                 value={form.date_of_joining}
-                onChange={(e) => set({ date_of_joining: e.target.value })}
+                onChange={(next) => set({ date_of_joining: next })}
+                aria-label="Expected date of joining"
               />
             </Field>
             <Field label="State" error={fieldErrors.state}>

@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { createAuthClient, supabaseAdmin } from '../supabase.js';
+import { ACCESS_REVOKED_MESSAGE } from '../middleware/requireAuth.js';
 
 const router = Router();
+
+function isBannedError(error) {
+  return Boolean(error) && (error.code === 'user_banned' || /banned/i.test(error.message || ''));
+}
 
 function sessionPayload(session, user) {
   return {
@@ -29,6 +34,9 @@ router.post('/login', async (req, res, next) => {
     // Isolated client so the user session never sticks on supabaseAdmin.
     const auth = createAuthClient();
     const { data, error } = await auth.auth.signInWithPassword({ email, password });
+    if (isBannedError(error)) {
+      return res.status(403).json({ error: ACCESS_REVOKED_MESSAGE, code: 'ACCESS_REVOKED' });
+    }
     if (error || !data?.session || !data?.user) {
       return res.status(401).json({ error: error?.message || 'Invalid email or password.' });
     }
@@ -52,6 +60,9 @@ router.post('/refresh', async (req, res, next) => {
     const { data, error } = await auth.auth.refreshSession({
       refresh_token: refreshToken,
     });
+    if (isBannedError(error)) {
+      return res.status(401).json({ error: ACCESS_REVOKED_MESSAGE, code: 'ACCESS_REVOKED' });
+    }
     if (error || !data?.session || !data?.user) {
       return res.status(401).json({ error: error?.message || 'Session expired. Please sign in again.' });
     }

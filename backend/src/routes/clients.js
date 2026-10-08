@@ -702,7 +702,8 @@ router.post('/import', upload.single('file'), async (req, res, next) => {
       const { data: pms, error: pmErr } = await supabaseAdmin
         .from('users')
         .select('id, email, role')
-        .eq('role', 'PROGRAM_MANAGER');
+        .eq('role', 'PROGRAM_MANAGER')
+        .is('access_revoked_at', null);
       if (pmErr) throw pmErr;
       const pending = await getPendingInviteUserIdSet((pms ?? []).map((pm) => pm.id));
       for (const pm of pms ?? []) {
@@ -1184,6 +1185,66 @@ router.patch('/:id/program-manager', async (req, res, next) => {
       }
     });
     res.json(full);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/clients/:id/status — Super Admin only. Body: { is_active: boolean }
+router.patch('/:id/status', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const user = await loadUserRole(req.user.id);
+    if (!user || !isSuperAdminRole(user.role)) {
+      return res.status(403).json({ error: 'Forbidden: requires role SUPER_ADMIN' });
+    }
+    req.user.role = user.role;
+    req.user.name = user.name ?? null;
+
+    if (typeof req.body?.is_active !== 'boolean') {
+      return res.status(400).json({
+        error: 'Validation failed',
+        details: { is_active: 'must be boolean' }
+      });
+    }
+    const isActive = req.body.is_active;
+
+    const { data: existing, error: loadErr } = await supabaseAdmin
+      .from('clients')
+      .select('id, client_name, contract_code, is_active')
+      .eq('id', id)
+      .maybeSingle();
+    if (loadErr) throw loadErr;
+    if (!existing) return res.status(404).json({ error: 'Client not found' });
+    if (existing.is_active === isActive) {
+      return res.status(409).json({
+        error: isActive ? 'Client is already active.' : 'Client is already inactive.'
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from('clients')
+      .update({
+        is_active: isActive,
+        status_changed_at: nowIso,
+        status_changed_by: req.user.id
+      })
+      .eq('id', id)
+      .select('id, is_active, status_changed_at, status_changed_by')
+      .single();
+    if (updErr) throw updErr;
+
+    const label = existing.client_name || existing.contract_code || id;
+    await logOrgActivityFromReq(req, {
+      action: isActive ? 'CLIENT_ACTIVATED' : 'CLIENT_DEACTIVATED',
+      entityType: 'client',
+      entityId: id,
+      clientId: id,
+      summary: `Marked client ${label} as ${isActive ? 'Active' : 'Inactive'}`
+    });
+
+    res.json(updated);
   } catch (err) {
     next(err);
   }

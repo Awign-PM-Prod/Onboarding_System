@@ -17,7 +17,7 @@ import {
   buildPasswordResetEmail,
   filterUsersWithCompletedSetup
 } from '../utils/staffInvite.js';
-import { createStaffInviteUser } from '../utils/createStaffInviteUser.js';
+import { createStaffInviteUser, resendStaffInvite } from '../utils/createStaffInviteUser.js';
 import { fetchAllRowsByIds, fetchDashboardEmployees } from '../utils/supabasePaginate.js';
 import { isNonComplianceClient } from '../utils/clientType.js';
 import { unlockExpiresAtFromNow } from '../utils/unlockTtl.js';
@@ -798,28 +798,254 @@ router.put('/region-zones', async (req, res, next) => {
   }
 });
 
+const STAFF_ROLES = ['PROGRAM_MANAGER', 'PAYROLL_LEAD'];
+
 async function listPmAndPlUsers() {
   const { data, error } = await supabaseAdmin
     .from('users')
     .select('id, name, email, role')
-    .in('role', ['PROGRAM_MANAGER', 'PAYROLL_LEAD']);
+    .in('role', STAFF_ROLES)
+    .is('access_revoked_at', null);
   if (error) throw error;
 
   const ready = await filterUsersWithCompletedSetup(data ?? []);
+  return sortStaffUsers(ready);
+}
 
+function sortStaffUsers(users) {
   const roleOrder = { PROGRAM_MANAGER: 0, PAYROLL_LEAD: 1 };
-  return ready.slice().sort((a, b) => {
+  return users.slice().sort((a, b) => {
     const ro = (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9);
     if (ro !== 0) return ro;
     return String(a.name || '').localeCompare(String(b.name || ''));
   });
 }
 
-// GET /api/super-admin/staff-users
+/** Latest invite per user, with who sent it. */
+async function fetchLatestInvitesByUserId(userIds) {
+  const byUser = new Map();
+  if (!userIds.length) return byUser;
+
+  const { data, error } = await supabaseAdmin
+    .from('staff_account_invites')
+    .select('user_id, created_at, expires_at, consumed_at, inviter:invited_by ( id, name, email, role )')
+    .in('user_id', userIds)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+
+  for (const row of data ?? []) {
+    if (!byUser.has(row.user_id)) byUser.set(row.user_id, row);
+  }
+  return byUser;
+}
+
+function staffStatus(user, invite, nowMs) {
+  if (user.access_revoked_at) return 'REVOKED';
+  if (invite && !invite.consumed_at) {
+    return new Date(invite.expires_at).getTime() < nowMs ? 'INVITE_EXPIRED' : 'INVITE_PENDING';
+  }
+  return 'ACTIVE';
+}
+
+async function loadStaffUserForAccessChange(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('id, name, email, role, access_revoked_at')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// GET /api/super-admin/staff-users — all PMs/PLs incl. pending invites and revoked accounts
 router.get('/staff-users', async (_req, res, next) => {
   try {
-    res.json(await listPmAndPlUsers());
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .select('id, name, email, role, created_at, access_revoked_at')
+      .in('role', STAFF_ROLES);
+    if (error) throw error;
+
+    const users = data ?? [];
+    const invites = await fetchLatestInvitesByUserId(users.map((u) => u.id));
+    const nowMs = Date.now();
+
+    const rows = users.map((u) => {
+      const invite = invites.get(u.id) ?? null;
+      const inviter = invite?.inviter ?? null;
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        created_at: u.created_at,
+        status: staffStatus(u, invite, nowMs),
+        access_revoked_at: u.access_revoked_at,
+        invited_at: invite?.created_at ?? null,
+        invited_by: inviter
+          ? { id: inviter.id, name: inviter.name, email: inviter.email, role: inviter.role }
+          : null
+      };
+    });
+
+    res.json(sortStaffUsers(rows));
   } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/users/:userId/revoke-access
+router.post('/users/:userId/revoke-access', async (req, res, next) => {
+  try {
+    const userId = String(req.params.userId ?? '').trim();
+    const profile = await loadStaffUserForAccessChange(userId);
+    if (!profile) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    if (!STAFF_ROLES.includes(profile.role)) {
+      return res.status(403).json({
+        error: 'Access can only be revoked for Program Managers and Payroll Leads.'
+      });
+    }
+    if (profile.access_revoked_at) {
+      return res.status(409).json({ error: 'Access is already revoked for this user.' });
+    }
+
+    // Ban blocks new sign-ins and refresh-token use; requireAuth blocks live access tokens.
+    const { error: banErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      ban_duration: '876000h'
+    });
+    if (banErr) {
+      return res.status(400).json({ error: banErr.message || 'Could not revoke access.' });
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error: updErr } = await supabaseAdmin
+      .from('users')
+      .update({ access_revoked_at: nowIso, access_revoked_by: req.user?.id ?? null })
+      .eq('id', userId);
+    if (updErr) {
+      await supabaseAdmin.auth.admin.updateUserById(userId, { ban_duration: 'none' });
+      throw updErr;
+    }
+
+    await supabaseAdmin
+      .from('password_reset_requests')
+      .update({ status: 'CANCELLED' })
+      .eq('user_id', userId)
+      .eq('status', 'PENDING');
+
+    await logOrgActivityFromReq(req, {
+      action: 'STAFF_ACCESS_REVOKED',
+      entityType: 'users',
+      entityId: userId,
+      summary: `Revoked portal access for ${profile.name || profile.email} (${profile.role})`,
+      metadata: {
+        target_user_id: userId,
+        target_email: profile.email,
+        target_role: profile.role
+      }
+    });
+
+    res.json({ ok: true, access_revoked_at: nowIso });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/users/:userId/restore-access
+router.post('/users/:userId/restore-access', async (req, res, next) => {
+  try {
+    const userId = String(req.params.userId ?? '').trim();
+    const profile = await loadStaffUserForAccessChange(userId);
+    if (!profile) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    if (!STAFF_ROLES.includes(profile.role)) {
+      return res.status(403).json({
+        error: 'Access can only be restored for Program Managers and Payroll Leads.'
+      });
+    }
+    if (!profile.access_revoked_at) {
+      return res.status(409).json({ error: 'This user already has access.' });
+    }
+
+    const { error: unbanErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      ban_duration: 'none'
+    });
+    if (unbanErr) {
+      return res.status(400).json({ error: unbanErr.message || 'Could not restore access.' });
+    }
+
+    const { error: updErr } = await supabaseAdmin
+      .from('users')
+      .update({ access_revoked_at: null, access_revoked_by: null })
+      .eq('id', userId);
+    if (updErr) throw updErr;
+
+    await logOrgActivityFromReq(req, {
+      action: 'STAFF_ACCESS_RESTORED',
+      entityType: 'users',
+      entityId: userId,
+      summary: `Restored portal access for ${profile.name || profile.email} (${profile.role})`,
+      metadata: {
+        target_user_id: userId,
+        target_email: profile.email,
+        target_role: profile.role
+      }
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/users/:userId/resend-invite — new link + 7-day expiry for unfinished setup
+router.post('/users/:userId/resend-invite', async (req, res, next) => {
+  try {
+    const userId = String(req.params.userId ?? '').trim();
+    const profile = await loadStaffUserForAccessChange(userId);
+    if (!profile) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    if (!STAFF_ROLES.includes(profile.role)) {
+      return res.status(403).json({
+        error: 'Invites can only be resent to Program Managers and Payroll Leads.'
+      });
+    }
+    if (profile.access_revoked_at) {
+      return res.status(409).json({
+        error: 'Access is revoked for this user. Restore access before resending the invite.'
+      });
+    }
+
+    const roleLabel = profile.role === 'PAYROLL_LEAD' ? 'Payroll Lead' : 'Program Manager';
+    const result = await resendStaffInvite({
+      user: profile,
+      invitedBy: req.user?.id ?? null,
+      roleLabel
+    });
+
+    await logOrgActivityFromReq(req, {
+      action: 'STAFF_INVITE_RESENT',
+      entityType: 'users',
+      entityId: userId,
+      summary: `Resent ${roleLabel} invite to ${profile.email}`,
+      metadata: {
+        target_user_id: userId,
+        target_email: profile.email,
+        target_role: profile.role,
+        invite_email_sent: result.invite_email_sent,
+        expires_at: result.expires_at
+      }
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    if (err?.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     next(err);
   }
 });
@@ -857,8 +1083,10 @@ router.get('/digest-recipients', async (_req, res, next) => {
 router.get('/password-reset-requests', async (req, res, next) => {
   try {
     const status = String(req.query?.status ?? 'PENDING').trim().toUpperCase() || 'PENDING';
-    if (!['PENDING', 'FULFILLED', 'CANCELLED'].includes(status)) {
-      return res.status(400).json({ error: 'status must be PENDING, FULFILLED, or CANCELLED.' });
+    if (!['PENDING', 'FULFILLED', 'CANCELLED', 'REJECTED'].includes(status)) {
+      return res
+        .status(400)
+        .json({ error: 'status must be PENDING, FULFILLED, CANCELLED, or REJECTED.' });
     }
 
     const { data, error } = await supabaseAdmin
@@ -870,28 +1098,81 @@ router.get('/password-reset-requests', async (req, res, next) => {
         status,
         requested_at,
         fulfilled_at,
-        users:user_id ( id, name, email, role )
+        rejected_at,
+        users:user_id ( id, name, email, role, access_revoked_at )
       `
       )
       .eq('status', status)
       .order('requested_at', { ascending: false });
     if (error) throw error;
 
-    const rows = (data ?? []).map((row) => {
-      const u = row.users || {};
-      return {
-        id: row.id,
-        user_id: row.user_id,
-        status: row.status,
-        requested_at: row.requested_at,
-        fulfilled_at: row.fulfilled_at,
-        name: u.name || '',
-        email: u.email || '',
-        role: u.role || ''
-      };
-    });
+    const rows = (data ?? [])
+      .filter((row) => status !== 'PENDING' || !row.users?.access_revoked_at)
+      .map((row) => {
+        const u = row.users || {};
+        return {
+          id: row.id,
+          user_id: row.user_id,
+          status: row.status,
+          requested_at: row.requested_at,
+          fulfilled_at: row.fulfilled_at,
+          rejected_at: row.rejected_at,
+          name: u.name || '',
+          email: u.email || '',
+          role: u.role || ''
+        };
+      });
 
     res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/super-admin/password-reset-requests/:requestId/reject
+router.post('/password-reset-requests/:requestId/reject', async (req, res, next) => {
+  try {
+    const requestId = String(req.params.requestId ?? '').trim();
+    const { data: resetReq, error: findErr } = await supabaseAdmin
+      .from('password_reset_requests')
+      .select('id, user_id, status, users:user_id ( name, email, role )')
+      .eq('id', requestId)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!resetReq) {
+      return res.status(404).json({ error: 'Password reset request not found.' });
+    }
+    if (resetReq.status !== 'PENDING') {
+      return res.status(409).json({ error: 'This request has already been handled.' });
+    }
+
+    const nowIso = new Date().toISOString();
+    const { data: updated, error: updErr } = await supabaseAdmin
+      .from('password_reset_requests')
+      .update({ status: 'REJECTED', rejected_by: req.user?.id ?? null, rejected_at: nowIso })
+      .eq('id', requestId)
+      .eq('status', 'PENDING')
+      .select('id');
+    if (updErr) throw updErr;
+    if (!updated?.length) {
+      return res.status(409).json({ error: 'This request has already been handled.' });
+    }
+
+    const u = resetReq.users || {};
+    await logOrgActivityFromReq(req, {
+      action: 'PASSWORD_RESET_REJECTED',
+      entityType: 'users',
+      entityId: resetReq.user_id,
+      summary: `Rejected password reset request from ${u.name || u.email || 'user'} (${u.role || '—'})`,
+      metadata: {
+        request_id: requestId,
+        target_user_id: resetReq.user_id,
+        target_email: u.email ?? null,
+        target_role: u.role ?? null
+      }
+    });
+
+    res.json({ ok: true, rejected_at: nowIso });
   } catch (err) {
     next(err);
   }
@@ -918,16 +1199,21 @@ router.post('/users/:userId/password', async (req, res, next) => {
 
     const { data: profile, error: profileErr } = await supabaseAdmin
       .from('users')
-      .select('id, name, email, role')
+      .select('id, name, email, role, access_revoked_at')
       .eq('id', userId)
       .maybeSingle();
     if (profileErr) throw profileErr;
     if (!profile) {
       return res.status(404).json({ error: 'User not found.' });
     }
-    if (!['PROGRAM_MANAGER', 'PAYROLL_LEAD'].includes(profile.role)) {
+    if (!STAFF_ROLES.includes(profile.role)) {
       return res.status(403).json({
         error: 'Password reset is only allowed for Program Managers and Payroll Leads.'
+      });
+    }
+    if (profile.access_revoked_at) {
+      return res.status(409).json({
+        error: 'Access is revoked for this user. Restore access before resetting the password.'
       });
     }
 

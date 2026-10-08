@@ -1,16 +1,22 @@
 import { supabaseAdmin } from '../supabase.js';
 
+async function loadProfile(req) {
+  if (req.user.authProfile !== undefined) return req.user.authProfile;
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('role, name')
+    .eq('id', req.user.id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 /** @param {string | string[]} role */
 export function requireRole(role) {
   const allowed = Array.isArray(role) ? role : [role];
   return async (req, res, next) => {
     try {
-      const { data, error } = await supabaseAdmin
-        .from('users')
-        .select('role, name')
-        .eq('id', req.user.id)
-        .maybeSingle();
-      if (error) throw error;
+      const data = await loadProfile(req);
       if (!data) return res.status(403).json({ error: 'User profile not found' });
       if (!allowed.includes(data.role)) {
         const label = allowed.length === 1 ? allowed[0] : allowed.join(' or ');

@@ -116,11 +116,28 @@ export async function createStaffInviteUser({
     throw inviteErr;
   }
 
+  const inviteEmailSent = await sendStaffInviteEmail({
+    rawToken,
+    email,
+    name: placeholderName,
+    roleLabel,
+    logLabel,
+    warnLabel
+  });
+
+  return {
+    id: profile.id,
+    email: profile.email,
+    invite_email_sent: inviteEmailSent
+  };
+}
+
+async function sendStaffInviteEmail({ rawToken, email, name, roleLabel, logLabel, warnLabel }) {
   const setPasswordLink = buildSetPasswordLink(rawToken);
   const mail = buildInviteEmail({ setPasswordLink, roleLabel });
   const sendResult = await invokeResendEmail({
     toEmail: email,
-    toName: placeholderName,
+    toName: name,
     subject: mail.subject,
     html: mail.html,
     text: mail.text,
@@ -130,10 +147,52 @@ export async function createStaffInviteUser({
   if (sendResult?.ok === false && !sendResult?.skipped) {
     console.warn(`[${warnLabel}] invite email failed`, sendResult.error);
   }
+  return Boolean(sendResult?.ok);
+}
 
-  return {
-    id: profile.id,
-    email: profile.email,
-    invite_email_sent: Boolean(sendResult?.ok)
-  };
+/**
+ * Replace the user's unused invite with a fresh token + expiry and email the new link.
+ * The previous link stops working because its token hash is overwritten.
+ * @returns {{ invite_email_sent: boolean, expires_at: string }}
+ * @throws {{ status: number, message: string }} when there is no unused invite to resend
+ */
+export async function resendStaffInvite({
+  user,
+  invitedBy = null,
+  roleLabel,
+  logLabel = 'staff-invite-resend-email',
+  warnLabel = 'staff-invite-resend'
+}) {
+  const rawToken = generateRawToken();
+  const nowIso = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + INVITE_TTL_MS).toISOString();
+
+  const { data: updated, error } = await supabaseAdmin
+    .from('staff_account_invites')
+    .update({
+      token_hash: hashToken(rawToken),
+      expires_at: expiresAt,
+      invited_by: invitedBy,
+      created_at: nowIso
+    })
+    .eq('user_id', user.id)
+    .is('consumed_at', null)
+    .select('id');
+  if (error) throw error;
+  if (!updated?.length) {
+    const err = new Error('This user has already set up their account, so there is no invite to resend.');
+    err.status = 409;
+    throw err;
+  }
+
+  const inviteEmailSent = await sendStaffInviteEmail({
+    rawToken,
+    email: user.email,
+    name: user.name,
+    roleLabel,
+    logLabel,
+    warnLabel
+  });
+
+  return { invite_email_sent: inviteEmailSent, expires_at: expiresAt };
 }

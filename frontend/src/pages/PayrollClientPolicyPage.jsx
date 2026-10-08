@@ -3,6 +3,7 @@ import { useLocation, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import ClientPolicyConfigFields from '../components/clientPolicy/ClientPolicyConfigFields';
 import ClientConfigActivityLog from '../components/clientPolicy/ClientConfigActivityLog';
+import { MonthPicker } from '../components/DatePicker';
 import {
   DEFAULT_ATTENDANCE_POLICY,
   buildLeaveAllowancesForDesignations,
@@ -325,15 +326,14 @@ export default function PayrollClientPolicyPage() {
           <p className="mt-1 text-xs text-slate-500">
             New rules apply to attendance sheets from this month onward. Earlier months keep their existing calculations.
           </p>
-          <input
+          <MonthPicker
             id="effective-from-month"
-            type="month"
             value={effectiveFromMonth}
-            onChange={(e) => {
-              setEffectiveFromMonth(e.target.value);
+            onChange={(next) => {
+              setEffectiveFromMonth(next);
               setConfirmEarlyEffective(false);
             }}
-            className="mt-2 rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="mt-2 w-[10rem] rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
           />
           {effectiveFromMonth < currentMonthValue() && !confirmEarlyEffective && (
             <label className="mt-3 flex items-start gap-2 text-sm text-amber-800">

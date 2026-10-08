@@ -224,6 +224,11 @@ export const api = {
   downloadClientCsvTemplate: () => fileRequest('/api/clients/csv-template'),
   exportClientCsv: (id) =>
     fileRequest(`/api/clients/${encodeURIComponent(id)}/export`),
+  setClientActive: (id, isActive) =>
+    request(`/api/clients/${encodeURIComponent(id)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_active: isActive })
+    }),
   importClientsCsv: (file) => {
     const fd = new FormData();
     fd.append('file', file);
@@ -346,6 +351,12 @@ export const api = {
     }),
   createEmployee: (payload) =>
     request('/api/employees', { method: 'POST', body: JSON.stringify(payload) }),
+  updateEmployeeMobile: (id, mobile) =>
+    request(`/api/employees/${encodeURIComponent(id)}/mobile`, {
+      method: 'PUT',
+      body: JSON.stringify({ mobile })
+    }),
+  globalSearch: (q) => request(`/api/search?q=${encodeURIComponent(q)}`),
   setEmployeeRoleDetails: (id, payload) =>
     request(`/api/employees/${id}/role-details`, { method: 'PUT', body: JSON.stringify(payload) }),
   updateEmployeeSalary: (id, payload) =>
@@ -737,6 +748,22 @@ export const api = {
     request(`/api/super-admin/users/${encodeURIComponent(userId)}/password`, {
       method: 'POST',
       body: JSON.stringify(body || {})
+    }),
+  rejectPasswordResetRequest: (requestId) =>
+    request(`/api/super-admin/password-reset-requests/${encodeURIComponent(requestId)}/reject`, {
+      method: 'POST'
+    }),
+  resendSuperAdminStaffInvite: (userId) =>
+    request(`/api/super-admin/users/${encodeURIComponent(userId)}/resend-invite`, {
+      method: 'POST'
+    }),
+  revokeSuperAdminStaffAccess: (userId) =>
+    request(`/api/super-admin/users/${encodeURIComponent(userId)}/revoke-access`, {
+      method: 'POST'
+    }),
+  restoreSuperAdminStaffAccess: (userId) =>
+    request(`/api/super-admin/users/${encodeURIComponent(userId)}/restore-access`, {
+      method: 'POST'
     }),
   listSuperAdminDojExtendRequests: (status = 'PENDING') => {
     const q = new URLSearchParams();

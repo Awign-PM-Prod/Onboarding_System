@@ -10,8 +10,13 @@ import SalaryEditModal from '../components/SalaryEditModal';
 import PmClientDashboard from '../components/PmClientDashboard';
 import AttendancePanel from '../components/AttendancePanel';
 import ClientProjectMetaHeader from '../components/ClientProjectMetaHeader';
+import DatePicker from '../components/DatePicker';
 import ModalOverlay from '../components/ModalOverlay';
+import SearchEmployeeFilterBanner from '../components/SearchEmployeeFilterBanner';
+import EditMobileModal from '../components/EditMobileModal';
+import { useSearchEmployeeFilter } from '../hooks/useSearchEmployeeFilter';
 import { api } from '../lib/api';
+import { isClientActive } from '../lib/clientStatus';
 import { useAuth } from '../context/AuthContext';
 import { employeeOnboardingFormPath } from '../lib/onboardingFormLink';
 import {
@@ -211,6 +216,12 @@ export default function PmClientDetail() {
   const [testingFormStatusFilter, setTestingFormStatusFilter] = useState('');
   const [testingJoiningStatusFilter, setTestingJoiningStatusFilter] = useState('');
   const [testingRejectedByFilter, setTestingRejectedByFilter] = useState('');
+  const {
+    employeeId: searchEmployeeId,
+    clear: clearSearchEmployee,
+    filterRows: filterSearchEmployee
+  } = useSearchEmployeeFilter();
+  const [mobileModalEmployee, setMobileModalEmployee] = useState(null);
 
   const loadAll = async () => {
     setLoading(true);
@@ -431,12 +442,19 @@ export default function PmClientDetail() {
   );
   const filteredTestingEmployees = useMemo(
     () =>
-      employees.filter((row) => {
+      filterSearchEmployee(employees).filter((row) => {
         if (testingFormStatusFilter && getTestingFormStatusLabel(row) !== testingFormStatusFilter) return false;
         if (testingJoiningStatusFilter && getTestingJoiningStatusKey(row) !== testingJoiningStatusFilter) return false;
         return true;
       }),
-    [employees, testingFormStatusFilter, testingJoiningStatusFilter]
+    [employees, filterSearchEmployee, testingFormStatusFilter, testingJoiningStatusFilter]
+  );
+  const canEditMobile = (row) =>
+    (profile?.role === 'PROGRAM_MANAGER' || profile?.role === 'SUPER_ADMIN') &&
+    String(row.form_submission_status ?? '') !== 'Submitted';
+  const searchEmployee = useMemo(
+    () => (searchEmployeeId ? employees.find((row) => String(row.id) === searchEmployeeId) ?? null : null),
+    [employees, searchEmployeeId]
   );
   const inProgressTotal =
     formSentRows.length +
@@ -1373,13 +1391,13 @@ export default function PmClientDetail() {
               Current DOJ: {row.date_of_joining || '—'}
             </span>
           )}
-          <input
-            type="date"
+          <DatePicker
             max={isSuperAdminDirect ? undefined : row.doj_extend_max_date || undefined}
             value={extendedDojDraftById[row.id] ?? ''}
-            onChange={(e) =>
-              setExtendedDojDraftById((prev) => ({ ...prev, [row.id]: e.target.value }))
+            onChange={(next) =>
+              setExtendedDojDraftById((prev) => ({ ...prev, [row.id]: next }))
             }
+            aria-label="Extended DOJ"
             className="w-[9.5rem] rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300"
           />
           <button
@@ -1474,15 +1492,15 @@ export default function PmClientDetail() {
           ))}
         </select>
         {currentValue === 'JOINED_OTHER_DATE' ? (
-          <input
-            type="date"
+          <DatePicker
             value={currentDate}
-            onChange={(e) => {
+            onChange={(next) => {
               setJoiningInlineEmployeeId(row.id);
               setJoiningInlineStatus('JOINED_OTHER_DATE');
-              setJoiningInlineDate(e.target.value);
+              setJoiningInlineDate(next);
             }}
-            className="w-[9.5rem] shrink-0 rounded border border-slate-300 px-2 py-1 text-xs"
+            aria-label="Actual joining date"
+            className="w-[9.5rem] shrink-0 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
           />
         ) : null}
         {needsEmpCodeForCurrent ? (
@@ -1542,6 +1560,7 @@ export default function PmClientDetail() {
                 plApprovedCount={plApprovedRows.length}
                 plRejectedCount={plRejectedRows.length}
                 insuranceApplicable={Boolean(client.insurance_applicable)}
+                isActive={isClientActive(client)}
               >
                 <nav className="mt-2.5 flex flex-wrap items-center gap-2" aria-label="Client views">
                   <NavLink
@@ -1849,6 +1868,13 @@ export default function PmClientDetail() {
                   </div>
                 </div>
               </>
+            )}
+            {testingSubtab === 'employees' && searchEmployeeId && !loading && (
+              <SearchEmployeeFilterBanner
+                employeeName={searchEmployee?.name}
+                found={Boolean(searchEmployee)}
+                onClear={clearSearchEmployee}
+              />
             )}
             {testingSubtab === 'employees' && (
               <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
@@ -2311,7 +2337,22 @@ export default function PmClientDetail() {
             })
           }
           onSalaryAction={handleSalaryAction}
+          canEditMobileForRow={canEditMobile}
+          onEditMobile={setMobileModalEmployee}
         />
+        )}
+
+        {mobileModalEmployee && (
+          <EditMobileModal
+            employee={mobileModalEmployee}
+            onClose={() => setMobileModalEmployee(null)}
+            onSaved={async ({ message }) => {
+              setMobileModalEmployee(null);
+              setToast(message);
+              setTimeout(() => setToast(null), 5000);
+              await softRefresh();
+            }}
+          />
         )}
 
         {showEmployeeTable && visibleRows.length > 0 && !paginationDisabled && (

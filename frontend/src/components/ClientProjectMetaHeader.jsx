@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { formatDesignationLabel } from '../lib/formatLabels';
 import { formatContractPeriod } from '../lib/clientCsv';
+import ClientStatusBadge from './ClientStatusBadge';
+import { MonthPicker } from './DatePicker';
 
 const DESIGNATION_PREVIEW_COUNT = 4;
 
@@ -31,6 +33,7 @@ export default function ClientProjectMetaHeader({
   plApprovedCount = 0,
   plRejectedCount = 0,
   insuranceApplicable = false,
+  isActive,
   month,
   onMonthChange,
   children,
@@ -64,6 +67,7 @@ export default function ClientProjectMetaHeader({
         <h1 className="min-w-0 break-words text-lg font-semibold tracking-tight text-indigo-950 sm:text-xl">
           {title || 'Client Dashboard'}
         </h1>
+        {typeof isActive === 'boolean' && <ClientStatusBadge active={isActive} />}
         {insuranceApplicable && (
           <span className="shrink-0 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-600/15">
             Insured
@@ -137,11 +141,10 @@ export default function ClientProjectMetaHeader({
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-3 text-sm font-medium text-indigo-950">
             Attendance Month
-            <input
-              type="month"
+            <MonthPicker
               value={month || ''}
-              onChange={(e) => e.target.value && onMonthChange(e.target.value)}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-900 shadow-sm"
+              onChange={(next) => next && onMonthChange(next)}
+              className="w-[10rem] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-900 shadow-sm"
             />
           </label>
         </div>

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import SearchEmployeeFilterBanner from '../components/SearchEmployeeFilterBanner';
+import { useSearchEmployeeFilter } from '../hooks/useSearchEmployeeFilter';
 import {
   employeeStatusBadgeClass,
   resolveEmployeeStatusLabel,
@@ -26,6 +28,11 @@ export default function PayrollClientRejectedEmployeesPage() {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const {
+    employeeId: searchEmployeeId,
+    clear: clearSearchEmployee,
+    filterRows: filterSearchEmployee
+  } = useSearchEmployeeFilter();
 
   useEffect(() => {
     let active = true;
@@ -48,7 +55,7 @@ export default function PayrollClientRejectedEmployeesPage() {
   }, [id]);
 
   const client = useMemo(() => clients.find((c) => c.id === id) || null, [clients, id]);
-  const rejectedRows = useMemo(
+  const allRejectedRows = useMemo(
     () =>
       employees.filter(
         (row) =>
@@ -56,6 +63,10 @@ export default function PayrollClientRejectedEmployeesPage() {
           String(row.form_payroll_review_status || '').trim() === 'PAYROLL_REJECTED'
       ),
     [employees]
+  );
+  const rejectedRows = useMemo(
+    () => filterSearchEmployee(allRejectedRows),
+    [allRejectedRows, filterSearchEmployee]
   );
 
   return (
@@ -68,6 +79,14 @@ export default function PayrollClientRejectedEmployeesPage() {
           </p>
         </div>
       </div>
+
+      {searchEmployeeId && !loading && !error && (
+        <SearchEmployeeFilterBanner
+          employeeName={rejectedRows[0]?.name}
+          found={rejectedRows.length > 0}
+          onClear={clearSearchEmployee}
+        />
+      )}
 
       {loading && (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-sm text-slate-500">

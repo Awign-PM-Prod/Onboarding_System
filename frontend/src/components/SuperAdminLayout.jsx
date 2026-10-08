@@ -16,6 +16,7 @@ import TwoPaneSidebar, {
   SidebarModulesPanel,
   writeSidebarPanelOpen
 } from './TwoPaneSidebar';
+import DatePicker from './DatePicker';
 import ModalOverlay from './ModalOverlay';
 
 function IconMenu({ className }) {
@@ -668,17 +669,17 @@ function SuperAdminLayoutInner() {
                         <td className="px-3 py-2 text-slate-700">{row.client_name}</td>
                         <td className="px-3 py-2 text-slate-700">{row.date_of_joining || '—'}</td>
                         <td className="px-3 py-2">
-                          <input
-                            type="date"
+                          <DatePicker
                             min={minMax || undefined}
                             value={dojMaxByRequestId[row.id] ?? ''}
-                            onChange={(e) =>
+                            onChange={(next) =>
                               setDojMaxByRequestId((prev) => ({
                                 ...prev,
-                                [row.id]: e.target.value,
+                                [row.id]: next,
                               }))
                             }
-                            className="w-full min-w-[9.5rem] rounded border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                            aria-label="Max allowed DOJ"
+                            className="w-full min-w-[9.5rem] rounded border border-slate-300 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-300"
                           />
                         </td>
                         <td className="px-3 py-2 text-slate-700">{row.requested_by_name}</td>

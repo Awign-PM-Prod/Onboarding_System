@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import DatePicker from './DatePicker';
 import {
   MONTH_OPTIONS,
   WEEK_OPTIONS,
@@ -149,20 +150,20 @@ export default function SuperAdminDateRangeFilters({
           <div className="mt-2 space-y-2">
             <label className="block text-xs text-slate-600">
               From
-              <input
-                type="date"
+              <DatePicker
                 value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800"
+                onChange={setCustomFrom}
+                max={customTo || undefined}
+                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800"
               />
             </label>
             <label className="block text-xs text-slate-600">
               To
-              <input
-                type="date"
+              <DatePicker
                 value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-slate-800"
+                onChange={setCustomTo}
+                min={customFrom || undefined}
+                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800"
               />
             </label>
           </div>
