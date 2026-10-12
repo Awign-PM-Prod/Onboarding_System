@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../supabase.js';
 import { invokeResendEmail } from './sendEmail.js';
+import { logMailSendEvents } from './mailSendEvents.js';
 import {
   INVITE_TTL_MS,
   buildInviteEmail,
@@ -122,7 +123,10 @@ export async function createStaffInviteUser({
     name: placeholderName,
     roleLabel,
     logLabel,
-    warnLabel
+    warnLabel,
+    sendKind: 'send',
+    actorUserId: invitedBy,
+    targetUserId: profile.id
   });
 
   return {
@@ -132,7 +136,17 @@ export async function createStaffInviteUser({
   };
 }
 
-async function sendStaffInviteEmail({ rawToken, email, name, roleLabel, logLabel, warnLabel }) {
+async function sendStaffInviteEmail({
+  rawToken,
+  email,
+  name,
+  roleLabel,
+  logLabel,
+  warnLabel,
+  sendKind = 'send',
+  actorUserId = null,
+  targetUserId = null
+}) {
   const setPasswordLink = buildSetPasswordLink(rawToken);
   const mail = buildInviteEmail({ setPasswordLink, roleLabel });
   const sendResult = await invokeResendEmail({
@@ -147,6 +161,31 @@ async function sendStaffInviteEmail({ rawToken, email, name, roleLabel, logLabel
   if (sendResult?.ok === false && !sendResult?.skipped) {
     console.warn(`[${warnLabel}] invite email failed`, sendResult.error);
   }
+
+  let status = 'failed';
+  let error = null;
+  if (sendResult?.ok) {
+    status = 'sent';
+  } else if (sendResult?.skipped) {
+    status = 'skipped';
+    error = String(sendResult?.reason || 'skipped');
+  } else {
+    error = String(sendResult?.error || 'Email send failed');
+  }
+
+  await logMailSendEvents([
+    {
+      mail_type: 'staff_invite',
+      send_kind: sendKind === 'resend' ? 'resend' : 'send',
+      status,
+      recipient_email: email,
+      recipient_name: name || null,
+      actor_user_id: actorUserId || null,
+      target_user_id: targetUserId || null,
+      error
+    }
+  ]);
+
   return Boolean(sendResult?.ok);
 }
 
@@ -191,7 +230,10 @@ export async function resendStaffInvite({
     name: user.name,
     roleLabel,
     logLabel,
-    warnLabel
+    warnLabel,
+    sendKind: 'resend',
+    actorUserId: invitedBy,
+    targetUserId: user.id
   });
 
   return { invite_email_sent: inviteEmailSent, expires_at: expiresAt };

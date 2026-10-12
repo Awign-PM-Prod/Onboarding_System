@@ -56,6 +56,29 @@ export async function assertValidProgramManagers(ids) {
   return { ok: true, users: ids.map((id) => found.get(id)) };
 }
 
+/** Optional Approver PM: null/empty is allowed. */
+export async function assertValidApproverPm(approverPmId) {
+  const id = String(approverPmId ?? '').trim();
+  if (!id) return { ok: true, user: null, id: null };
+
+  const check = await assertValidProgramManagers([id]);
+  if (!check.ok) {
+    return {
+      ok: false,
+      error: check.error.replace('program_manager_id(s)', 'approver_pm_id'),
+      user: null,
+      id: null
+    };
+  }
+  return { ok: true, user: check.users[0] ?? null, id };
+}
+
+export function parseApproverPmId(body = {}) {
+  const raw = body.approver_pm_id;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  return String(raw).trim();
+}
+
 export async function syncClientProgramManagers(clientId, programManagerIds) {
   const uniqueIds = [...new Set((programManagerIds ?? []).map((id) => String(id).trim()).filter(Boolean))];
 

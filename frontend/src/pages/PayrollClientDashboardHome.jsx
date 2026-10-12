@@ -332,6 +332,7 @@ export default function PayrollClientDashboardHome() {
         title={client?.client_name || 'Client Dashboard'}
         contractCode={client?.contract_code}
         programManagerName={client?.program_manager_name}
+        approverPmName={client?.approver_pm_name}
         contractStartDate={client?.contract_start_date}
         contractEndDate={client?.contract_end_date}
         openEndedContract={Boolean(client?.open_ended_contract)}

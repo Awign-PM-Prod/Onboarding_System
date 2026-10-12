@@ -126,6 +126,8 @@ async function request(path, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
     const err = new Error(body?.error || `Request failed (${res.status})`);
     err.status = res.status;
     err.details = body?.details;
+    err.code = body?.code;
+    err.employee = body?.employee;
     throw err;
   }
   return body;
@@ -452,6 +454,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ employee_ids: employeeIds })
     }),
+  resendOnboarding: (employeeIds) =>
+    request('/api/employees/resend-onboarding', {
+      method: 'POST',
+      body: JSON.stringify({ employee_ids: employeeIds })
+    }),
   reinitiateRejectedOnboarding: ({ clientId, employeeIds }) =>
     request('/api/employees/reinitiate-rejected-onboarding', {
       method: 'POST',
@@ -466,6 +473,29 @@ export const api = {
         reason: reason || null
       })
     }),
+  exitEmployeeProject: ({ clientId, employeeId, reason }) =>
+    request(`/api/employees/${encodeURIComponent(employeeId)}/exit-project`, {
+      method: 'POST',
+      body: JSON.stringify({
+        client_id: clientId,
+        reason
+      })
+    }),
+  rehireEmployee: ({ employeeId, targetClientId, name, email }) =>
+    request(`/api/employees/${encodeURIComponent(employeeId)}/rehire`, {
+      method: 'POST',
+      body: JSON.stringify({
+        target_client_id: targetClientId,
+        name: name || null,
+        email: email || null
+      })
+    }),
+  lookupRehireCandidate: ({ mobile, email }) => {
+    const q = new URLSearchParams();
+    if (mobile) q.set('mobile', mobile);
+    if (email) q.set('email', email);
+    return request(`/api/employees/rehire-lookup?${q.toString()}`);
+  },
   lookupOnboardingMobile: ({ mobile, employeeId }) =>
     request('/api/public/onboarding/mobile-lookup', {
       method: 'POST',
@@ -634,6 +664,35 @@ export const api = {
     const qs = q.toString();
     return request(`/api/super-admin/activity${qs ? `?${qs}` : ''}`);
   },
+  getSuperAdminMailTrackerStats: ({ from, to, mail_type, send_kind } = {}) => {
+    const q = new URLSearchParams();
+    if (from) q.set('from', from);
+    if (to) q.set('to', to);
+    if (mail_type) q.set('mail_type', mail_type);
+    if (send_kind) q.set('send_kind', send_kind);
+    const qs = q.toString();
+    return request(`/api/super-admin/mail-tracker/stats${qs ? `?${qs}` : ''}`);
+  },
+  listSuperAdminMailTracker: ({
+    limit = 50,
+    cursor,
+    from,
+    to,
+    mail_type,
+    send_kind,
+    status
+  } = {}) => {
+    const q = new URLSearchParams();
+    if (limit) q.set('limit', String(limit));
+    if (cursor) q.set('cursor', cursor);
+    if (from) q.set('from', from);
+    if (to) q.set('to', to);
+    if (mail_type) q.set('mail_type', mail_type);
+    if (send_kind) q.set('send_kind', send_kind);
+    if (status) q.set('status', status);
+    const qs = q.toString();
+    return request(`/api/super-admin/mail-tracker${qs ? `?${qs}` : ''}`);
+  },
   listSuperAdminSalaryMinimums: () => request('/api/super-admin/salary-minimums'),
   saveSuperAdminSalaryMinimums: (items) =>
     request('/api/super-admin/salary-minimums', {
@@ -787,6 +846,33 @@ export const api = {
   reviewSuperAdminJoiningStatusChangeRequest: (requestId, { decision, note }) =>
     request(
       `/api/super-admin/joining-status-change-requests/${encodeURIComponent(requestId)}/review`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ decision, note: note || null })
+      }
+    ),
+  listApproverDojExtendRequests: (status = 'PENDING') => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    return request(`/api/approver-requests/doj-extend-requests?${q.toString()}`);
+  },
+  reviewApproverDojExtendRequest: (requestId, { decision, note, maxAllowedDoj }) =>
+    request(`/api/approver-requests/doj-extend-requests/${encodeURIComponent(requestId)}/review`, {
+      method: 'POST',
+      body: JSON.stringify({
+        decision,
+        note: note || null,
+        max_allowed_doj: maxAllowedDoj || null
+      })
+    }),
+  listApproverJoiningStatusChangeRequests: (status = 'PENDING') => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    return request(`/api/approver-requests/joining-status-change-requests?${q.toString()}`);
+  },
+  reviewApproverJoiningStatusChangeRequest: (requestId, { decision, note }) =>
+    request(
+      `/api/approver-requests/joining-status-change-requests/${encodeURIComponent(requestId)}/review`,
       {
         method: 'POST',
         body: JSON.stringify({ decision, note: note || null })

@@ -46,6 +46,7 @@ const EMPLOYEE_STATUS_LABELS = {
   NOT_JOINED: 'Not Joined',
   JOINED_OTHER_DATE: 'Joined on other date',
   JOINED_ABSCONDED: 'Joined and absconded',
+  EXITED: 'Exited',
 };
 
 export function formatEmployeeStatusLabel(label) {

@@ -250,7 +250,7 @@ export default function DesignationsInput({ value = [], onChange }) {
       )}
 
       {open && (
-        <div className="absolute z-30 mt-2 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+        <div className="absolute z-30 mt-2 w-full max-w-sm overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
           <div className="border-b border-slate-100 px-3 py-2">
             <input
               type="text"

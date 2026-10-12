@@ -23,6 +23,8 @@ const ACTION_OPTIONS = [
   { value: 'PM_ASSIGNED', label: 'PM assigned' },
   { value: 'POLICY_UPDATED', label: 'Policy updated' },
   { value: 'EMPLOYEE_CREATED', label: 'Employee created' },
+  { value: 'EMPLOYEE_EXITED', label: 'Employee exited' },
+  { value: 'EMPLOYEE_REHIRED', label: 'Employee rehired' },
   { value: 'EMPLOYEE_MOBILE_UPDATED', label: 'Employee mobile corrected' },
   { value: 'ROLE_DETAILS_SET', label: 'Role details set' },
   { value: 'ONBOARDING_INITIATED', label: 'Onboarding initiated' },

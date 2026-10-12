@@ -55,6 +55,8 @@ const EXPECTED_DIRECTORY_STATUS_LABELS = {
   'Joined on other date': 'Joined on other date',
   JOINED_ABSCONDED: 'Joined and absconded',
   'Joined and absconded': 'Joined and absconded',
+  EXITED: 'Exited',
+  Exited: 'Exited',
 };
 
 const EXPECTED_DESIGNATION_LABELS = {

@@ -13,6 +13,7 @@ import TwoPaneSidebar, {
   writeSidebarPanelOpen
 } from './TwoPaneSidebar';
 import ModalOverlay from './ModalOverlay';
+import ChangeRequestReviewPopups from './ChangeRequestReviewPopups';
 
 function IconMenu({ className }) {
   return (
@@ -411,6 +412,20 @@ export default function PmLayout() {
     }
   }, []);
 
+  const listApproverDoj = useCallback(() => api.listApproverDojExtendRequests('PENDING'), []);
+  const reviewApproverDoj = useCallback(
+    (requestId, opts) => api.reviewApproverDojExtendRequest(requestId, opts),
+    []
+  );
+  const listApproverJoining = useCallback(
+    () => api.listApproverJoiningStatusChangeRequests('PENDING'),
+    []
+  );
+  const reviewApproverJoining = useCallback(
+    (requestId, opts) => api.reviewApproverJoiningStatusChangeRequest(requestId, opts),
+    []
+  );
+
   useEffect(() => {
     loadClients();
   }, [loadClients]);
@@ -806,6 +821,13 @@ export default function PmLayout() {
           onNext={null}
         />
       )}
+
+      <ChangeRequestReviewPopups
+        listDoj={listApproverDoj}
+        reviewDoj={reviewApproverDoj}
+        listJoining={listApproverJoining}
+        reviewJoining={reviewApproverJoining}
+      />
     </div>
   );
 }

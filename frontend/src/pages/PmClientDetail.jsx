@@ -47,10 +47,13 @@ function buildOnboardingInitiateToast(prefix, result) {
   const emailed = Number(result?.emailed ?? 0);
   const skipped = Number(result?.skipped ?? 0);
   const failed = Number(result?.failed ?? 0);
+  const whatsappSent = Number(result?.whatsapp_sent ?? 0);
+  const whatsappFailed = Number(result?.whatsapp_failed ?? 0);
   const base = `${prefix} for ${updated} employee${updated === 1 ? '' : 's'}`;
-  const suffix = [`emails sent: ${emailed}`];
-  if (skipped > 0) suffix.push(`skipped: ${skipped} (no email)`);
-  if (failed > 0) suffix.push(`failed: ${failed}`);
+  const suffix = [`emails sent: ${emailed}`, `WhatsApp sent: ${whatsappSent}`];
+  if (skipped > 0) suffix.push(`skipped email: ${skipped}`);
+  if (failed > 0) suffix.push(`email failed: ${failed}`);
+  if (whatsappFailed > 0) suffix.push(`WhatsApp failed: ${whatsappFailed}`);
   return `${base}. ${suffix.join(', ')}.`;
 }
 
@@ -141,6 +144,7 @@ export default function PmClientDetail() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [toast, setToast] = useState(null);
   const [ctaLoading, setCtaLoading] = useState(false);
+  const [resendingEmployeeId, setResendingEmployeeId] = useState(null);
   const [roleDetailsLoading, setRoleDetailsLoading] = useState(false);
   const [availableFilters, setAvailableFilters] = useState({ name: '', mobile: '', email: '' });
   const [roleFilters, setRoleFilters] = useState({
@@ -212,6 +216,9 @@ export default function PmClientDetail() {
   const [transferTargetClientId, setTransferTargetClientId] = useState('');
   const [transferReason, setTransferReason] = useState('');
   const [transferLoading, setTransferLoading] = useState(false);
+  const [exitModalEmployee, setExitModalEmployee] = useState(null);
+  const [exitReason, setExitReason] = useState('');
+  const [exitLoading, setExitLoading] = useState(false);
   const [directoryStatusFilter, setDirectoryStatusFilter] = useState('');
   const [testingFormStatusFilter, setTestingFormStatusFilter] = useState('');
   const [testingJoiningStatusFilter, setTestingJoiningStatusFilter] = useState('');
@@ -309,14 +316,13 @@ export default function PmClientDetail() {
   );
   const roleAssigned = useMemo(() => employees.filter((e) => e.onboarding_status === 'ROLE_ASSIGNED'), [employees]);
   const reviewStatus = (row) => String(row.form_review_status ?? '').toUpperCase();
+  const isResendOnboardingEligible = (row) =>
+    (row.onboarding_initiated || String(row.onboarding_status ?? '').toUpperCase() === 'FORM_SENT') &&
+    String(row.form_submission_status ?? '') !== 'Submitted' &&
+    !String(row.form_review_status ?? '').trim();
+
   const formSentRows = useMemo(
-    () =>
-      employees.filter(
-        (e) =>
-          (e.onboarding_initiated || e.onboarding_status === 'FORM_SENT') &&
-          String(e.form_submission_status ?? '') !== 'Submitted' &&
-          !reviewStatus(e)
-      ),
+    () => employees.filter((e) => isResendOnboardingEligible(e)),
     [employees]
   );
   const responsesRows = useMemo(
@@ -671,6 +677,33 @@ export default function PmClientDetail() {
     }
   };
 
+  const handleResendOnboarding = async (employeeIds, { clearSelection = false } = {}) => {
+    const ids = (Array.isArray(employeeIds) ? employeeIds : [])
+      .map((id) => String(id ?? '').trim())
+      .filter(Boolean);
+    if (ids.length === 0) return;
+    if (clearSelection) setCtaLoading(true);
+    else setResendingEmployeeId(ids[0]);
+    setError(null);
+    try {
+      const res = await api.resendOnboarding(ids);
+      setToast(buildOnboardingInitiateToast('Onboarding link resent', res));
+      if (clearSelection) setSelectedIds(new Set());
+      await softRefresh();
+      setTimeout(() => setToast(null), 3500);
+    } catch (err) {
+      setError(err.message || 'Could not resend onboarding link.');
+    } finally {
+      setCtaLoading(false);
+      setResendingEmployeeId(null);
+    }
+  };
+
+  const handleBulkResendOnboarding = async () => {
+    if (selectedIds.size === 0) return;
+    await handleResendOnboarding(Array.from(selectedIds), { clearSelection: true });
+  };
+
   const handleBulkReinitiate = async () => {
     if (selectedIds.size === 0) return;
     setCtaLoading(true);
@@ -772,6 +805,45 @@ export default function PmClientDetail() {
   const handleTestingBulkTransfer = async () => {
     if (selectedIds.size === 0) return;
     await transferEmployees(Array.from(selectedIds));
+  };
+
+  const openExitModal = (row) => {
+    setExitModalEmployee(row);
+    setExitReason('');
+    setError(null);
+  };
+
+  const closeExitModal = () => {
+    if (exitLoading) return;
+    setExitModalEmployee(null);
+    setExitReason('');
+  };
+
+  const handleExitEmployee = async () => {
+    if (!exitModalEmployee?.id) return;
+    const reason = String(exitReason ?? '').trim();
+    if (!reason) {
+      setError('Please enter an exit reason before confirming.');
+      return;
+    }
+    setExitLoading(true);
+    setError(null);
+    try {
+      await api.exitEmployeeProject({
+        clientId: id,
+        employeeId: exitModalEmployee.id,
+        reason,
+      });
+      const name = exitModalEmployee.name || 'Employee';
+      closeExitModal();
+      await loadAll();
+      setToast(`${name} marked as exited. Previous KYC is kept for rehire.`);
+      setTimeout(() => setToast(null), 3500);
+    } catch (err) {
+      setError(err.message || 'Could not exit employee.');
+    } finally {
+      setExitLoading(false);
+    }
   };
 
   const handleBulkRoleDetails = async (payload, options = {}) => {
@@ -1551,6 +1623,7 @@ export default function PmClientDetail() {
                 title={client.client_name}
                 contractCode={client.contract_code}
                 showProgramManagerName={false}
+                approverPmName={client.approver_pm_name}
                 contractStartDate={client.contract_start_date}
                 contractEndDate={client.contract_end_date}
                 openEndedContract={Boolean(client.open_ended_contract)}
@@ -1654,6 +1727,24 @@ export default function PmClientDetail() {
           </div>
         )}
 
+        {activeTab === 'in_progress' && inProgressSubtab === 'form_sent' && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+            <p className="text-sm text-indigo-900">
+              Resend the onboarding form link by email and WhatsApp to employees who have not submitted yet.
+            </p>
+            <button
+              type="button"
+              onClick={handleBulkResendOnboarding}
+              disabled={selectedIds.size === 0 || ctaLoading || Boolean(resendingEmployeeId)}
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {ctaLoading
+                ? 'Resending...'
+                : `Resend onboarding link${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
+            </button>
+          </div>
+        )}
+
         {((activeTab === 'in_progress' && inProgressSubtab === 'rejected') ||
           (activeTab === 'pl_reviewed' && plReviewedSubtab === 'rejected')) && (
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
@@ -1677,7 +1768,8 @@ export default function PmClientDetail() {
           <div className="mb-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
               <p className="text-sm text-indigo-900">
-                Active employees in this project. Use Transfer to move an employee to another project.
+                Active employees in this project. Use Transfer to move to another project, or Exit to leave
+                without transferring (KYC is kept for later rehire).
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
@@ -1777,6 +1869,17 @@ export default function PmClientDetail() {
                             className="block w-full px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"
                           >
                             Assign Role &amp; Share Form
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTestingBulkMenuOpen(false);
+                              handleBulkResendOnboarding();
+                            }}
+                            disabled={ctaLoading || Boolean(resendingEmployeeId)}
+                            className="block w-full border-t border-slate-100 px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {ctaLoading ? 'Resending...' : 'Resend onboarding link'}
                           </button>
                           <button
                             type="button"
@@ -1979,6 +2082,16 @@ export default function PmClientDetail() {
                           : 'Employee was added successfully.'
                       );
                       setTimeout(() => setToast(null), 3500);
+                    }}
+                    onRehired={async ({ name, has_kyc: hasKyc }) => {
+                      await loadAll();
+                      const label = String(name ?? '').trim() || 'Employee';
+                      setToast(
+                        hasKyc
+                          ? `${label} was rehired. Set role details and initiate onboarding — they will get a prefilled form.`
+                          : `${label} was rehired to Available.`
+                      );
+                      setTimeout(() => setToast(null), 4500);
                     }}
                   />
                 </div>
@@ -2282,6 +2395,7 @@ export default function PmClientDetail() {
             activeTab === 'role_assigned' ||
             (activeTab === 'testing' && testingSubtab === 'employees') ||
             (activeTab === 'testing' && testingSubtab === 'rejected') ||
+            (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
             (activeTab === 'in_progress' && inProgressSubtab === 'responses') ||
             (activeTab === 'pl_reviewed' && plReviewedSubtab === 'approved') ||
             (activeTab === 'in_progress' && inProgressSubtab === 'rejected') ||
@@ -2322,14 +2436,43 @@ export default function PmClientDetail() {
           dateForRow={activeTab === 'testing' && testingSubtab === 'rejected' ? (row) => formatReviewDateTime(row.testing_rejected_at) : null}
           showRemarksColumn={activeTab === 'testing' && testingSubtab === 'rejected'}
           remarksForRow={activeTab === 'testing' && testingSubtab === 'rejected' ? (row) => String(row.testing_rejected_remarks ?? '').trim() || '-' : null}
-          actionLabel={activeTab === 'pending' ? 'Set Details' : activeTab === 'employee_directory' ? 'Transfer' : null}
+          actionLabel={
+            activeTab === 'pending'
+              ? 'Set Details'
+              : activeTab === 'employee_directory'
+                ? 'Transfer'
+                : (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
+                    (activeTab === 'testing' && testingSubtab === 'employees')
+                  ? 'Resend'
+                  : null
+          }
+          actionLabelForRow={
+            (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
+            (activeTab === 'testing' && testingSubtab === 'employees')
+              ? (row) => {
+                  if (activeTab === 'testing' && !isResendOnboardingEligible(row)) return null;
+                  return resendingEmployeeId === row.id ? 'Sending…' : 'Resend';
+                }
+              : null
+          }
+          rowActionDisabledForRow={
+            (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
+            (activeTab === 'testing' && testingSubtab === 'employees')
+              ? () => ctaLoading || Boolean(resendingEmployeeId)
+              : null
+          }
           onRowAction={
             activeTab === 'pending'
               ? (row) => setRowRoleModalEmployee(row)
               : activeTab === 'employee_directory'
                 ? openTransferModal
-                : null
+                : (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
+                    (activeTab === 'testing' && testingSubtab === 'employees')
+                  ? (row) => handleResendOnboarding([row.id])
+                  : null
           }
+          secondaryActionLabel={activeTab === 'employee_directory' ? 'Exit' : null}
+          onSecondaryRowAction={activeTab === 'employee_directory' ? openExitModal : null}
           showSalaryAction={activeTab !== 'pending'}
           salaryActionForRow={(row) =>
             salaryActionForEmployee(row, {
@@ -2543,6 +2686,73 @@ export default function PmClientDetail() {
             onSubmit={handleSingleRoleDetails}
           />
         )}
+        {exitModalEmployee && (
+          <ModalOverlay onClose={closeExitModal} backdropClassName="bg-slate-900/50">
+            <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-2xl">
+              <h3 className="text-lg font-semibold text-slate-900">Confirm exit (no transfer)</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Mark{' '}
+                <span className="font-medium text-slate-900">{exitModalEmployee.name || 'this employee'}</span>{' '}
+                as exited from{' '}
+                <span className="font-medium text-slate-800">{client?.client_name || 'this project'}</span>.
+                Previous KYC stays in the system for rehire later.
+              </p>
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt className="text-xs text-slate-500">Name</dt>
+                    <dd className="font-medium text-slate-900">{exitModalEmployee.name || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">Reference ID</dt>
+                    <dd className="font-mono text-xs text-slate-800">
+                      {exitModalEmployee.reference_id || '—'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">Mobile</dt>
+                    <dd className="text-slate-800">{exitModalEmployee.mobile || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-slate-500">Email</dt>
+                    <dd className="break-all text-slate-800">{exitModalEmployee.email || '—'}</dd>
+                  </div>
+                </dl>
+              </div>
+              <div className="mt-4">
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Exit reason <span className="normal-case text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={exitReason}
+                  onChange={(e) => setExitReason(e.target.value)}
+                  placeholder="e.g. Resigned / Project ended"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+              </div>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeExitModal}
+                  disabled={exitLoading}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExitEmployee}
+                  disabled={!String(exitReason ?? '').trim() || exitLoading}
+                  className="rounded-md bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {exitLoading ? 'Exiting...' : 'Confirm exit'}
+                </button>
+              </div>
+            </div>
+          </ModalOverlay>
+        )}
+
         {(transferModalEmployee || testingBulkTransferModalOpen) && (
           <ModalOverlay
             onClose={closeTransferModal}

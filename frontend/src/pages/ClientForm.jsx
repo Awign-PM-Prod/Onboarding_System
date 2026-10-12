@@ -46,6 +46,8 @@ const emptyForm = {
   contract_end_date: '',
   open_ended_contract: false,
   program_manager_ids: [],
+  approved_by_approver: false,
+  approver_pm_id: '',
   client_type: CLIENT_TYPE_COMPLIANCE,
   insurance_applicable: false,
   insurance_name: '',
@@ -144,6 +146,8 @@ export default function ClientForm() {
           program_manager_ids: Array.isArray(found.program_manager_ids) && found.program_manager_ids.length
             ? found.program_manager_ids
             : (found.program_manager_id ? [found.program_manager_id] : []),
+          approved_by_approver: Boolean(found.approver_pm_id),
+          approver_pm_id: found.approver_pm_id || '',
           client_type: clientTypeOrDefault(found.client_type),
           insurance_applicable: found.insurance_applicable,
           insurance_name: found.insurance_name ?? '',
@@ -211,6 +215,9 @@ export default function ClientForm() {
       }
     }
     if (!form.program_manager_ids?.length) errs.program_manager_ids = 'Select at least one program manager';
+    if (form.approved_by_approver && !form.approver_pm_id) {
+      errs.approver_pm_id = 'Select an Approver PM';
+    }
     if (form.client_type !== CLIENT_TYPE_COMPLIANCE && form.client_type !== CLIENT_TYPE_NON_COMPLIANCE) {
       errs.client_type = 'Required';
     }
@@ -288,9 +295,21 @@ export default function ClientForm() {
         setError(
           `Program manager not found for email: ${mapped.program_manager_email}. Select one manually.`
         );
+      } else if (mapped.approver_pm_email && !mapped.approver_pm_id) {
+        setError(
+          `Approver PM not found for email: ${mapped.approver_pm_email}. Select one manually.`
+        );
       }
-      const { program_manager_email: _email, ...formPatch } = mapped;
-      setForm((f) => ({ ...f, ...formPatch }));
+      const {
+        program_manager_email: _email,
+        approver_pm_email: _approverEmail,
+        ...formPatch
+      } = mapped;
+      setForm((f) => ({
+        ...f,
+        ...formPatch,
+        approved_by_approver: Boolean(formPatch.approver_pm_id)
+      }));
     } catch (err) {
       setError(err.message || 'Could not import CSV.');
     }
@@ -361,6 +380,7 @@ export default function ClientForm() {
         ...form,
         program_manager_ids: form.program_manager_ids,
         program_manager_id: form.program_manager_ids[0],
+        approver_pm_id: form.approved_by_approver ? (form.approver_pm_id || null) : null,
         contract_end_date: form.open_ended_contract ? null : form.contract_end_date,
         attendance_policy: normalizeAttendancePolicyForForm(form.attendance_policy),
         insurance_name: form.insurance_applicable ? form.insurance_name : null,
@@ -379,6 +399,7 @@ export default function ClientForm() {
         leave_rules: form.leave_rules ?? []
       };
       delete payload.cushion_enabled;
+      delete payload.approved_by_approver;
       if (isEdit) {
         const updated = await api.updateClient(id, payload);
         emitClientPolicyUpdated(id);
@@ -636,6 +657,52 @@ export default function ClientForm() {
             />
             <p className="mt-1.5 text-xs text-slate-500">
               Select one or more program managers. All selected PMs can access this client.
+            </p>
+          </Field>
+
+          <Field label="Change request approval" error={fieldErrors.approver_pm_id}>
+            <div className="flex flex-col gap-2 text-sm sm:flex-row sm:gap-6">
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="approved_by_approver"
+                  checked={!form.approved_by_approver}
+                  onChange={() => set({ approved_by_approver: false, approver_pm_id: '' })}
+                />
+                Approved by Super Admin
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="approved_by_approver"
+                  checked={form.approved_by_approver}
+                  onChange={() => set({ approved_by_approver: true })}
+                />
+                Approved by Approver
+              </label>
+            </div>
+            {form.approved_by_approver ? (
+              <div className="mt-3">
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  Approver PM
+                </label>
+                <select
+                  className="input"
+                  value={form.approver_pm_id || ''}
+                  onChange={(e) => set({ approver_pm_id: e.target.value })}
+                >
+                  <option value="">Select Approver PM</option>
+                  {pms.map((pm) => (
+                    <option key={pm.id} value={pm.id}>
+                      {pm.name || pm.email || pm.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+            <p className="mt-1.5 text-xs text-slate-500">
+              Applies to Extend DOJ and joining status change requests. Salary changes stay with
+              Payroll Lead.
             </p>
           </Field>
 

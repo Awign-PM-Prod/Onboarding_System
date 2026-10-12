@@ -124,13 +124,25 @@ function formatDisplayValue(key, val) {
   return s;
 }
 
-function firstCorrectionStep(form) {
-  const rejected = Array.isArray(form?.editable_fields) ? form.editable_fields : [];
-  const first = String(rejected[0] ?? '');
+function stepForField(key) {
+  const first = String(key ?? '');
   if (first.startsWith('qual_')) return 'qualification';
   if (first.startsWith('kyc_')) return 'kyc';
   if (first.startsWith('bp_')) return 'photo';
   return 'personal';
+}
+
+function firstCorrectionStep(form) {
+  const rejected = Array.isArray(form?.editable_fields) ? form.editable_fields : [];
+  return stepForField(rejected[0]);
+}
+
+function buildCorrectionResumeUrl({ employeeId, step }) {
+  const q = new URLSearchParams();
+  if (employeeId) q.set('employee_id', employeeId);
+  q.set('resume', 'true');
+  q.set('step', step || 'personal');
+  return `/onboardingform?${q.toString()}`;
 }
 
 function statusBadge(form) {
@@ -239,10 +251,13 @@ export default function OnboardingStatusPage() {
     return groups;
   }, [keys]);
   const groupedRejectedFields = useMemo(() => {
-    if (!latestReview || String(latestReview.decision_status ?? '').trim() !== 'CORRECTION_REQUESTED') {
-      return [];
-    }
-    const rejected = Array.isArray(latestReview.rejected_fields) ? latestReview.rejected_fields : [];
+    const correctionActive =
+      String(form?.review_status ?? '').trim() === 'CORRECTION_REQUESTED' ||
+      String(latestReview?.decision_status ?? '').trim() === 'CORRECTION_REQUESTED';
+    if (!correctionActive) return [];
+    const fromReview = Array.isArray(latestReview?.rejected_fields) ? latestReview.rejected_fields : [];
+    const fromForm = Array.isArray(form?.editable_fields) ? form.editable_fields : [];
+    const rejected = fromReview.length > 0 ? fromReview : fromForm;
     const groups = [];
     const indexByTitle = new Map();
     for (const rawField of rejected) {
@@ -257,7 +272,7 @@ export default function OnboardingStatusPage() {
       }
     }
     return groups;
-  }, [latestReview]);
+  }, [form, latestReview]);
 
   const sendOtp = async () => {
     if (!TEN_DIGIT_REGEX.test(mobile) || loading) return;
@@ -387,6 +402,68 @@ export default function OnboardingStatusPage() {
               </button>
             </section>
 
+            {String(form?.review_status ?? '').trim() === 'CORRECTION_REQUESTED' &&
+              groupedRejectedFields.length > 0 && (
+                <section className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-6 shadow-sm">
+                  <h3 className="text-lg font-semibold text-amber-950">Rejected fields — please fix these first</h3>
+                  <p className="mt-1 text-sm text-amber-900/80">
+                    Tap a field to open that section of your onboarding form.
+                  </p>
+                  <div className="mt-4 space-y-3">
+                    {groupedRejectedFields.map((group) => (
+                      <div key={group.title}>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">{group.title}</p>
+                        <ul className="mt-2 space-y-2">
+                          {group.keys.map((fieldKey) => (
+                            <li key={fieldKey}>
+                              <button
+                                type="button"
+                                disabled={!showResubmitCta}
+                                onClick={() => {
+                                  navigate(
+                                    buildCorrectionResumeUrl({
+                                      employeeId,
+                                      step: stepForField(fieldKey),
+                                    })
+                                  );
+                                }}
+                                className="flex w-full items-center justify-between gap-3 rounded-xl border border-amber-300 bg-white px-4 py-3 text-left text-sm font-medium text-amber-950 shadow-sm transition hover:border-amber-400 hover:bg-amber-100/60 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <span>{prettifyKey(fieldKey)}</span>
+                                <span className="shrink-0 text-xs font-semibold text-amber-700">
+                                  {showResubmitCta ? 'Fix →' : 'Locked'}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                  {showResubmitCta && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigate(
+                          buildCorrectionResumeUrl({
+                            employeeId,
+                            step: firstCorrectionStep(form),
+                          })
+                        );
+                      }}
+                      className="mt-5 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white"
+                    >
+                      Edit and Resubmit
+                    </button>
+                  )}
+                  {!showResubmitCta && Number(form?.submission_attempt_count ?? 1) >= 3 && (
+                    <p className="mt-5 text-sm text-amber-800">
+                      Maximum submission attempts reached. Your application is awaiting final PM decision.
+                    </p>
+                  )}
+                </section>
+              )}
+
             {payrollLatestReview && String(form?.review_status ?? '').trim() === 'APPROVED' && (
               <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <h3 className="text-lg font-semibold text-slate-900">Latest Payroll Lead response</h3>
@@ -414,42 +491,9 @@ export default function OnboardingStatusPage() {
                   </p>
                 </div>
               )}
-              {String(latestReview?.decision_status ?? '').trim() === 'CORRECTION_REQUESTED' &&
-                groupedRejectedFields.length > 0 && (
-                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
-                    <h4 className="text-sm font-semibold text-amber-900">Please fix these fields</h4>
-                    <div className="mt-3 space-y-3">
-                      {groupedRejectedFields.map((group) => (
-                        <div key={group.title}>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">{group.title}</p>
-                          <ul className="mt-1 list-inside list-disc space-y-1 text-sm text-amber-900">
-                            {group.keys.map((fieldKey) => (
-                              <li key={fieldKey}>{prettifyKey(fieldKey)}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              {showResubmitCta && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const step = firstCorrectionStep(form);
-                    const q = new URLSearchParams();
-                    if (employeeId) q.set('employee_id', employeeId);
-                    q.set('resume', 'true');
-                    q.set('step', step);
-                    navigate(`/onboardingform?${q.toString()}`);
-                  }}
-                  className="mt-5 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white"
-                >
-                  Edit and Resubmit
-                </button>
-              )}
               {String(form?.review_status ?? '').trim() === 'CORRECTION_REQUESTED' &&
-                Number(form?.submission_attempt_count ?? 1) >= 3 && (
+                Number(form?.submission_attempt_count ?? 1) >= 3 &&
+                groupedRejectedFields.length === 0 && (
                   <p className="mt-5 text-sm text-amber-700">
                     Maximum submission attempts reached. Your application is awaiting final PM decision.
                   </p>

@@ -18,6 +18,7 @@ export const CLIENT_CSV_HEADERS = [
   'contract_end_date',
   'open_ended_contract',
   'program_manager_email',
+  'approver_pm_email',
   'insurance_applicable',
   'insurance_name',
   'insurance_amount',
@@ -268,6 +269,7 @@ export function csvRowToClientPayload(row) {
     open_ended_contract: openEnded,
     program_manager_email: programManagerEmails[0] || '',
     program_manager_emails: programManagerEmails,
+    approver_pm_email: String(cell(row, 'approver_pm_email') ?? '').trim().toLowerCase() || '',
     insurance_applicable: insuranceApplicable,
     insurance_name: insuranceApplicable ? cell(row, 'insurance_name') : null,
     insurance_amount: insuranceApplicable
@@ -332,6 +334,7 @@ export function buildClientTemplateCsv() {
     contract_end_date: '2027-03-31',
     open_ended_contract: 'false',
     program_manager_email: 'pm1@example.com;pm2@example.com',
+    approver_pm_email: '',
     insurance_applicable: 'false',
     insurance_name: '',
     insurance_amount: '',
@@ -404,6 +407,8 @@ export function clientToExportRow(client) {
       || client?.program_manager?.name
       || client?.program_manager_name
       || '',
+    approver_pm_email: client?.approver_pm?.email || client?.approver_pm_email || '',
+    approver_pm_name: client?.approver_pm?.name || client?.approver_pm_name || '',
     insurance_applicable: boolStr(client?.insurance_applicable),
     insurance_name: client?.insurance_name ?? '',
     insurance_amount: client?.insurance_amount ?? '',

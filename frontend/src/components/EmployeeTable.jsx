@@ -50,7 +50,11 @@ export default function EmployeeTable({
   selectable = true,
   showJobColumns = true,
   actionLabel = null,
+  actionLabelForRow = null,
+  rowActionDisabledForRow = null,
   onRowAction = null,
+  secondaryActionLabel = null,
+  onSecondaryRowAction = null,
   showFormLink = false,
   formLinkForRow = null,
   showViewResponse = false,
@@ -191,7 +195,7 @@ export default function EmployeeTable({
             {showPayrollReturnedActions && (
               <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Action</th>
             )}
-            {actionLabel && (
+            {(actionLabel || secondaryActionLabel) && (
               <th className={`${thSticky} px-4 py-2 text-left font-medium`}>Action</th>
             )}
             {showSalaryAction && (
@@ -394,15 +398,34 @@ export default function EmployeeTable({
                     </button>
                   </td>
                 )}
-                {actionLabel && (
+                {(actionLabel || secondaryActionLabel) && (
                   <td className="border-b border-slate-100 px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() => onRowAction?.(r)}
-                      className="rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50"
-                    >
-                      {actionLabel}
-                    </button>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {actionLabel && (() => {
+                        const label =
+                          typeof actionLabelForRow === 'function' ? actionLabelForRow(r) : actionLabel;
+                        if (!label) return null;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => onRowAction?.(r)}
+                            disabled={Boolean(rowActionDisabledForRow?.(r))}
+                            className="rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {label}
+                          </button>
+                        );
+                      })()}
+                      {secondaryActionLabel && (
+                        <button
+                          type="button"
+                          onClick={() => onSecondaryRowAction?.(r)}
+                          className="rounded border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs text-rose-800 hover:bg-rose-100"
+                        >
+                          {secondaryActionLabel}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 )}
                 {showSalaryAction && (

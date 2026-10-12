@@ -144,6 +144,20 @@ export function diffClientCoreFields(before, after) {
     changes.push(`Program manager: ${bLabel} → ${aLabel}`);
   }
 
+  const bApprover = String(before?.approver_pm_id ?? '');
+  const aApprover = String(after?.approver_pm_id ?? '');
+  if (bApprover !== aApprover) {
+    const bLabel = before?.approver_pm_name
+      || before?.approver_pm?.name
+      || before?.approver_pm_id
+      || 'none';
+    const aLabel = after?.approver_pm_name
+      || after?.approver_pm?.name
+      || after?.approver_pm_id
+      || 'none';
+    changes.push(`Approver PM: ${bLabel} → ${aLabel}`);
+  }
+
   const bIns = Boolean(before?.insurance_applicable);
   const aIns = Boolean(after?.insurance_applicable);
   if (bIns !== aIns) {

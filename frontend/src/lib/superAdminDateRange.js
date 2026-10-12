@@ -144,3 +144,26 @@ export function resolveDashboardDateRange({
   }
   return resolveDateRange({ month, year, week });
 }
+
+/**
+ * Mail Tracker period filters: day | month | year | all time (empty period).
+ * @returns {{ from?: string, to?: string }}
+ */
+export function resolveMailTrackerDateRange({
+  period = '',
+  day = '',
+  month = '',
+  year = ''
+} = {}) {
+  if (period === 'day') {
+    if (!day) return { from: undefined, to: undefined };
+    return { from: day, to: day };
+  }
+  if (period === 'month') {
+    return resolveDateRange({ month, year });
+  }
+  if (period === 'year') {
+    return resolveDateRange({ year });
+  }
+  return { from: undefined, to: undefined };
+}

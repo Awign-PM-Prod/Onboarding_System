@@ -20,6 +20,7 @@ export const CLIENT_CSV_HEADERS = [
   'contract_end_date',
   'open_ended_contract',
   'program_manager_email',
+  'approver_pm_email',
   'insurance_applicable',
   'insurance_name',
   'insurance_amount',
@@ -257,6 +258,14 @@ export function csvRowToClientForm(row, programManagers = []) {
     );
     if (pm?.id && !pmIds.includes(pm.id)) pmIds.push(pm.id);
   }
+  const approverEmail = String(cell(row, 'approver_pm_email') ?? '').trim().toLowerCase();
+  let approverPmId = '';
+  if (approverEmail) {
+    const approverPm = (programManagers ?? []).find(
+      (p) => String(p.email ?? '').trim().toLowerCase() === approverEmail
+    );
+    if (approverPm?.id) approverPmId = approverPm.id;
+  }
 
   const attendance_policy = normalizeAttendancePolicyForForm({
     ...DEFAULT_ATTENDANCE_POLICY,
@@ -298,6 +307,8 @@ export function csvRowToClientForm(row, programManagers = []) {
     open_ended_contract: openEnded,
     program_manager_ids: pmIds,
     program_manager_email: emails.join(';'),
+    approver_pm_id: approverPmId,
+    approver_pm_email: approverEmail,
     insurance_applicable: insuranceApplicable,
     insurance_name: insuranceApplicable ? cell(row, 'insurance_name') : '',
     insurance_amount: insuranceApplicable ? cell(row, 'insurance_amount') : '',
@@ -339,6 +350,7 @@ export function buildClientTemplateCsv() {
     contract_end_date: '2027-03-31',
     open_ended_contract: 'false',
     program_manager_email: 'pm1@example.com;pm2@example.com',
+    approver_pm_email: '',
     insurance_applicable: 'false',
     insurance_name: '',
     insurance_amount: '',
@@ -412,6 +424,8 @@ export function clientToExportRow(client, programManagerEmail = '') {
       || client?.program_manager?.name
       || client?.program_manager_name
       || '',
+    approver_pm_email: client?.approver_pm?.email || client?.approver_pm_email || '',
+    approver_pm_name: client?.approver_pm?.name || client?.approver_pm_name || '',
     insurance_applicable: boolStr(client?.insurance_applicable),
     insurance_name: client?.insurance_name ?? '',
     insurance_amount: client?.insurance_amount ?? '',

@@ -11,6 +11,7 @@ import { applyCushion, normalizeRegionName, normalizeWageZone } from '../utils/w
 import { listAccessibleClientIds } from '../utils/roleAccess.js';
 import { isProgramManagerForClient } from '../utils/clientProgramManagers.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
+import { logMailSendEvents } from '../utils/mailSendEvents.js';
 import {
   clientTypeOrDefault,
   isNonComplianceClient,
@@ -281,6 +282,181 @@ async function invokeSendOnboardingWhatsappEdge({ recipients }) {
     throw err;
   }
   return body ?? {};
+}
+
+/** Send onboarding form email + WhatsApp for employee rows that already have links. */
+async function dispatchOnboardingFormNotifications(
+  rows,
+  { sendKind = 'send', actorUserId = null } = {}
+) {
+  const skippedRecipients = [];
+  const emailRecipients = [];
+  const skippedWhatsappRecipients = [];
+  const whatsappRecipients = [];
+  const rowByEmployeeId = new Map();
+  for (const row of rows) {
+    const trimmedName = String(row.name ?? '').trim();
+    const employeeLink = buildOnboardingFormLink(row.id);
+    const email = String(row.email ?? '').trim();
+    rowByEmployeeId.set(String(row.id), row);
+    if (!email) {
+      skippedRecipients.push({
+        employee_id: row.id,
+        reason: 'no_email'
+      });
+    } else {
+      emailRecipients.push({
+        employee_id: row.id,
+        name: trimmedName,
+        email,
+        link: employeeLink
+      });
+    }
+
+    const to = formatWhatsAppNumber(row.mobile);
+    if (!to) {
+      skippedWhatsappRecipients.push({
+        employee_id: row.id,
+        reason: 'no_mobile'
+      });
+    } else {
+      whatsappRecipients.push({
+        employee_id: row.id,
+        name: trimmedName,
+        empid: String(row.id),
+        to
+      });
+    }
+  }
+
+  let emailedRecipients = [];
+  let emailFailedRecipients = [];
+  if (emailRecipients.length > 0) {
+    try {
+      const emailResult = await invokeSendOnboardingEmailEdge({ recipients: emailRecipients });
+      const sent = Array.isArray(emailResult?.sent) ? emailResult.sent : [];
+      const failed = Array.isArray(emailResult?.failed) ? emailResult.failed : [];
+      emailedRecipients = sent
+        .map((item) => ({
+          employee_id: String(item.employee_id ?? '').trim(),
+          email: String(item.email ?? '').trim()
+        }))
+        .filter((item) => Boolean(item.employee_id));
+      emailFailedRecipients = failed
+        .map((item) => ({
+          employee_id: String(item.employee_id ?? '').trim(),
+          email: String(item.email ?? '').trim(),
+          error: String(item.error ?? 'Email send failed').trim()
+        }))
+        .filter((item) => Boolean(item.employee_id));
+      if (emailedRecipients.length === 0 && emailFailedRecipients.length === 0) {
+        emailedRecipients = emailRecipients.map((r) => ({ employee_id: r.employee_id, email: r.email }));
+      }
+    } catch (sendErr) {
+      const reason = String(sendErr?.message || 'Email service unavailable');
+      emailFailedRecipients = emailRecipients.map((r) => ({
+        employee_id: r.employee_id,
+        email: r.email,
+        error: reason
+      }));
+    }
+  }
+
+  const kind = sendKind === 'resend' ? 'resend' : 'send';
+  const mailRows = [];
+  for (const item of skippedRecipients) {
+    const emp = rowByEmployeeId.get(String(item.employee_id));
+    mailRows.push({
+      mail_type: 'onboarding',
+      send_kind: kind,
+      status: 'skipped',
+      recipient_email: String(emp?.email ?? '').trim(),
+      recipient_name: String(emp?.name ?? '').trim() || null,
+      actor_user_id: actorUserId || null,
+      client_id: emp?.client_id || null,
+      employee_id: item.employee_id,
+      error: String(item.reason ?? 'skipped')
+    });
+  }
+  for (const item of emailedRecipients) {
+    const emp = rowByEmployeeId.get(String(item.employee_id));
+    mailRows.push({
+      mail_type: 'onboarding',
+      send_kind: kind,
+      status: 'sent',
+      recipient_email: String(item.email || emp?.email || '').trim(),
+      recipient_name: String(emp?.name ?? '').trim() || null,
+      actor_user_id: actorUserId || null,
+      client_id: emp?.client_id || null,
+      employee_id: item.employee_id
+    });
+  }
+  for (const item of emailFailedRecipients) {
+    const emp = rowByEmployeeId.get(String(item.employee_id));
+    mailRows.push({
+      mail_type: 'onboarding',
+      send_kind: kind,
+      status: 'failed',
+      recipient_email: String(item.email || emp?.email || '').trim(),
+      recipient_name: String(emp?.name ?? '').trim() || null,
+      actor_user_id: actorUserId || null,
+      client_id: emp?.client_id || null,
+      employee_id: item.employee_id,
+      error: String(item.error ?? 'Email send failed')
+    });
+  }
+  await logMailSendEvents(mailRows);
+
+  let whatsappSentRecipients = [];
+  let whatsappFailedRecipients = [];
+  if (whatsappRecipients.length > 0) {
+    try {
+      const whatsappResult = await invokeSendOnboardingWhatsappEdge({ recipients: whatsappRecipients });
+      const sent = Array.isArray(whatsappResult?.sent) ? whatsappResult.sent : [];
+      const failed = Array.isArray(whatsappResult?.failed) ? whatsappResult.failed : [];
+      whatsappSentRecipients = sent
+        .map((item) => ({
+          employee_id: String(item.employee_id ?? '').trim(),
+          to: String(item.to ?? '').trim()
+        }))
+        .filter((item) => Boolean(item.employee_id));
+      whatsappFailedRecipients = failed
+        .map((item) => ({
+          employee_id: String(item.employee_id ?? '').trim(),
+          to: String(item.to ?? '').trim(),
+          error: String(item.error ?? 'WhatsApp send failed').trim()
+        }))
+        .filter((item) => Boolean(item.employee_id));
+      if (whatsappSentRecipients.length === 0 && whatsappFailedRecipients.length === 0) {
+        whatsappSentRecipients = whatsappRecipients.map((r) => ({
+          employee_id: r.employee_id,
+          to: r.to
+        }));
+      }
+    } catch (sendErr) {
+      const reason = String(sendErr?.message || 'WhatsApp service unavailable');
+      whatsappFailedRecipients = whatsappRecipients.map((r) => ({
+        employee_id: r.employee_id,
+        to: r.to,
+        error: reason
+      }));
+    }
+  }
+
+  return {
+    emailed: emailedRecipients.length,
+    emailed_employee_ids: emailedRecipients.map((r) => r.employee_id),
+    skipped: skippedRecipients.length,
+    skipped_recipients: skippedRecipients,
+    failed: emailFailedRecipients.length,
+    failed_recipients: emailFailedRecipients,
+    whatsapp_sent: whatsappSentRecipients.length,
+    whatsapp_sent_employee_ids: whatsappSentRecipients.map((r) => r.employee_id),
+    whatsapp_skipped: skippedWhatsappRecipients.length,
+    whatsapp_skipped_recipients: skippedWhatsappRecipients,
+    whatsapp_failed: whatsappFailedRecipients.length,
+    whatsapp_failed_recipients: whatsappFailedRecipients
+  };
 }
 
 async function fetchOwnedClient(req, clientId) {
@@ -720,6 +896,127 @@ function buildReinitiateFormResetPayload(nowIso) {
   };
 }
 
+/** Soft-reopen form for rehire: keep KYC/personal data, clear review/submit workflow only. */
+function buildRehireFormReopenPayload(nowIso) {
+  return {
+    submission_status: null,
+    submission_attempt_count: 1,
+    review_status: null,
+    editable_fields: [],
+    review_reason: null,
+    reviewed_by: null,
+    reviewed_at: null,
+    payroll_review_status: null,
+    payroll_review_reason: null,
+    payroll_reviewed_by: null,
+    payroll_reviewed_at: null,
+    updated_at: nowIso,
+  };
+}
+
+function buildEngagementClearFields() {
+  return {
+    designation: null,
+    date_of_joining: null,
+    pay_type: null,
+    ctc_type: null,
+    ctc_value: null,
+    state: null,
+    zone: null,
+    region: null,
+    emp_code: null,
+    onboarding_initiated: false,
+    joining_status: null,
+    joining_actual_date: null,
+    joining_status_change_count: 0,
+    joining_status_set_at: null,
+    joining_status_set_by: null,
+    joining_status_updated_at: null,
+    joining_status_updated_by: null,
+    doj_extend_unlock: false,
+    doj_extend_max_date: null,
+    doj_extend_unlock_expires_at: null,
+    joining_status_unlock: false,
+    joining_status_unlock_expires_at: null,
+    payroll_pf_uan_number: null,
+    payroll_esic_number: null,
+    payroll_numbers_updated_at: null,
+    payroll_numbers_updated_by: null,
+  };
+}
+
+async function employeeHasActiveAssignment(employeeId) {
+  const id = String(employeeId ?? '').trim();
+  if (!id) return false;
+  const { data, error } = await supabaseAdmin
+    .from('employee_project_assignments')
+    .select('id')
+    .eq('employee_id', id)
+    .eq('assignment_status', 'ACTIVE')
+    .limit(1);
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}
+
+async function fetchEmployeeByMobileOrEmail(mobile, email) {
+  const normalizedMobile = String(mobile ?? '').trim();
+  const normalizedEmail = normalizeEmployeeEmail(email);
+  if (normalizedMobile) {
+    const { data, error } = await supabaseAdmin
+      .from('employees')
+      .select('id, name, mobile, email, client_id, onboarding_status, aadhaar_number, reference_id')
+      .eq('mobile', normalizedMobile)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return data;
+  }
+  if (normalizedEmail) {
+    const { data, error } = await supabaseAdmin
+      .from('employees')
+      .select('id, name, mobile, email, client_id, onboarding_status, aadhaar_number, reference_id')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) return data;
+  }
+  return null;
+}
+
+async function buildRehireCandidateSummary(employeeRow) {
+  if (!employeeRow?.id) return null;
+  const { data: form, error: formErr } = await supabaseAdmin
+    .from('job_app_form')
+    .select('aadhaar_number, kyc_pan_number, kyc_aadhar_front_url, kyc_pan_card_url')
+    .eq('employee_id', employeeRow.id)
+    .maybeSingle();
+  if (formErr) throw formErr;
+  const hasKyc = Boolean(
+    form?.aadhaar_number ||
+      form?.kyc_pan_number ||
+      form?.kyc_aadhar_front_url ||
+      form?.kyc_pan_card_url ||
+      employeeRow.aadhaar_number
+  );
+  return {
+    id: employeeRow.id,
+    name: employeeRow.name ?? null,
+    mobile: employeeRow.mobile ?? null,
+    email: employeeRow.email ?? null,
+    reference_id: employeeRow.reference_id ?? null,
+    last_client_id: employeeRow.client_id ?? null,
+    onboarding_status: employeeRow.onboarding_status ?? null,
+    has_kyc: hasKyc,
+  };
+}
+
+async function findRehireCandidateByContacts({ mobile, email }) {
+  const row = await fetchEmployeeByMobileOrEmail(mobile, email);
+  if (!row) return null;
+  if (String(row.onboarding_status ?? '').trim().toUpperCase() !== 'EXITED') return null;
+  if (await employeeHasActiveAssignment(row.id)) return null;
+  return buildRehireCandidateSummary(row);
+}
+
 async function ensureActiveAssignmentHistory(rows) {
   const normalized = (rows ?? [])
     .map((row) => ({
@@ -1066,6 +1363,7 @@ router.get('/', async (req, res, next) => {
       .from('employees')
       .select('*')
       .eq('client_id', clientId)
+      .neq('onboarding_status', 'EXITED')
       .order('created_at', { ascending: false });
     if (error) throw error;
     const rows = data ?? [];
@@ -1729,10 +2027,25 @@ router.post('/', async (req, res, next) => {
     errors.push(...duplicateErrors);
 
     // Single-row request with a duplicate -> 409 for a clearer UX.
+    // If the match is an exited (rehireable) employee, return REHIRE_CANDIDATE.
     if (!isBatch && toInsert.length === 0 && errors.length > 0) {
       const firstErr = errors[0].errors[0];
-      const status = /already exists/.test(firstErr) ? 409 : 400;
-      return res.status(status).json({ error: firstErr });
+      if (/already exists/.test(firstErr)) {
+        const candidatePayload = validated[0]?.payload;
+        const rehireCandidate = await findRehireCandidateByContacts({
+          mobile: candidatePayload?.mobile,
+          email: candidatePayload?.email
+        });
+        if (rehireCandidate) {
+          return res.status(409).json({
+            error: 'This person already exists and can be rehired.',
+            code: 'REHIRE_CANDIDATE',
+            employee: rehireCandidate
+          });
+        }
+        return res.status(409).json({ error: firstErr });
+      }
+      return res.status(400).json({ error: firstErr });
     }
 
     if (errors.length && toInsert.length === 0) {
@@ -1753,7 +2066,23 @@ router.post('/', async (req, res, next) => {
         .select();
       if (error) {
         const conflict = uniqueContactConflictMessage(error);
-        if (conflict) return res.status(409).json({ error: conflict });
+        if (conflict) {
+          if (!isBatch && toInsert.length === 1) {
+            const row = toInsert[0];
+            const rehireCandidate = await findRehireCandidateByContacts({
+              mobile: row?.mobile,
+              email: row?.email
+            });
+            if (rehireCandidate) {
+              return res.status(409).json({
+                error: 'This person already exists and can be rehired.',
+                code: 'REHIRE_CANDIDATE',
+                employee: rehireCandidate
+              });
+            }
+          }
+          return res.status(409).json({ error: conflict });
+        }
         throw error;
       }
       inserted = data;
@@ -1920,116 +2249,13 @@ router.post('/initiate-onboarding', async (req, res, next) => {
       .from('employees')
       .update({ onboarding_initiated: true, onboarding_status: 'FORM_SENT' })
       .in('id', validIds)
-      .select('id, name, email, mobile');
+      .select('id, name, email, mobile, client_id');
     if (error) throw error;
     const updatedRows = updated ?? [];
-
-    const skippedRecipients = [];
-    const emailRecipients = [];
-    const skippedWhatsappRecipients = [];
-    const whatsappRecipients = [];
-    for (const row of updatedRows) {
-      const trimmedName = String(row.name ?? '').trim();
-      const employeeLink = buildOnboardingFormLink(row.id);
-      const email = String(row.email ?? '').trim();
-      if (!email) {
-        skippedRecipients.push({
-          employee_id: row.id,
-          reason: 'no_email'
-        });
-      } else {
-        emailRecipients.push({
-          employee_id: row.id,
-          name: trimmedName,
-          email,
-          link: employeeLink
-        });
-      }
-
-      const to = formatWhatsAppNumber(row.mobile);
-      if (!to) {
-        skippedWhatsappRecipients.push({
-          employee_id: row.id,
-          reason: 'no_mobile'
-        });
-      } else {
-        whatsappRecipients.push({
-          employee_id: row.id,
-          name: trimmedName,
-          empid: String(row.id),
-          to
-        });
-      }
-    }
-
-    let emailedRecipients = [];
-    let emailFailedRecipients = [];
-    if (emailRecipients.length > 0) {
-      try {
-        const emailResult = await invokeSendOnboardingEmailEdge({ recipients: emailRecipients });
-        const sent = Array.isArray(emailResult?.sent) ? emailResult.sent : [];
-        const failed = Array.isArray(emailResult?.failed) ? emailResult.failed : [];
-        emailedRecipients = sent
-          .map((item) => ({
-            employee_id: String(item.employee_id ?? '').trim(),
-            email: String(item.email ?? '').trim()
-          }))
-          .filter((item) => Boolean(item.employee_id));
-        emailFailedRecipients = failed
-          .map((item) => ({
-            employee_id: String(item.employee_id ?? '').trim(),
-            email: String(item.email ?? '').trim(),
-            error: String(item.error ?? 'Email send failed').trim()
-          }))
-          .filter((item) => Boolean(item.employee_id));
-        if (emailedRecipients.length === 0 && emailFailedRecipients.length === 0) {
-          emailedRecipients = emailRecipients.map((r) => ({ employee_id: r.employee_id, email: r.email }));
-        }
-      } catch (sendErr) {
-        const reason = String(sendErr?.message || 'Email service unavailable');
-        emailFailedRecipients = emailRecipients.map((r) => ({
-          employee_id: r.employee_id,
-          email: r.email,
-          error: reason
-        }));
-      }
-    }
-
-    let whatsappSentRecipients = [];
-    let whatsappFailedRecipients = [];
-    if (whatsappRecipients.length > 0) {
-      try {
-        const whatsappResult = await invokeSendOnboardingWhatsappEdge({ recipients: whatsappRecipients });
-        const sent = Array.isArray(whatsappResult?.sent) ? whatsappResult.sent : [];
-        const failed = Array.isArray(whatsappResult?.failed) ? whatsappResult.failed : [];
-        whatsappSentRecipients = sent
-          .map((item) => ({
-            employee_id: String(item.employee_id ?? '').trim(),
-            to: String(item.to ?? '').trim()
-          }))
-          .filter((item) => Boolean(item.employee_id));
-        whatsappFailedRecipients = failed
-          .map((item) => ({
-            employee_id: String(item.employee_id ?? '').trim(),
-            to: String(item.to ?? '').trim(),
-            error: String(item.error ?? 'WhatsApp send failed').trim()
-          }))
-          .filter((item) => Boolean(item.employee_id));
-        if (whatsappSentRecipients.length === 0 && whatsappFailedRecipients.length === 0) {
-          whatsappSentRecipients = whatsappRecipients.map((r) => ({
-            employee_id: r.employee_id,
-            to: r.to
-          }));
-        }
-      } catch (sendErr) {
-        const reason = String(sendErr?.message || 'WhatsApp service unavailable');
-        whatsappFailedRecipients = whatsappRecipients.map((r) => ({
-          employee_id: r.employee_id,
-          to: r.to,
-          error: reason
-        }));
-      }
-    }
+    const delivery = await dispatchOnboardingFormNotifications(updatedRows, {
+      sendKind: 'send',
+      actorUserId: req.user?.id ?? null
+    });
 
     if (updatedRows.length) {
       await logOrgActivityFromReq(req, {
@@ -2045,18 +2271,96 @@ router.post('/initiate-onboarding', async (req, res, next) => {
     res.json({
       updated: updatedRows.length,
       employee_ids: updatedRows.map((r) => r.id),
-      emailed: emailedRecipients.length,
-      emailed_employee_ids: emailedRecipients.map((r) => r.employee_id),
-      skipped: skippedRecipients.length,
-      skipped_recipients: skippedRecipients,
-      failed: emailFailedRecipients.length,
-      failed_recipients: emailFailedRecipients,
-      whatsapp_sent: whatsappSentRecipients.length,
-      whatsapp_sent_employee_ids: whatsappSentRecipients.map((r) => r.employee_id),
-      whatsapp_skipped: skippedWhatsappRecipients.length,
-      whatsapp_skipped_recipients: skippedWhatsappRecipients,
-      whatsapp_failed: whatsappFailedRecipients.length,
-      whatsapp_failed_recipients: whatsappFailedRecipients
+      ...delivery
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Resend onboarding email + WhatsApp for initiated employees who have not submitted yet.
+ * Does not reset form data or change status.
+ */
+router.post('/resend-onboarding', async (req, res, next) => {
+  try {
+    const ids = Array.isArray(req.body?.employee_ids) ? req.body.employee_ids : [];
+    if (ids.length === 0) return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
+
+    const { user, clientIds: ownedClientIds } = await listAccessibleClientIds(req.user.id);
+    if (!user) return res.status(403).json({ error: 'User profile not found' });
+    req.user.role = user.role;
+    if (ownedClientIds.length === 0) {
+      return res.status(403).json({ error: 'No clients accessible to you' });
+    }
+
+    const uniqueIds = Array.from(new Set(ids.map((x) => String(x ?? '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) {
+      return res.status(400).json({ error: 'employee_ids required (non-empty array)' });
+    }
+
+    const { data: candidates, error: fetchErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, name, email, mobile, client_id, onboarding_initiated, onboarding_status')
+      .in('id', uniqueIds)
+      .in('client_id', ownedClientIds);
+    if (fetchErr) throw fetchErr;
+
+    const initiatedCandidates = (candidates ?? []).filter(
+      (row) =>
+        Boolean(row.onboarding_initiated) ||
+        String(row.onboarding_status ?? '').trim().toUpperCase() === 'FORM_SENT'
+    );
+    if (initiatedCandidates.length === 0) {
+      return res.status(400).json({
+        error: 'No initiated, not-yet-submitted employees selected.'
+      });
+    }
+
+    const candidateIds = initiatedCandidates.map((row) => row.id);
+    const { data: forms, error: formsErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('employee_id, submission_status, review_status')
+      .in('employee_id', candidateIds);
+    if (formsErr) throw formsErr;
+
+    const formByEmployeeId = new Map(
+      (forms ?? []).map((row) => [String(row.employee_id), row])
+    );
+    const eligibleRows = initiatedCandidates.filter((row) => {
+      const form = formByEmployeeId.get(String(row.id));
+      if (!form) return true;
+      const submitted = String(form.submission_status ?? '').trim() === 'Submitted';
+      const reviewStatus = String(form.review_status ?? '').trim().toUpperCase();
+      return !submitted && !reviewStatus;
+    });
+
+    if (eligibleRows.length === 0) {
+      return res.status(400).json({
+        error: 'No initiated, not-yet-submitted employees selected.'
+      });
+    }
+
+    const delivery = await dispatchOnboardingFormNotifications(eligibleRows, {
+      sendKind: 'resend',
+      actorUserId: req.user?.id ?? null
+    });
+    const resendClientId = eligibleRows[0]?.client_id ?? null;
+
+    await logOrgActivityFromReq(req, {
+      action: 'ONBOARDING_RESENT',
+      entityType: 'employee',
+      entityId: eligibleRows.length === 1 ? eligibleRows[0].id : null,
+      clientId: resendClientId,
+      summary: `Resent onboarding link for ${eligibleRows.length} employee(s)`,
+      metadata: { employee_ids: eligibleRows.map((r) => r.id) }
+    });
+
+    res.json({
+      updated: eligibleRows.length,
+      employee_ids: eligibleRows.map((r) => r.id),
+      skipped_ineligible: uniqueIds.length - eligibleRows.length,
+      ...delivery
     });
   } catch (err) {
     next(err);
@@ -2274,6 +2578,253 @@ router.post('/:id/transfer-project', async (req, res, next) => {
         from_client_id: sourceClientId,
         to_client_id: targetClientId,
         transferred_at: now,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/rehire-lookup', async (req, res, next) => {
+  try {
+    const mobile = String(req.query.mobile ?? '').trim();
+    const email = normalizeEmployeeEmail(req.query.email);
+    if (!mobile && !email) {
+      return res.status(400).json({ error: 'mobile or email query param required' });
+    }
+
+    const { user, clientIds: ownedClientIds } = await listAccessibleClientIds(req.user.id);
+    if (!user) return res.status(403).json({ error: 'User profile not found' });
+    req.user.role = user.role;
+    if (ownedClientIds.length === 0) {
+      return res.status(403).json({ error: 'No clients accessible to you' });
+    }
+
+    const candidate = await findRehireCandidateByContacts({ mobile, email });
+    if (!candidate) {
+      return res.json({ candidate: null });
+    }
+    return res.json({ candidate });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/exit-project', async (req, res, next) => {
+  try {
+    const employeeId = String(req.params.id ?? '').trim();
+    const sourceClientId = String(req.body?.client_id ?? '').trim();
+    const exitReason = String(req.body?.reason ?? '').trim();
+
+    if (!employeeId) return res.status(400).json({ error: 'employee id is required.' });
+    if (!sourceClientId) return res.status(400).json({ error: 'client_id is required.' });
+    if (!exitReason) return res.status(400).json({ error: 'reason is required.' });
+
+    const ownedSource = await fetchProgramManagerOwnedClient(req, sourceClientId);
+    if (!ownedSource) return res.status(403).json({ error: 'Not authorized for this client.' });
+
+    const { data: employeeRow, error: employeeErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, mobile, onboarding_status')
+      .eq('id', employeeId)
+      .maybeSingle();
+    if (employeeErr) throw employeeErr;
+    if (!employeeRow || String(employeeRow.client_id ?? '') !== sourceClientId) {
+      return res.status(404).json({ error: 'Employee not found in this project.' });
+    }
+    if (String(employeeRow.onboarding_status ?? '').trim().toUpperCase() === 'EXITED') {
+      return res.status(400).json({ error: 'Employee is already exited.' });
+    }
+
+    const now = new Date().toISOString();
+    await ensureActiveAssignmentHistory([{ id: employeeRow.id, client_id: sourceClientId }]);
+
+    const { data: activeAssignRows, error: activeAssignErr } = await supabaseAdmin
+      .from('employee_project_assignments')
+      .select('id, client_id')
+      .eq('employee_id', employeeId)
+      .eq('assignment_status', 'ACTIVE')
+      .limit(1);
+    if (activeAssignErr) throw activeAssignErr;
+    const activeAssignment = (activeAssignRows ?? [])[0] ?? null;
+    if (!activeAssignment || String(activeAssignment.client_id ?? '') !== sourceClientId) {
+      return res.status(400).json({
+        error: 'Employee does not have an active assignment in the selected project.'
+      });
+    }
+
+    const { error: closeAssignErr } = await supabaseAdmin
+      .from('employee_project_assignments')
+      .update({
+        assignment_status: 'INACTIVE',
+        left_at: now,
+        left_reason: exitReason,
+        transferred_by: req.user.id,
+        updated_at: now,
+      })
+      .eq('id', activeAssignment.id);
+    if (closeAssignErr) throw closeAssignErr;
+
+    const { data: updatedEmployee, error: employeeUpdateErr } = await supabaseAdmin
+      .from('employees')
+      .update({
+        ...buildEngagementClearFields(),
+        onboarding_status: 'EXITED',
+      })
+      .eq('id', employeeId)
+      .select('*')
+      .maybeSingle();
+    if (employeeUpdateErr) throw employeeUpdateErr;
+
+    await cancelPendingSalaryChangeRequests(employeeId, {
+      reviewedBy: req.user.id,
+      reviewNote: 'Canceled because the employee exited the project'
+    });
+
+    await logOrgActivityFromReq(req, {
+      action: 'EMPLOYEE_EXITED',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId: sourceClientId,
+      summary: `Marked ${employeeRow.name || 'employee'} as exited`,
+      metadata: { reason: exitReason }
+    });
+
+    return res.json({
+      employee: updatedEmployee,
+      exit: {
+        client_id: sourceClientId,
+        exited_at: now,
+        reason: exitReason,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/rehire', async (req, res, next) => {
+  try {
+    const employeeId = String(req.params.id ?? '').trim();
+    const targetClientId = String(req.body?.target_client_id ?? req.body?.client_id ?? '').trim();
+    const nextName = String(req.body?.name ?? '').trim();
+    const nextEmailRaw = req.body?.email;
+    const nextEmail =
+      nextEmailRaw == null || String(nextEmailRaw).trim() === ''
+        ? null
+        : normalizeEmployeeEmail(nextEmailRaw);
+
+    if (!employeeId) return res.status(400).json({ error: 'employee id is required.' });
+    if (!targetClientId) return res.status(400).json({ error: 'target_client_id is required.' });
+
+    const ownedTarget = await fetchProgramManagerOwnedClient(req, targetClientId);
+    if (!ownedTarget) return res.status(403).json({ error: 'Not authorized for target client.' });
+
+    const { data: employeeRow, error: employeeErr } = await supabaseAdmin
+      .from('employees')
+      .select('id, client_id, name, mobile, email, onboarding_status')
+      .eq('id', employeeId)
+      .maybeSingle();
+    if (employeeErr) throw employeeErr;
+    if (!employeeRow) return res.status(404).json({ error: 'Employee not found.' });
+
+    if (String(employeeRow.onboarding_status ?? '').trim().toUpperCase() !== 'EXITED') {
+      return res.status(400).json({ error: 'Only exited employees can be rehired.' });
+    }
+    if (await employeeHasActiveAssignment(employeeId)) {
+      return res.status(400).json({
+        error: 'Employee still has an active project assignment. Exit or transfer them first.'
+      });
+    }
+
+    if (nextEmail && nextEmail !== normalizeEmployeeEmail(employeeRow.email)) {
+      const { data: emailOwner, error: emailErr } = await supabaseAdmin
+        .from('employees')
+        .select('id')
+        .eq('email', nextEmail)
+        .neq('id', employeeId)
+        .maybeSingle();
+      if (emailErr) throw emailErr;
+      if (emailOwner) {
+        return res.status(409).json({ error: 'email already exists' });
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    const { error: createAssignErr } = await supabaseAdmin
+      .from('employee_project_assignments')
+      .upsert({
+        employee_id: employeeId,
+        client_id: targetClientId,
+        assignment_status: 'ACTIVE',
+        assigned_at: now,
+        left_at: null,
+        left_reason: null,
+        transferred_by: req.user.id,
+        updated_at: now,
+      }, { onConflict: 'employee_id,client_id' });
+    if (createAssignErr) throw createAssignErr;
+
+    const employeeUpdate = {
+      ...buildEngagementClearFields(),
+      client_id: targetClientId,
+      onboarding_status: 'AVAILABLE',
+    };
+    if (nextName) employeeUpdate.name = nextName;
+    if (nextEmail) employeeUpdate.email = nextEmail;
+
+    const { data: updatedEmployee, error: employeeUpdateErr } = await supabaseAdmin
+      .from('employees')
+      .update(employeeUpdate)
+      .eq('id', employeeId)
+      .select('*')
+      .maybeSingle();
+    if (employeeUpdateErr) {
+      const conflict = uniqueContactConflictMessage(employeeUpdateErr);
+      if (conflict) return res.status(409).json({ error: conflict });
+      throw employeeUpdateErr;
+    }
+
+    const { data: formRow, error: formErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('id')
+      .eq('employee_id', employeeId)
+      .maybeSingle();
+    if (formErr) throw formErr;
+    if (formRow?.id) {
+      const formUpdate = {
+        ...buildRehireFormReopenPayload(now),
+        client_id: targetClientId,
+        name: String(updatedEmployee?.name ?? employeeRow.name ?? '').trim() || null,
+        mobile: String(updatedEmployee?.mobile ?? employeeRow.mobile ?? '').trim() || null,
+      };
+      if (nextEmail) formUpdate.email = nextEmail;
+      const { error: reopenFormErr } = await supabaseAdmin
+        .from('job_app_form')
+        .update(formUpdate)
+        .eq('id', formRow.id);
+      if (reopenFormErr) throw reopenFormErr;
+    }
+
+    await logOrgActivityFromReq(req, {
+      action: 'EMPLOYEE_REHIRED',
+      entityType: 'employee',
+      entityId: employeeId,
+      clientId: targetClientId,
+      summary: `Rehired ${updatedEmployee?.name || employeeRow.name || 'employee'}`,
+      metadata: {
+        from_client_id: employeeRow.client_id,
+        to_client_id: targetClientId
+      }
+    });
+
+    return res.json({
+      employee: updatedEmployee,
+      rehire: {
+        from_client_id: employeeRow.client_id,
+        to_client_id: targetClientId,
+        rehired_at: now,
       },
     });
   } catch (err) {

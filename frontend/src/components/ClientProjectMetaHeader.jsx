@@ -24,6 +24,8 @@ export default function ClientProjectMetaHeader({
   contractCode,
   programManagerName,
   showProgramManagerName = true,
+  approverPmName,
+  showApproverPmName = true,
   contractStartDate,
   contractEndDate,
   openEndedContract = false,
@@ -85,6 +87,10 @@ export default function ClientProjectMetaHeader({
             {programManagerName || '—'}
           </MetaItem>
         )}
+
+        {showApproverPmName && approverPmName ? (
+          <MetaItem label="Approver PM">{approverPmName}</MetaItem>
+        ) : null}
 
         {(entity || state) && (
           <MetaItem label="Entity / State">

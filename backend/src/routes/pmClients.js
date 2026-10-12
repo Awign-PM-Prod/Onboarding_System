@@ -206,10 +206,23 @@ router.get('/', async (req, res, next) => {
     }
 
     const managersByClient = await fetchProgramManagersByClientIds(ids);
+    const approverIds = [...new Set(clients.map((c) => c.approver_pm_id).filter(Boolean))];
+    const approverById = new Map();
+    if (approverIds.length) {
+      const { data: approvers, error: apmErr } = await supabaseAdmin
+        .from('users')
+        .select('id, name, email')
+        .in('id', approverIds);
+      if (apmErr) throw apmErr;
+      for (const u of approvers ?? []) approverById.set(u.id, u);
+    }
     res.json(clients.map(c => {
       const action_counts = actionByClient.get(c.id) ?? emptyActionCounts();
+      const approver = c.approver_pm_id ? approverById.get(c.approver_pm_id) : null;
       return {
         ...attachProgramManagersToClient(c, managersByClient.get(c.id) ?? []),
+        approver_pm_id: c.approver_pm_id ?? null,
+        approver_pm_name: approver?.name ?? null,
         designations: byClient.get(c.id) ?? [],
         action_counts,
         open_change_count: openChangeCount(action_counts),

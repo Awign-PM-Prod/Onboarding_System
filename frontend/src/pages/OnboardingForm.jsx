@@ -1967,6 +1967,21 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
   );
 }
 
+function prettifyCorrectionFieldKey(key) {
+  if (key === 'pd_emergency_contact_name') return 'Emergency Contact Name';
+  if (key === 'pd_emergency_contact_relation') return 'Emergency Contact Relation';
+  if (key === 'pd_alternate_number') return 'Emergency Contact Number';
+  if (key === 'pd_secondary_mobile') return 'Alternate Mobile Number';
+  if (key === 'bp_nominee_name') return 'Nominee Name';
+  if (key === 'bp_nominee_relation') return 'Nominee Relation';
+  if (key === 'bp_nominee_mobile') return 'Nominee Mobile Number';
+  if (key === 'pd_current_address_same_as_aadhaar') return 'Same As Aadhaar Address';
+  if (key === 'pd_current_address') return 'Current Address';
+  if (key === 'bp_passport_photo_url') return 'Passport Size Photo';
+  if (key === 'bp_pf_uan_face_auth_screenshot_url') return 'PF UAN Face Auth Screenshot';
+  return String(key).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, onGoToStatus, correction }) {
   const [photoUrl, setPhotoUrl] = useState(() => jobForm.bp_passport_photo_url ?? '');
   const [photoFileName, setPhotoFileName] = useState(() => fileNameFromStorageUrl(jobForm.bp_passport_photo_url ?? ''));
@@ -2003,9 +2018,13 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   const [policeErr, setPoliceErr] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [correctionsConfirmed, setCorrectionsConfirmed] = useState(false);
   const [submitted, setSubmitted] = useState(
     () => String(jobForm?.submission_status ?? '').trim() === 'Submitted'
   );
+  const rejectedCorrectionFields = Array.isArray(jobForm?.editable_fields)
+    ? jobForm.editable_fields.map((f) => String(f ?? '').trim()).filter(Boolean)
+    : [];
 
   useEffect(() => {
     const visible = correction?.active ? correction.visibleFields : null;
@@ -2047,6 +2066,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     setPoliceRemoving(false);
     setPfUanScreenshotRemoving(false);
     setError('');
+    setCorrectionsConfirmed(false);
     if (!correction?.active && String(jobForm.submission_status ?? '').trim() === 'Submitted') {
       setSubmitted(true);
     } else if (correction?.active) {
@@ -2136,7 +2156,8 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     (!isRequired('bp_passport_photo_url', true) || Boolean(String(photoUrl).trim())) &&
     (!isRequired('bp_nominee_name', true) || String(nomineeName).trim().length >= 2) &&
     (!isRequired('bp_nominee_relation', true) || String(nomineeRelation).trim().length >= 2) &&
-    (!isRequired('bp_nominee_mobile', true) || TEN_DIGIT_REGEX.test(normalizeMobile(nomineeMobile)));
+    (!isRequired('bp_nominee_mobile', true) || TEN_DIGIT_REGEX.test(normalizeMobile(nomineeMobile))) &&
+    (!correction?.active || correctionsConfirmed);
   const pfUanRequired = isRequired('bp_pf_uan_number', true);
   const showPfUanWorkflow =
     clientShowsStatutoryCompliance(jobForm) &&
@@ -2234,6 +2255,10 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
 
   const handleSubmit = async () => {
     if (!canSubmit || saving || hasPfUanChoiceError || pfUanError || pfUanScreenshotError || kycHintIsBlocking(pfUanScreenshotHint)) return;
+    if (correction?.active && !correctionsConfirmed) {
+      setError('Please confirm that all rejected fields have been corrected before submitting.');
+      return;
+    }
     const nomineeNameTrim = String(nomineeName).trim();
     const nomineeRelationTrim = String(nomineeRelation).trim();
     const nomineeMobileNorm = normalizeMobile(nomineeMobile);
@@ -2264,6 +2289,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         bp_nominee_name: nomineeNameTrim,
         bp_nominee_relation: nomineeRelationTrim,
         bp_nominee_mobile: nomineeMobileNorm,
+        ...(correction?.active ? { corrections_confirmed: true } : {}),
       });
       setSubmitted(true);
       onSubmitted?.(form);
@@ -2566,6 +2592,35 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
           </li>
         </ul>
       </div>
+
+      {correction?.active && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-4">
+          <h3 className="text-sm font-semibold text-amber-950">Confirm your corrections</h3>
+          <p className="mt-1 text-sm text-amber-900/80">
+            Review the rejected fields below, then confirm before submitting.
+          </p>
+          {rejectedCorrectionFields.length > 0 && (
+            <ul className="mt-3 list-inside list-disc space-y-1 text-sm text-amber-950">
+              {rejectedCorrectionFields.map((fieldKey) => (
+                <li key={fieldKey}>{prettifyCorrectionFieldKey(fieldKey)}</li>
+              ))}
+            </ul>
+          )}
+          <label
+            htmlFor="corrections-confirmed"
+            className="mt-4 flex min-h-[44px] cursor-pointer items-start gap-3 text-sm text-amber-950"
+          >
+            <input
+              id="corrections-confirmed"
+              type="checkbox"
+              checked={correctionsConfirmed}
+              onChange={(e) => setCorrectionsConfirmed(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-amber-400 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>I confirm these corrections are complete and ready for review.</span>
+          </label>
+        </div>
+      )}
 
       {error && <p className="text-sm text-rose-600">{error}</p>}
 

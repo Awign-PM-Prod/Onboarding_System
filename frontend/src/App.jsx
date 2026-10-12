@@ -30,6 +30,7 @@ import SuperAdminHolidayCalendarPage from './pages/SuperAdminHolidayCalendarPage
 import SuperAdminLeaveConfigPage from './pages/SuperAdminLeaveConfigPage';
 import SuperAdminRegionZonesPage from './pages/SuperAdminRegionZonesPage';
 import SuperAdminTaskRemindersPage from './pages/SuperAdminTaskRemindersPage';
+import SuperAdminMailTrackerPage from './pages/SuperAdminMailTrackerPage';
 import SuperAdminStaffAccountsPage from './pages/SuperAdminStaffAccountsPage';
 import SetPasswordPage from './pages/SetPasswordPage';
 import PmClientsPage from './pages/PmClientsPage';
@@ -158,6 +159,7 @@ export default function App() {
           <Route path="salary-changes" element={<PayrollClientSalaryChangesPage />} />
         </Route>
         <Route path="activity" element={<SuperAdminActivityPage />} />
+        <Route path="mail-tracker" element={<SuperAdminMailTrackerPage />} />
         <Route path="salary-config" element={<SuperAdminSalaryConfigPage />} />
         <Route path="holiday-calendar" element={<SuperAdminHolidayCalendarPage />} />
         <Route path="leave-config" element={<SuperAdminLeaveConfigPage />} />

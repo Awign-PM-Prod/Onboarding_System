@@ -14,11 +14,13 @@ function normalizeMobile(raw) {
   return String(raw ?? '').replace(/\D/g, '').slice(0, 10);
 }
 
-export default function AddEmployeeModal({ clientId, onClose, onCreated, embedded = false }) {
+export default function AddEmployeeModal({ clientId, onClose, onCreated, onRehired, embedded = false }) {
   const [form, setForm] = useState(empty);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [rehireCandidate, setRehireCandidate] = useState(null);
+  const [rehireLoading, setRehireLoading] = useState(false);
 
   const set = (patch) => setForm(f => ({ ...f, ...patch }));
 
@@ -31,6 +33,11 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
     return errs;
   };
 
+  const clearFormAfterSuccess = () => {
+    if (embedded) setForm({ ...empty });
+    else onClose?.();
+  };
+
   const onSubmit = async (e) => {
     e.preventDefault();
     const errs = validate();
@@ -38,6 +45,7 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
     if (Object.keys(errs).length) return;
     setSubmitting(true);
     setError(null);
+    setRehireCandidate(null);
     try {
       const payload = {
         client_id: clientId,
@@ -52,12 +60,49 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
         mobile: form.mobile,
         email: payload.email
       });
-      if (embedded) setForm({ ...empty });
-      else onClose?.();
+      clearFormAfterSuccess();
     } catch (err) {
-      setError(err.message);
+      if (err?.code === 'REHIRE_CANDIDATE' && err?.employee?.id) {
+        setRehireCandidate(err.employee);
+        setError(null);
+      } else {
+        setError(err.message);
+      }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const confirmRehire = async () => {
+    if (!rehireCandidate?.id) return;
+    setRehireLoading(true);
+    setError(null);
+    try {
+      const result = await api.rehireEmployee({
+        employeeId: rehireCandidate.id,
+        targetClientId: clientId,
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase()
+      });
+      const rehiredName = String(result?.employee?.name ?? form.name ?? '').trim();
+      setRehireCandidate(null);
+      await onRehired?.({
+        name: rehiredName,
+        employee: result?.employee ?? null,
+        has_kyc: Boolean(rehireCandidate.has_kyc)
+      });
+      if (!onRehired) {
+        await onCreated?.({
+          name: rehiredName,
+          mobile: form.mobile,
+          email: form.email.trim().toLowerCase()
+        });
+      }
+      clearFormAfterSuccess();
+    } catch (err) {
+      setError(err.message || 'Could not rehire employee.');
+    } finally {
+      setRehireLoading(false);
     }
   };
 
@@ -108,27 +153,108 @@ export default function AddEmployeeModal({ clientId, onClose, onCreated, embedde
         </form>
   );
 
-  if (embedded) {
-    return formBody;
-  }
-
-  return (
-    <ModalOverlay onClose={onClose}>
+  const rehireModal = rehireCandidate ? (
+    <ModalOverlay onClose={() => !rehireLoading && setRehireCandidate(null)}>
       <div className="bg-white rounded-lg w-full max-w-lg shadow-lg">
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
-          <h3 className="font-semibold text-slate-900">Add Available Employee</h3>
+          <h3 className="font-semibold text-slate-900">Rehire existing employee?</h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => !rehireLoading && setRehireCandidate(null)}
             className="text-slate-500 hover:text-slate-700"
             aria-label="Close"
+            disabled={rehireLoading}
           >
             x
           </button>
         </div>
-        {formBody}
+        <div className="px-5 py-4 space-y-3 text-sm text-slate-700">
+          <p>
+            This person already exists in the system and is exited. Rehire them to this project instead of creating a duplicate.
+          </p>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
+            <div>
+              <dt className="text-xs text-slate-500">Name</dt>
+              <dd className="font-medium text-slate-900">{rehireCandidate.name || '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-500">Reference ID</dt>
+              <dd className="font-medium text-slate-900">{rehireCandidate.reference_id || '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-500">Mobile</dt>
+              <dd className="text-slate-800">{rehireCandidate.mobile || '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-500">Email</dt>
+              <dd className="break-all text-slate-800">{rehireCandidate.email || '—'}</dd>
+            </div>
+            <div className="col-span-2">
+              <dt className="text-xs text-slate-500">Previous KYC</dt>
+              <dd className="text-slate-800">
+                {rehireCandidate.has_kyc
+                  ? 'Kept — employee will get a prefilled form after you set role details and initiate onboarding.'
+                  : 'No prior KYC on file — they will fill a fresh form after initiate.'}
+              </dd>
+            </div>
+          </dl>
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2 text-sm">
+              {error}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setRehireCandidate(null)}
+              disabled={rehireLoading}
+              className="px-4 py-2 text-sm rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmRehire}
+              disabled={rehireLoading}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md px-4 py-2 disabled:opacity-60"
+            >
+              {rehireLoading ? 'Rehiring...' : 'Confirm rehire'}
+            </button>
+          </div>
+        </div>
       </div>
     </ModalOverlay>
+  ) : null;
+
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {rehireModal}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <ModalOverlay onClose={onClose}>
+        <div className="bg-white rounded-lg w-full max-w-lg shadow-lg">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+            <h3 className="font-semibold text-slate-900">Add Available Employee</h3>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-500 hover:text-slate-700"
+              aria-label="Close"
+            >
+              x
+            </button>
+          </div>
+          {formBody}
+        </div>
+      </ModalOverlay>
+      {rehireModal}
+    </>
   );
 }
 

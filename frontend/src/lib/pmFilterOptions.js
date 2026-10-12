@@ -58,6 +58,8 @@ export const DIRECTORY_STATUS_OPTIONS = [
   'Joined on other date',
   'JOINED_ABSCONDED',
   'Joined and absconded',
+  'EXITED',
+  'Exited',
 ];
 
 export const CTC_TYPE_OPTIONS = [

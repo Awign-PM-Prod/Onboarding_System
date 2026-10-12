@@ -7,6 +7,7 @@ import {
   clientTypeOrDefault,
   isNonComplianceClient
 } from '../utils/clientType.js';
+import { invokeResendEmail } from '../utils/sendEmail.js';
 
 const router = Router();
 
@@ -296,6 +297,9 @@ const SEND_EMAIL_OTP_EDGE_FUNCTION =
   process.env.SEND_EMAIL_OTP_EDGE_FUNCTION || 'send-email-otp';
 const SEND_MOBILE_OTP_EDGE_FUNCTION =
   process.env.SEND_MOBILE_OTP_EDGE_FUNCTION || 'send-mobile-otp';
+const SEND_PM_SUBMISSION_EMAIL_EDGE_FUNCTION =
+  process.env.SEND_PM_SUBMISSION_EMAIL_EDGE_FUNCTION || 'send-attendance-email';
+const FRONTEND_URL = String(process.env.FRONTEND_URL || 'http://localhost:8088').trim() || 'http://localhost:8088';
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Fixed demo OTP for email contact verification in non-production only. */
 const DEMO_CONTACT_OTP = '123123';
@@ -489,6 +493,96 @@ async function invokeSendMobileOtpEdge({ mobile, otp, name }) {
 
 function normalizeEmail(raw) {
   return String(raw ?? '').trim().toLowerCase();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildPmClientReviewLink(clientId) {
+  const trimmedId = String(clientId ?? '').trim();
+  if (!trimmedId) return FRONTEND_URL.replace(/\/+$/, '');
+  try {
+    const url = new URL(`/pm-dashboard/client/${trimmedId}/in-progress`, FRONTEND_URL);
+    return url.toString();
+  } catch {
+    const base = FRONTEND_URL.replace(/\/+$/, '');
+    return `${base}/pm-dashboard/client/${encodeURIComponent(trimmedId)}/in-progress`;
+  }
+}
+
+/** Email the client's primary Program Manager when an employee submits / resubmits. */
+async function notifyPrimaryPmOnFormSubmission({ employee, isCorrectionResubmit }) {
+  const clientId = String(employee?.client_id ?? '').trim();
+  if (!clientId) {
+    console.warn('[pm-submission-email] Missing client_id; skipping', { employeeId: employee?.id });
+    return { skipped: true, reason: 'no_client' };
+  }
+
+  const { data: client, error: clientErr } = await supabaseAdmin
+    .from('clients')
+    .select('id, client_name, program_manager_id')
+    .eq('id', clientId)
+    .maybeSingle();
+  if (clientErr) throw clientErr;
+
+  const pmId = String(client?.program_manager_id ?? '').trim();
+  if (!pmId) {
+    console.warn('[pm-submission-email] No primary PM on client; skipping', { clientId });
+    return { skipped: true, reason: 'no_primary_pm' };
+  }
+
+  const { data: pm, error: pmErr } = await supabaseAdmin
+    .from('users')
+    .select('id, name, email')
+    .eq('id', pmId)
+    .maybeSingle();
+  if (pmErr) throw pmErr;
+
+  const toEmail = String(pm?.email ?? '').trim();
+  if (!toEmail) {
+    console.warn('[pm-submission-email] Primary PM has no email; skipping', { pmId, clientId });
+    return { skipped: true, reason: 'no_pm_email' };
+  }
+
+  const employeeName = String(employee?.name ?? '').trim() || 'An employee';
+  const clientName = String(client?.client_name ?? '').trim() || 'your project';
+  const pmName = String(pm?.name ?? '').trim() || 'there';
+  const reviewLink = buildPmClientReviewLink(clientId);
+  const actionLabel = isCorrectionResubmit ? 'resubmitted' : 'submitted';
+  const subject = `Onboarding form ${actionLabel} — ${employeeName}`;
+  const safePm = escapeHtml(pmName);
+  const safeEmployee = escapeHtml(employeeName);
+  const safeClient = escapeHtml(clientName);
+  const safeLink = escapeHtml(reviewLink);
+
+  return invokeResendEmail({
+    toEmail,
+    toName: pmName,
+    subject,
+    html: `
+      <p>Hi ${safePm},</p>
+      <p><strong>${safeEmployee}</strong> has ${actionLabel} their onboarding form for <strong>${safeClient}</strong>.</p>
+      <p><a href="${safeLink}">Open project to review</a></p>
+      <p>- Team Awign</p>
+    `.trim(),
+    text: [
+      `Hi ${pmName},`,
+      '',
+      `${employeeName} has ${actionLabel} their onboarding form for ${clientName}.`,
+      '',
+      `Open project to review: ${reviewLink}`,
+      '',
+      '- Team Awign'
+    ].join('\n'),
+    edgeFunction: SEND_PM_SUBMISSION_EMAIL_EDGE_FUNCTION,
+    logLabel: 'pm-submission-email'
+  });
 }
 
 async function invokeSendEmailOtpEdge({ email, otp, name }) {
@@ -2940,6 +3034,16 @@ router.patch('/job-app-form', async (req, res, next) => {
 
       let nextAttemptCount = Number(formCurrent.submission_attempt_count ?? 1);
       if (correctionMode) {
+        const correctionsConfirmed =
+          body.corrections_confirmed === true ||
+          body.corrections_confirmed === 'true' ||
+          body.corrections_confirmed === 'yes' ||
+          body.corrections_confirmed === 'YES';
+        if (!correctionsConfirmed) {
+          return res.status(400).json({
+            error: 'Please confirm that all rejected fields have been corrected before submitting.',
+          });
+        }
         if (nextAttemptCount >= MAX_SUBMISSION_ATTEMPTS) {
           return res.status(400).json({
             error: `Maximum ${MAX_SUBMISSION_ATTEMPTS} submission attempts reached.`
@@ -2976,6 +3080,18 @@ router.patch('/job-app-form', async (req, res, next) => {
         .update({ onboarding_status: 'Form Submitted' })
         .eq('id', emp.id);
       if (empStatusErr) throw empStatusErr;
+
+      try {
+        await notifyPrimaryPmOnFormSubmission({
+          employee: emp,
+          isCorrectionResubmit: Boolean(correctionMode)
+        });
+      } catch (notifyErr) {
+        console.warn(
+          '[pm-submission-email] Failed to notify primary PM after submission',
+          { employeeId: emp.id, error: notifyErr?.message || notifyErr }
+        );
+      }
 
       return res.json({ form: await formWithClientFlags(data) });
     }
