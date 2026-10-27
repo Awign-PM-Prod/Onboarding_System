@@ -36,6 +36,7 @@ import {
   ensureDojUnlockValid,
   ensureJoiningStatusUnlockValid,
 } from '../utils/unlockTtl.js';
+import { isOnboardingTestIdentity } from '../utils/onboardingTestIdentity.js';
 
 const router = Router();
 
@@ -825,6 +826,86 @@ function normalizeRejectedFields(raw) {
     uniq.add(key);
   }
   return Array.from(uniq);
+}
+
+/**
+ * Hard-reset form + employee Aadhaar for the live onboarding test identity
+ * so Digilocker / form can be re-run on the same employee row.
+ */
+async function resetTestIdentityOnboarding(employeeIds) {
+  const ids = Array.from(
+    new Set((employeeIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))
+  );
+  if (!ids.length) return;
+
+  const now = new Date().toISOString();
+  const { error: formErr } = await supabaseAdmin
+    .from('job_app_form')
+    .update(buildReinitiateFormResetPayload(now))
+    .in('employee_id', ids);
+  if (formErr) throw formErr;
+
+  const { error: empErr } = await supabaseAdmin
+    .from('employees')
+    .update({
+      onboarding_initiated: true,
+      onboarding_status: 'FORM_SENT',
+      aadhaar_number: null,
+    })
+    .in('id', ids);
+  if (empErr) throw empErr;
+
+  console.log(
+    `[employees] Reset onboarding test identity for ${ids.length} employee(s): ${ids.join(',')}`
+  );
+}
+
+/**
+ * Reuse same-client employee when create payload is the configured test pair.
+ * @returns {Promise<{ employee: object } | { conflict: string } | null>}
+ */
+async function tryReuseOnboardingTestIdentity({ payload, clientId }) {
+  if (!payload || !isOnboardingTestIdentity(payload.mobile, payload.email)) return null;
+
+  const existing = await fetchEmployeeByMobileOrEmail(payload.mobile, payload.email);
+  if (!existing) return null;
+  if (!isOnboardingTestIdentity(existing.mobile, existing.email)) return null;
+
+  if (String(existing.client_id ?? '') !== String(clientId ?? '')) {
+    return {
+      conflict:
+        'Onboarding test identity already exists on another project. Use that project or exit/rehire first.',
+    };
+  }
+
+  const name = String(payload.name ?? '').trim();
+  const updates = {};
+  if (name && name !== String(existing.name ?? '').trim()) {
+    updates.name = name;
+  }
+
+  let employee = existing;
+  if (Object.keys(updates).length) {
+    const { data, error } = await supabaseAdmin
+      .from('employees')
+      .update(updates)
+      .eq('id', existing.id)
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+    employee = data ?? { ...existing, ...updates };
+  } else {
+    const { data, error } = await supabaseAdmin
+      .from('employees')
+      .select()
+      .eq('id', existing.id)
+      .maybeSingle();
+    if (error) throw error;
+    employee = data ?? existing;
+  }
+
+  console.log(`[employees] Reused onboarding test identity employee ${employee.id}`);
+  return { employee };
 }
 
 function buildReinitiateFormResetPayload(nowIso) {
@@ -2013,11 +2094,30 @@ router.post('/', async (req, res, next) => {
       }
     });
 
+    // Live test identity: reuse same-client row instead of duplicate errors.
+    const reusedRows = [];
+    const validatedForInsert = [];
+    for (const v of validated) {
+      const reuse = await tryReuseOnboardingTestIdentity({
+        payload: v.payload,
+        clientId,
+      });
+      if (reuse?.conflict) {
+        errors.push({ index: v.source_index, errors: [reuse.conflict] });
+        continue;
+      }
+      if (reuse?.employee) {
+        reusedRows.push(reuse.employee);
+        continue;
+      }
+      validatedForInsert.push(v);
+    }
+
     // Skip rows whose mobile or email already exists in the DB or appears earlier
     // in this same batch. Each skipped row is reported in `errors`.
-    const existingMobiles = await fetchExistingMobiles(validated.map(v => v.payload.mobile));
-    const existingEmails = await fetchExistingEmails(validated.map(v => v.payload.email));
-    const { toInsert, errors: duplicateErrors } = rejectDuplicateContacts(validated, {
+    const existingMobiles = await fetchExistingMobiles(validatedForInsert.map(v => v.payload.mobile));
+    const existingEmails = await fetchExistingEmails(validatedForInsert.map(v => v.payload.email));
+    const { toInsert, errors: duplicateErrors } = rejectDuplicateContacts(validatedForInsert, {
       existingMobiles,
       existingEmails,
       errorKey: 'index',
@@ -2028,7 +2128,7 @@ router.post('/', async (req, res, next) => {
 
     // Single-row request with a duplicate -> 409 for a clearer UX.
     // If the match is an exited (rehireable) employee, return REHIRE_CANDIDATE.
-    if (!isBatch && toInsert.length === 0 && errors.length > 0) {
+    if (!isBatch && toInsert.length === 0 && reusedRows.length === 0 && errors.length > 0) {
       const firstErr = errors[0].errors[0];
       if (/already exists/.test(firstErr)) {
         const candidatePayload = validated[0]?.payload;
@@ -2048,8 +2148,18 @@ router.post('/', async (req, res, next) => {
       return res.status(400).json({ error: firstErr });
     }
 
-    if (errors.length && toInsert.length === 0) {
+    if (errors.length && toInsert.length === 0 && reusedRows.length === 0) {
       return res.status(400).json({ error: 'Validation failed', details: errors });
+    }
+
+    if (!isBatch && toInsert.length === 0 && reusedRows.length === 1 && errors.length === 0) {
+      return res.status(200).json({
+        inserted: 0,
+        reused: 1,
+        skipped: 0,
+        errors: [],
+        rows: reusedRows
+      });
     }
 
     let inserted = [];
@@ -2101,11 +2211,13 @@ router.post('/', async (req, res, next) => {
       });
     }
 
+    const rowsOut = [...inserted, ...reusedRows];
     res.status(errors.length ? 207 : 201).json({
       inserted: inserted.length,
+      reused: reusedRows.length,
       skipped: errors.length,
       errors,
-      rows: inserted
+      rows: rowsOut
     });
   } catch (err) {
     next(err);
@@ -2180,11 +2292,29 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
       }
     });
 
+    const reusedRows = [];
+    const validatedForInsert = [];
+    for (const v of validated) {
+      const reuse = await tryReuseOnboardingTestIdentity({
+        payload: v.payload,
+        clientId,
+      });
+      if (reuse?.conflict) {
+        errors.push({ row: v.source_row, errors: [reuse.conflict] });
+        continue;
+      }
+      if (reuse?.employee) {
+        reusedRows.push(reuse.employee);
+        continue;
+      }
+      validatedForInsert.push(v);
+    }
+
     // Skip rows whose mobile or email already exists in the DB or appears earlier
     // in this same file. Reported in `errors` with the original spreadsheet row.
-    const existingMobiles = await fetchExistingMobiles(validated.map(v => v.payload.mobile));
-    const existingEmails = await fetchExistingEmails(validated.map(v => v.payload.email));
-    const { toInsert, errors: duplicateErrors } = rejectDuplicateContacts(validated, {
+    const existingMobiles = await fetchExistingMobiles(validatedForInsert.map(v => v.payload.mobile));
+    const existingEmails = await fetchExistingEmails(validatedForInsert.map(v => v.payload.email));
+    const { toInsert, errors: duplicateErrors } = rejectDuplicateContacts(validatedForInsert, {
       existingMobiles,
       existingEmails,
       errorKey: 'row',
@@ -2214,7 +2344,12 @@ router.post('/bulk-upload', upload.single('file'), async (req, res, next) => {
       inserted = toInsert.length;
     }
 
-    res.json({ inserted, skipped: errors.length, errors });
+    res.json({
+      inserted,
+      reused: reusedRows.length,
+      skipped: errors.length,
+      errors
+    });
   } catch (err) {
     next(err);
   }
@@ -2234,17 +2369,35 @@ router.post('/initiate-onboarding', async (req, res, next) => {
 
     const { data: candidates, error: fetchErr } = await supabaseAdmin
       .from('employees')
-      .select('id, onboarding_status, client_id')
+      .select('id, onboarding_status, client_id, name, email, mobile')
       .in('id', ids)
       .in('client_id', ownedClientIds);
     if (fetchErr) throw fetchErr;
-    const validIds = candidates
-      .filter((row) => row.onboarding_status === 'ROLE_ASSIGNED')
-      .map((row) => row.id);
+
+    const testResetIds = [];
+    const validIds = [];
+    for (const row of candidates ?? []) {
+      const status = String(row.onboarding_status ?? '').trim().toUpperCase();
+      if (status === 'EXITED') continue;
+      if (isOnboardingTestIdentity(row.mobile, row.email)) {
+        testResetIds.push(row.id);
+        validIds.push(row.id);
+        continue;
+      }
+      if (row.onboarding_status === 'ROLE_ASSIGNED') {
+        validIds.push(row.id);
+      }
+    }
     if (validIds.length === 0) {
       return res.status(400).json({ error: 'No ROLE_ASSIGNED employees selected' });
     }
-    const initiateClientId = candidates.find((row) => row.onboarding_status === 'ROLE_ASSIGNED')?.client_id ?? null;
+
+    if (testResetIds.length) {
+      await resetTestIdentityOnboarding(testResetIds);
+    }
+
+    const initiateClientId =
+      (candidates ?? []).find((row) => validIds.includes(row.id))?.client_id ?? null;
     const { data: updated, error } = await supabaseAdmin
       .from('employees')
       .update({ onboarding_initiated: true, onboarding_status: 'FORM_SENT' })
@@ -2264,13 +2417,17 @@ router.post('/initiate-onboarding', async (req, res, next) => {
         entityId: updatedRows.length === 1 ? updatedRows[0].id : null,
         clientId: initiateClientId,
         summary: `Initiated onboarding for ${updatedRows.length} employee(s)`,
-        metadata: { employee_ids: updatedRows.map((r) => r.id) }
+        metadata: {
+          employee_ids: updatedRows.map((r) => r.id),
+          test_identity_reset: testResetIds,
+        }
       });
     }
 
     res.json({
       updated: updatedRows.length,
       employee_ids: updatedRows.map((r) => r.id),
+      test_identity_reset: testResetIds.length,
       ...delivery
     });
   } catch (err) {
@@ -2280,7 +2437,7 @@ router.post('/initiate-onboarding', async (req, res, next) => {
 
 /**
  * Resend onboarding email + WhatsApp for initiated employees who have not submitted yet.
- * Does not reset form data or change status.
+ * Does not reset form data or change status (except live onboarding test identity).
  */
 router.post('/resend-onboarding', async (req, res, next) => {
   try {
@@ -2306,34 +2463,49 @@ router.post('/resend-onboarding', async (req, res, next) => {
       .in('client_id', ownedClientIds);
     if (fetchErr) throw fetchErr;
 
+    const testIdentityRows = (candidates ?? []).filter((row) => {
+      const status = String(row.onboarding_status ?? '').trim().toUpperCase();
+      return status !== 'EXITED' && isOnboardingTestIdentity(row.mobile, row.email);
+    });
+
     const initiatedCandidates = (candidates ?? []).filter(
       (row) =>
-        Boolean(row.onboarding_initiated) ||
-        String(row.onboarding_status ?? '').trim().toUpperCase() === 'FORM_SENT'
+        !isOnboardingTestIdentity(row.mobile, row.email) &&
+        (Boolean(row.onboarding_initiated) ||
+          String(row.onboarding_status ?? '').trim().toUpperCase() === 'FORM_SENT')
     );
-    if (initiatedCandidates.length === 0) {
-      return res.status(400).json({
-        error: 'No initiated, not-yet-submitted employees selected.'
-      });
-    }
 
     const candidateIds = initiatedCandidates.map((row) => row.id);
-    const { data: forms, error: formsErr } = await supabaseAdmin
-      .from('job_app_form')
-      .select('employee_id, submission_status, review_status')
-      .in('employee_id', candidateIds);
-    if (formsErr) throw formsErr;
+    let forms = [];
+    if (candidateIds.length) {
+      const { data: formRows, error: formsErr } = await supabaseAdmin
+        .from('job_app_form')
+        .select('employee_id, submission_status, review_status')
+        .in('employee_id', candidateIds);
+      if (formsErr) throw formsErr;
+      forms = formRows ?? [];
+    }
 
     const formByEmployeeId = new Map(
-      (forms ?? []).map((row) => [String(row.employee_id), row])
+      forms.map((row) => [String(row.employee_id), row])
     );
-    const eligibleRows = initiatedCandidates.filter((row) => {
+    const normalEligibleRows = initiatedCandidates.filter((row) => {
       const form = formByEmployeeId.get(String(row.id));
       if (!form) return true;
       const submitted = String(form.submission_status ?? '').trim() === 'Submitted';
       const reviewStatus = String(form.review_status ?? '').trim().toUpperCase();
       return !submitted && !reviewStatus;
     });
+
+    if (testIdentityRows.length) {
+      await resetTestIdentityOnboarding(testIdentityRows.map((row) => row.id));
+    }
+
+    const eligibleById = new Map();
+    for (const row of [...normalEligibleRows, ...testIdentityRows]) {
+      eligibleById.set(String(row.id), row);
+    }
+    const eligibleRows = Array.from(eligibleById.values());
 
     if (eligibleRows.length === 0) {
       return res.status(400).json({
@@ -2353,13 +2525,17 @@ router.post('/resend-onboarding', async (req, res, next) => {
       entityId: eligibleRows.length === 1 ? eligibleRows[0].id : null,
       clientId: resendClientId,
       summary: `Resent onboarding link for ${eligibleRows.length} employee(s)`,
-      metadata: { employee_ids: eligibleRows.map((r) => r.id) }
+      metadata: {
+        employee_ids: eligibleRows.map((r) => r.id),
+        test_identity_reset: testIdentityRows.map((r) => r.id),
+      }
     });
 
     res.json({
       updated: eligibleRows.length,
       employee_ids: eligibleRows.map((r) => r.id),
       skipped_ineligible: uniqueIds.length - eligibleRows.length,
+      test_identity_reset: testIdentityRows.length,
       ...delivery
     });
   } catch (err) {
