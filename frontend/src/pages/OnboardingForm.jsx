@@ -3744,9 +3744,23 @@ export default function OnboardingForm() {
   const employeeId = searchParams.get('employee_id') || '';
   const resumeMode = searchParams.get('resume') === 'true';
   const resumeStep = searchParams.get('step') || '';
+  const digilockerTxnFromQuery = String(
+    searchParams.get('unifiedTransactionId') ||
+      searchParams.get('unified_transaction_id') ||
+      searchParams.get('transactionId') ||
+      searchParams.get('transaction_id') ||
+      searchParams.get('txnId') ||
+      ''
+  ).trim();
+  // Digitap/ProfileX often return with unified_transaction_id and may drop aadhaar_digilocker=done.
+  const digilockerReturn =
+    searchParams.get('aadhaar_digilocker') === 'done' || Boolean(digilockerTxnFromQuery);
+  const mobileFromQuery = normalizeMobile(searchParams.get('mobile') || '');
   const employeeSpecificLink = Boolean(employeeId);
 
-  const [mobile, setMobile] = useState('');
+  const DIGILOCKER_PENDING_KEY = 'aadhaar_digilocker_pending';
+
+  const [mobile, setMobile] = useState(() => (TEN_DIGIT_REGEX.test(mobileFromQuery) ? mobileFromQuery : ''));
   const [mobileVerified, setMobileVerified] = useState(false);
   const [mobileSubmitting, setMobileSubmitting] = useState(false);
   const [mobileError, setMobileError] = useState('');
@@ -3758,6 +3772,7 @@ export default function OnboardingForm() {
   const [aadhaarSubmitting, setAadhaarSubmitting] = useState(false);
   const [otpVerifying, setOtpVerifying] = useState(false);
   const [aadhaarError, setAadhaarError] = useState('');
+  const [digilockerCompleting, setDigilockerCompleting] = useState(false);
 
   const [aadhaarComplete, setAadhaarComplete] = useState(false);
   const [aadhaarKyc, setAadhaarKyc] = useState(null);
@@ -3895,31 +3910,106 @@ export default function OnboardingForm() {
   };
 
   const hasValidMobile = TEN_DIGIT_REGEX.test(mobile);
-  const hasValidAadhaar = TWELVE_DIGIT_REGEX.test(aadhaar);
   const hasValidOtp = SIX_DIGIT_REGEX.test(otp);
+
+  const clearDigilockerQueryParams = () => {
+    try {
+      sessionStorage.removeItem(DIGILOCKER_PENDING_KEY);
+    } catch {
+      /* ignore */
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('aadhaar_digilocker');
+    next.delete('unifiedTransactionId');
+    next.delete('unified_transaction_id');
+    next.delete('transactionId');
+    next.delete('transaction_id');
+    next.delete('txnId');
+    const qs = next.toString();
+    navigate(`/onboardingform${qs ? `?${qs}` : ''}`, { replace: true });
+  };
+
+  const readDigilockerPending = () => {
+    try {
+      const raw = sessionStorage.getItem(DIGILOCKER_PENDING_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      const at = Number(parsed.at || 0);
+      // Ignore stale pending sessions older than 2 hours.
+      if (at && Date.now() - at > 2 * 60 * 60 * 1000) {
+        sessionStorage.removeItem(DIGILOCKER_PENDING_KEY);
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const applyAadhaarVerificationResult = async (result) => {
+    if (result?.aadhaar_number) {
+      setAadhaar(normalizeAadhaar(result.aadhaar_number));
+    }
+
+    let nextKyc = aadhaarKycFromForm(result?.aadhaarDetails) ?? null;
+    try {
+      const { form } = await api.getJobAppForm({ mobile, employeeId });
+      if (form?.aadhaar_number) setAadhaar(normalizeAadhaar(form.aadhaar_number));
+      nextKyc = aadhaarKycFromForm(form) ?? nextKyc;
+    } catch {
+      // Ignore refresh failures; verification already succeeded.
+    }
+
+    if (!nextKyc?.aad_name) {
+      setAadhaarKyc(null);
+      setAadhaarComplete(false);
+      setAadhaarResumeFlow(false);
+      setAadhaarPhase('digilocker');
+      setAadhaarError(
+        'Aadhaar was verified but KYC details were not returned. Please verify via Digilocker again.'
+      );
+      return false;
+    }
+
+    setAadhaarKyc(nextKyc);
+    setAadhaarComplete(true);
+    return true;
+  };
 
   const setupAadhaarStepFromForm = (form) => {
     const savedAadhaar = normalizeAadhaar(form?.aadhaar_number ?? '');
     const savedKyc = aadhaarKycFromForm(form);
-    // Resume only when verified AND KYC demographics were actually persisted.
-    const canUseResumeFlow =
-      form?.aadhaar_verified === true && TWELVE_DIGIT_REGEX.test(savedAadhaar) && Boolean(savedKyc?.aad_name);
+    const verifiedWithKyc =
+      form?.aadhaar_verified === true && Boolean(savedKyc?.aad_name);
+    // Full 12-digit Aadhaar (OTP path) → resume OTP. Digilocker often returns only
+    // masked digits, so treat verified+KYC as already complete and let them proceed.
+    const canUseResumeFlow = verifiedWithKyc && TWELVE_DIGIT_REGEX.test(savedAadhaar);
 
     setAadhaar(savedAadhaar);
     setOtp('');
     setAadhaarError('');
-    setAadhaarComplete(false);
 
     if (canUseResumeFlow) {
+      setAadhaarComplete(false);
       setAadhaarResumeFlow(true);
       setAadhaarPhase('resume_input');
       setAadhaarKyc(savedKyc);
       return;
     }
 
+    if (verifiedWithKyc) {
+      setAadhaarResumeFlow(false);
+      setAadhaarKyc(savedKyc);
+      setAadhaarComplete(true);
+      setAadhaarPhase(null);
+      return;
+    }
+
+    setAadhaarComplete(false);
     setAadhaarResumeFlow(false);
     setAadhaarKyc(null);
-    setAadhaarPhase('input');
+    setAadhaarPhase('digilocker');
   };
 
   useEffect(() => {
@@ -3958,6 +4048,8 @@ export default function OnboardingForm() {
           window.scrollTo({ top: 0, behavior: 'smooth' });
           return;
         }
+        // Digilocker return effect owns Aadhaar completion; don't reset mid-callback.
+        if (digilockerReturn) return;
         setupAadhaarStepFromForm(form);
       } catch (err) {
         if (cancelled) return;
@@ -3972,7 +4064,7 @@ export default function OnboardingForm() {
     return () => {
       cancelled = true;
     };
-  }, [employeeId, employeeSpecificLink]);
+  }, [employeeId, employeeSpecificLink, digilockerReturn]);
 
   const handleMobileContinue = async () => {
     if (!hasValidMobile || mobileSubmitting) return;
@@ -4011,17 +4103,33 @@ export default function OnboardingForm() {
     }
   };
 
-  const handleSendAadhaarOtp = async () => {
-    if (!hasValidAadhaar || aadhaarSubmitting || !mobileVerified) return;
+  const handleStartAadhaarDigilocker = async () => {
+    if (aadhaarSubmitting || !mobileVerified) return;
     setAadhaarSubmitting(true);
     setAadhaarError('');
     try {
-      await api.sendAadhaarOtp({ mobile, employeeId, aadhaar });
-      setOtp('');
-      setAadhaarPhase('otp');
+      const result = await api.startAadhaarDigilocker({ mobile, employeeId });
+      const digilockerUrl = String(result?.digilockerUrl ?? '').trim();
+      if (!digilockerUrl) {
+        throw new Error('Digilocker did not return a redirect URL.');
+      }
+      try {
+        sessionStorage.setItem(
+          DIGILOCKER_PENDING_KEY,
+          JSON.stringify({
+            mobile,
+            employeeId: employeeId || null,
+            uniqueId: result?.uniqueId || null,
+            unifiedTransactionId: result?.unifiedTransactionId || null,
+            at: Date.now(),
+          })
+        );
+      } catch {
+        /* ignore quota / private mode */
+      }
+      window.location.assign(digilockerUrl);
     } catch (err) {
-      setAadhaarError(err.message || 'Could not send OTP. Try again.');
-    } finally {
+      setAadhaarError(err.message || 'Could not start Digilocker verification. Try again.');
       setAadhaarSubmitting(false);
     }
   };
@@ -4042,46 +4150,78 @@ export default function OnboardingForm() {
   };
 
   const handleVerifyOtp = async () => {
-    if (!hasValidOtp || otpVerifying) return;
+    if (!hasValidOtp || otpVerifying || !aadhaarResumeFlow) return;
     setOtpVerifying(true);
     setAadhaarError('');
     try {
-      const result = aadhaarResumeFlow
-        ? await api.verifyAadhaarResumeOtp({ mobile, employeeId, otp })
-        : await api.verifyAadhaarOtp({ mobile, employeeId, otp });
-      if (result?.aadhaar_number) {
-        setAadhaar(normalizeAadhaar(result.aadhaar_number));
-      }
-
-      let nextKyc = aadhaarKycFromForm(result?.aadhaarDetails) ?? null;
-      // Read back persisted form immediately so the flow reflects saved DB state.
-      try {
-        const { form } = await api.getJobAppForm({ mobile, employeeId });
-        if (form?.aadhaar_number) setAadhaar(normalizeAadhaar(form.aadhaar_number));
-        nextKyc = aadhaarKycFromForm(form) ?? nextKyc;
-      } catch {
-        // Ignore refresh failures here; OTP verification already succeeded.
-      }
-
-      if (!nextKyc?.aad_name) {
-        setAadhaarKyc(null);
-        setAadhaarComplete(false);
-        setAadhaarResumeFlow(false);
-        setAadhaarPhase('input');
-        setAadhaarError(
-          'Aadhaar was verified but KYC details were not returned. Please request a new OTP and try again.'
-        );
-        return;
-      }
-
-      setAadhaarKyc(nextKyc);
-      setAadhaarComplete(true);
+      const result = await api.verifyAadhaarResumeOtp({ mobile, employeeId, otp });
+      await applyAadhaarVerificationResult(result);
     } catch (err) {
       setAadhaarError(err.message || 'Verification failed.');
     } finally {
       setOtpVerifying(false);
     }
   };
+
+  useEffect(() => {
+    if (digilockerCompleting || aadhaarComplete) return;
+
+    const pending = readDigilockerPending();
+    const shouldComplete = digilockerReturn || Boolean(pending);
+    if (!shouldComplete) return;
+
+    let cancelled = false;
+    const finishDigilocker = async () => {
+      const pendingMobile = normalizeMobile(pending?.mobile || '');
+      const resolvedMobile = TEN_DIGIT_REGEX.test(mobile)
+        ? mobile
+        : TEN_DIGIT_REGEX.test(mobileFromQuery)
+          ? mobileFromQuery
+          : TEN_DIGIT_REGEX.test(pendingMobile)
+            ? pendingMobile
+            : '';
+      const resolvedEmployeeId = employeeId || String(pending?.employeeId || '').trim() || '';
+      const resolvedTxn =
+        digilockerTxnFromQuery ||
+        String(pending?.unifiedTransactionId || '').trim() ||
+        '';
+
+      if (!TEN_DIGIT_REGEX.test(resolvedMobile)) {
+        setAadhaarError('Missing mobile number after Digilocker return. Please start again.');
+        setAadhaarPhase('digilocker');
+        return;
+      }
+
+      setDigilockerCompleting(true);
+      setAadhaarError('');
+      setMobile(resolvedMobile);
+      setMobileVerified(true);
+      try {
+        const result = await api.completeAadhaarDigilocker({
+          mobile: resolvedMobile,
+          employeeId: resolvedEmployeeId,
+          unifiedTransactionId: resolvedTxn || null,
+        });
+        if (cancelled) return;
+        const ok = await applyAadhaarVerificationResult(result);
+        if (ok) clearDigilockerQueryParams();
+      } catch (err) {
+        if (cancelled) return;
+        setAadhaarResumeFlow(false);
+        setAadhaarPhase('digilocker');
+        setAadhaarError(err.message || 'Could not complete Digilocker verification. Please try again.');
+        clearDigilockerQueryParams();
+      } finally {
+        if (!cancelled) setDigilockerCompleting(false);
+      }
+    };
+
+    finishDigilocker();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on Digilocker return / pending session
+  }, [digilockerReturn]);
 
   const handleProceedToPersonal = async () => {
     setProceedError('');
@@ -4201,9 +4341,11 @@ export default function OnboardingForm() {
                   ? 'Please enter your mobile number to begin your application'
                   : aadhaarComplete
                     ? 'Your Aadhaar has been verified. Review your details below.'
-                    : aadhaarResumeFlow
-                      ? 'Aadhaar already verified. Confirm with OTP to continue.'
-                      : 'Verify your Aadhaar to continue your application'}
+                    : digilockerCompleting
+                      ? 'Completing Digilocker verification...'
+                      : aadhaarResumeFlow
+                        ? 'Aadhaar already verified. Confirm with OTP to continue.'
+                        : 'Verify your Aadhaar via Digilocker to continue your application'}
               </p>
             </div>
 
@@ -4363,77 +4505,28 @@ export default function OnboardingForm() {
                     </>
                   )}
 
-                  {!aadhaarResumeFlow && aadhaarPhase === 'input' && (
+                  {!aadhaarResumeFlow && (aadhaarPhase === 'digilocker' || digilockerCompleting) && (
                     <>
-                      <p className="mb-4 text-sm text-slate-600">
-                        Enter the 12-digit Aadhaar number. We will send an OTP to your Aadhaar-registered mobile
-                        number.
-                      </p>
-                      <label htmlFor="onboarding-aadhaar" className="mb-1.5 block text-sm font-medium text-slate-700">
-                        Aadhaar Number <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        id="onboarding-aadhaar"
-                        type="text"
-                        value={aadhaar}
-                        onChange={(e) => setAadhaar(normalizeAadhaar(e.target.value))}
-                        inputMode="numeric"
-                        maxLength={12}
-                        className="w-full rounded-lg border border-slate-300 px-3.5 py-3 text-base tracking-widest text-slate-900 tabular-nums"
-                        placeholder="12-digit Aadhaar"
-                        autoComplete="off"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleSendAadhaarOtp}
-                        disabled={!hasValidAadhaar || aadhaarSubmitting}
-                        className="mt-5 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {aadhaarSubmitting ? 'Sending...' : 'Send OTP'}
-                      </button>
-                    </>
-                  )}
-
-                  {!aadhaarResumeFlow && aadhaarPhase === 'otp' && (
-                    <>
-                      <p className="mb-4 text-sm text-slate-600">
-                        OTP sent to your Aadhaar-registered mobile number.
-                      </p>
-
-                      <label htmlFor="onboarding-aadhaar-otp" className="mb-1.5 block text-sm font-medium text-slate-700">
-                        Enter OTP <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        id="onboarding-aadhaar-otp"
-                        type="text"
-                        value={otp}
-                        onChange={(e) => setOtp(normalizeOtp(e.target.value))}
-                        inputMode="numeric"
-                        maxLength={6}
-                        className="mb-5 w-full rounded-lg border border-slate-300 px-4 py-3 text-center text-lg tracking-[0.3em] text-slate-900 tabular-nums"
-                        placeholder="6-digit OTP"
-                        autoComplete="one-time-code"
-                      />
-
-                      <button
-                        type="button"
-                        onClick={handleVerifyOtp}
-                        disabled={!hasValidOtp || otpVerifying}
-                        className="w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {otpVerifying ? 'Verifying...' : 'Verify OTP'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAadhaarPhase('input');
-                          setOtp('');
-                          setAadhaarError('');
-                        }}
-                        className="mt-4 w-full text-center text-sm font-semibold text-indigo-600 hover:text-indigo-800"
-                      >
-                        Change Number
-                      </button>
+                      {digilockerCompleting ? (
+                        <p className="mb-4 text-sm text-slate-600">
+                          Completing Digilocker verification. Please wait...
+                        </p>
+                      ) : (
+                        <>
+                          <p className="mb-4 text-sm text-slate-600">
+                            Verify your Aadhaar securely through Digilocker. You will be redirected to Digilocker to
+                            share your Aadhaar details, then returned here automatically.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleStartAadhaarDigilocker}
+                            disabled={aadhaarSubmitting}
+                            className="mt-2 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {aadhaarSubmitting ? 'Opening Digilocker...' : 'Verify via Digilocker'}
+                          </button>
+                        </>
+                      )}
                     </>
                   )}
 

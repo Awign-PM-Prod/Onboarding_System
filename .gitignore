@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 deployed env/
+backend/creds
+**/creds
 
 # Dependencies & build output
 node_modules/

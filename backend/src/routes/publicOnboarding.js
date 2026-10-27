@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import multer from 'multer';
 import { supabaseAdmin } from '../supabase.js';
@@ -287,6 +288,10 @@ const AADHAAR_SEND_OTP_EDGE_FUNCTION =
   process.env.AADHAAR_SEND_OTP_EDGE_FUNCTION || 'aadhaar-send-otp';
 const AADHAAR_VERIFY_OTP_EDGE_FUNCTION =
   process.env.AADHAAR_VERIFY_OTP_EDGE_FUNCTION || 'aadhaar-verify-otp';
+const AADHAAR_DIGILOCKER_START_EDGE_FUNCTION =
+  process.env.AADHAAR_DIGILOCKER_START_EDGE_FUNCTION || 'aadhaar-digilocker-start';
+const AADHAAR_DIGILOCKER_DETAILS_EDGE_FUNCTION =
+  process.env.AADHAAR_DIGILOCKER_DETAILS_EDGE_FUNCTION || 'aadhaar-digilocker-details';
 const BANK_VERIFY_EDGE_FUNCTION =
   process.env.BANK_VERIFY_EDGE_FUNCTION || 'bank-verify';
 const PAN_VERIFY_EDGE_FUNCTION =
@@ -719,6 +724,96 @@ async function invokeAadhaarVerifyOtpEdge({ sessionId, otp }) {
   return body;
 }
 
+async function invokeAadhaarDigilockerStartEdge({ redirectionUrl, uniqueId }) {
+  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to invoke edge functions.');
+  }
+
+  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(AADHAAR_DIGILOCKER_START_EDGE_FUNCTION)}`;
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ redirectionUrl, uniqueId }),
+  });
+
+  const raw = await resp.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
+  if (!resp.ok) {
+    const msg = body?.error || body?.message || `Edge function failed (${resp.status})`;
+    const err = new Error(msg);
+    err.details = body?.upstream ?? body ?? null;
+    throw err;
+  }
+  return body;
+}
+
+async function invokeAadhaarDigilockerDetailsEdge({ unifiedTransactionId, uniqueId }) {
+  const supabaseUrl = String(process.env.SUPABASE_URL ?? '').trim();
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim();
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to invoke edge functions.');
+  }
+
+  const endpoint = `${supabaseUrl}/functions/v1/${encodeURIComponent(AADHAAR_DIGILOCKER_DETAILS_EDGE_FUNCTION)}`;
+  const payload = { unifiedTransactionId };
+  const unique = String(uniqueId ?? '').trim();
+  if (unique) payload.uniqueId = unique;
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const raw = await resp.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
+  if (!resp.ok) {
+    const msg = body?.error || body?.message || `Edge function failed (${resp.status})`;
+    const err = new Error(msg);
+    err.details = body?.upstream ?? body ?? null;
+    throw err;
+  }
+  return body;
+}
+
+function buildDigilockerRedirectionUrl({ mobile, employeeId }) {
+  const override = String(process.env.NEOKRED_DIGILOCKER_REDIRECT_URL ?? '').trim();
+  const base = override || `${FRONTEND_URL.replace(/\/+$/, '')}/onboardingform`;
+  try {
+    const url = new URL(base);
+    url.searchParams.set('aadhaar_digilocker', 'done');
+    url.searchParams.set('mobile', mobile);
+    if (employeeId) url.searchParams.set('employee_id', employeeId);
+    return url.toString();
+  } catch {
+    const q = new URLSearchParams();
+    q.set('aadhaar_digilocker', 'done');
+    q.set('mobile', mobile);
+    if (employeeId) q.set('employee_id', employeeId);
+    const sep = base.includes('?') ? '&' : '?';
+    return `${base}${sep}${q.toString()}`;
+  }
+}
+
 function createPartnerKycEdgeError(resp, body) {
   const msg = body?.message || body?.error || `Edge function failed (${resp.status})`;
   const err = new Error(msg);
@@ -901,12 +996,15 @@ function extractNeokredAadhaarPayload(edgeResult) {
   }
 
   const nestedKeys = [
+    'model',
     'aadhaarData',
     'aadhaar_data',
     'kycData',
     'kyc_data',
     'kycDetails',
     'kyc_details',
+    'digilockerData',
+    'digilocker_data',
     'result',
     'profile',
     'details',
@@ -918,7 +1016,17 @@ function extractNeokredAadhaarPayload(edgeResult) {
     const nested = data[key];
     if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
       const nestedName = firstNonEmptyString(nested.name, nested.fullName, nested.full_name);
-      if (nestedName || nested.address || nested.photo || nested.dob || nested.dateOfBirth) {
+      if (
+        nestedName ||
+        nested.address ||
+        nested.photo ||
+        nested.image ||
+        nested.image_url ||
+        nested.dob ||
+        nested.dateOfBirth ||
+        nested.maskedAdharNumber ||
+        nested.maskedAadhaarNumber
+      ) {
         profile = nested;
         break;
       }
@@ -1016,11 +1124,21 @@ function extractNeokredAadhaarPayload(edgeResult) {
     state,
     pincode,
   ]);
+  const imageObj =
+    profile.image && typeof profile.image === 'object' && !Array.isArray(profile.image)
+      ? profile.image
+      : profile.Image && typeof profile.Image === 'object' && !Array.isArray(profile.Image)
+        ? profile.Image
+        : null;
   const photo = firstNonEmptyString(
     profile.photo,
     profile.Photo,
-    profile.image,
-    profile.Image,
+    typeof profile.image === 'string' ? profile.image : '',
+    typeof profile.Image === 'string' ? profile.Image : '',
+    imageObj?.base64,
+    imageObj?.content,
+    profile.image_url,
+    profile.imageUrl,
     profile.profilePhoto,
     profile.profile_photo,
     profile.Pht
@@ -1029,6 +1147,8 @@ function extractNeokredAadhaarPayload(edgeResult) {
     profile.aadhaar_number ??
       profile.aadhaarNumber ??
       profile.uid ??
+      profile.maskedAdharNumber ??
+      profile.maskedAadhaarNumber ??
       profile.maskedNumber ??
       profile.masked_aadhaar ??
       ''
@@ -1425,6 +1545,249 @@ router.post('/aadhaar/verify-otp', async (req, res, next) => {
     if (persistedErr) throw persistedErr;
     if (!persistedRow) {
       return res.status(500).json({ error: 'Aadhaar verification succeeded but details could not be persisted.' });
+    }
+
+    return res.json({
+      verified: true,
+      aadhaar_number: String(persistedRow?.aadhaar_number ?? '').trim() || '',
+      aadhaarDetails: {
+        aad_profile_photo: String(persistedRow?.aad_profile_photo ?? ''),
+        aad_name: String(persistedRow?.aad_name ?? ''),
+        aad_care_of: String(persistedRow?.aad_care_of ?? ''),
+        aad_dob: persistedRow?.aad_dob ?? null,
+        aad_gender: String(persistedRow?.aad_gender ?? ''),
+        aad_address: String(persistedRow?.aad_address ?? ''),
+        aad_state: String(persistedRow?.aad_state ?? ''),
+        aad_district: String(persistedRow?.aad_district ?? ''),
+        aad_pincode: String(persistedRow?.aad_pincode ?? ''),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/aadhaar/digilocker/start', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    const uniqueId = randomUUID();
+    const redirectionUrl = buildDigilockerRedirectionUrl({
+      mobile,
+      employeeId: employeeIdFilter || row.id,
+    });
+
+    let edgeResult;
+    try {
+      edgeResult = await invokeAadhaarDigilockerStartEdge({ redirectionUrl, uniqueId });
+    } catch (err) {
+      console.warn('[public/onboarding] Digilocker start failed', {
+        employeeId: row.id,
+        message: err?.message,
+        details: err?.details ?? null,
+      });
+      return res.status(502).json({
+        error: err?.message || 'Could not start Digilocker Aadhaar verification. Please retry.',
+      });
+    }
+
+    const digilockerUrl = String(edgeResult?.digilockerUrl ?? '').trim();
+    const unifiedTransactionId =
+      String(edgeResult?.unifiedTransactionId ?? '').trim() || uniqueId;
+    if (!digilockerUrl) {
+      return res.status(502).json({ error: 'Digilocker provider did not return a redirect URL.' });
+    }
+
+    const now = new Date().toISOString();
+    const { error: updErr } = await supabaseAdmin.from('job_app_form').upsert(
+      {
+        employee_id: row.id,
+        client_id: row.client_id,
+        name: row.name,
+        mobile: row.mobile,
+        email: row.email ?? null,
+        designation: row.designation ?? null,
+        aadhaar_verified: false,
+        aad_otp_session_id: uniqueId,
+        aad_otp_transaction_id: unifiedTransactionId,
+        aad_otp_requested_at: now,
+        updated_at: now,
+      },
+      { onConflict: 'employee_id' }
+    );
+    if (updErr) throw updErr;
+
+    return res.json({
+      ok: true,
+      digilockerUrl,
+      uniqueId,
+      unifiedTransactionId,
+      redirectionUrl,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/aadhaar/digilocker/complete', async (req, res, next) => {
+  try {
+    const mobile = normalizeMobile(req.body?.mobile);
+    const employeeIdFilter = String(req.body?.employee_id ?? '').trim();
+    const bodyTxn = String(
+      req.body?.unifiedTransactionId ??
+        req.body?.unified_transaction_id ??
+        req.body?.transactionId ??
+        req.body?.transaction_id ??
+        ''
+    ).trim();
+
+    if (!TEN_DIGIT_REGEX.test(mobile)) {
+      return res.status(400).json({ error: 'mobile must be a valid 10-digit number' });
+    }
+
+    const row = await resolveOnboardingEmployee(mobile, employeeIdFilter || null);
+    if (!row) {
+      return res.status(400).json({ error: 'No matching onboarding record for this mobile number.' });
+    }
+
+    const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select('aadhaar_number, aad_otp_session_id, aad_otp_transaction_id')
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (formCurrentErr) throw formCurrentErr;
+
+    const unifiedTransactionId =
+      bodyTxn ||
+      String(formCurrent?.aad_otp_transaction_id ?? '').trim() ||
+      String(formCurrent?.aad_otp_session_id ?? '').trim();
+    if (!unifiedTransactionId) {
+      return res.status(400).json({
+        error: 'No Digilocker transaction found. Please start Aadhaar verification again.',
+      });
+    }
+
+    let edgeResult;
+    let lastDetailsErr = null;
+    // Provider may need a short delay after Digilocker consent before details are available.
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      try {
+        edgeResult = await invokeAadhaarDigilockerDetailsEdge({
+          unifiedTransactionId,
+          uniqueId: String(formCurrent?.aad_otp_session_id ?? '').trim() || null,
+        });
+        lastDetailsErr = null;
+        break;
+      } catch (err) {
+        lastDetailsErr = err;
+        console.warn('[public/onboarding] Digilocker details failed', {
+          employeeId: row.id,
+          attempt,
+          unifiedTransactionId,
+          message: err?.message,
+          details: err?.details ?? null,
+        });
+        if (attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+        }
+      }
+    }
+    if (!edgeResult) {
+      return res.status(502).json({
+        error:
+          lastDetailsErr?.message ||
+          'Could not fetch Digilocker Aadhaar details. Please retry.',
+      });
+    }
+
+    const mapped = extractNeokredAadhaarPayload(edgeResult);
+    const aadName = mapped.name;
+    const aadCareOf = mapped.careOf;
+    const aadDob = mapped.dob;
+    const aadGender = mapped.gender;
+    const aadState = mapped.state;
+    const aadDistrict = mapped.district;
+    const aadPincode = mapped.pincode;
+    const aadAddress = mapped.address;
+    const aadProfilePhoto = mapped.photo;
+
+    if (!aadName) {
+      console.warn('[public/onboarding] Digilocker details returned no Aadhaar name', {
+        employeeId: row.id,
+        dataKeys:
+          edgeResult?.data && typeof edgeResult.data === 'object'
+            ? Object.keys(edgeResult.data)
+            : typeof edgeResult?.data,
+      });
+      return res.status(502).json({
+        error:
+          'Digilocker completed but KYC details were missing. Please verify via Digilocker again.',
+      });
+    }
+
+    const providerUid = String(mapped.uid ?? '').replace(/\D/g, '');
+    const existingAadhaar = String(formCurrent?.aadhaar_number ?? '').replace(/\D/g, '');
+    // Digilocker returns masked Aadhaar (e.g. last 4). Never persist partial digits as aadhaar_number.
+    const persistedAadhaarNumber = TWELVE_DIGIT_REGEX.test(providerUid)
+      ? providerUid
+      : TWELVE_DIGIT_REGEX.test(existingAadhaar)
+        ? existingAadhaar
+        : null;
+    const now = new Date().toISOString();
+    const { error: upsertErr } = await supabaseAdmin.from('job_app_form').upsert(
+      {
+        employee_id: row.id,
+        client_id: row.client_id,
+        name: row.name,
+        mobile: row.mobile,
+        email: row.email ?? null,
+        designation: row.designation ?? null,
+        aadhaar_number: persistedAadhaarNumber,
+        aad_profile_photo: aadProfilePhoto,
+        aad_name: aadName || null,
+        aad_care_of: aadCareOf || null,
+        aad_dob: aadDob,
+        aad_gender: aadGender,
+        aad_address: aadAddress || null,
+        aad_state: aadState || null,
+        aad_district: aadDistrict || null,
+        aad_pincode: aadPincode || null,
+        aad_otp_transaction_id:
+          String(edgeResult?.transactionId ?? unifiedTransactionId).trim() || null,
+        aadhaar_verified: true,
+        pd_city: pdCityFromAadDistrict(aadDistrict),
+        pd_age: computePdAgeFromAadDob(aadDob),
+        updated_at: now,
+      },
+      { onConflict: 'employee_id' }
+    );
+
+    if (upsertErr) throw upsertErr;
+
+    const { data: persistedRow, error: persistedErr } = await supabaseAdmin
+      .from('job_app_form')
+      .select(
+        'aadhaar_number, aad_profile_photo, aad_name, aad_care_of, aad_dob, aad_gender, aad_address, aad_state, aad_district, aad_pincode'
+      )
+      .eq('employee_id', row.id)
+      .eq('mobile', mobile)
+      .maybeSingle();
+    if (persistedErr) throw persistedErr;
+    if (!persistedRow) {
+      return res.status(500).json({
+        error: 'Aadhaar verification succeeded but details could not be persisted.',
+      });
     }
 
     return res.json({

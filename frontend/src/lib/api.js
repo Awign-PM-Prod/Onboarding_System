@@ -516,6 +516,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ mobile, employee_id: employeeId || null, otp })
     }),
+  startAadhaarDigilocker: ({ mobile, employeeId }) =>
+    request('/api/public/onboarding/aadhaar/digilocker/start', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, employee_id: employeeId || null })
+    }),
+  completeAadhaarDigilocker: ({ mobile, employeeId, unifiedTransactionId }) =>
+    request('/api/public/onboarding/aadhaar/digilocker/complete', {
+      method: 'POST',
+      body: JSON.stringify({
+        mobile,
+        employee_id: employeeId || null,
+        unifiedTransactionId: unifiedTransactionId || null
+      })
+    }),
   sendAadhaarResumeOtp: ({ mobile, employeeId }) =>
     request('/api/public/onboarding/aadhaar/resume/send-otp', {
       method: 'POST',
