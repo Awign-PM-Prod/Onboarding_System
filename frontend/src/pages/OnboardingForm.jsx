@@ -305,6 +305,29 @@ const FORM_SHELL = 'mx-auto w-full max-w-3xl min-w-0 overflow-x-hidden px-4 py-5
 const SECTION_DIVIDER = 'border-t border-slate-200 pt-6';
 const FIELD_WRAP = 'min-w-0 max-w-full';
 
+/** Lists incomplete required fields / OTP so Next can explain what is still pending. */
+function FormPendingAlert({ pending, message }) {
+  const items = Array.isArray(pending) ? pending.filter(Boolean) : [];
+  if (items.length > 0) {
+    return (
+      <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-800">
+        <p className="font-semibold">Please complete the following before continuing:</p>
+        <ul className="mt-1.5 list-disc space-y-1 pl-5">
+          {items.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  if (!message) return null;
+  return (
+    <p role="alert" className="text-sm text-rose-600">
+      {message}
+    </p>
+  );
+}
+
 function fileNameFromStorageUrl(url) {
   const raw = String(url ?? '').trim();
   if (!raw) return '';
@@ -785,6 +808,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
   const [addError, setAddError] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [pendingRequirements, setPendingRequirements] = useState([]);
   useEffect(() => {
     const visible = correction?.active ? correction.visibleFields : null;
     setHighest(visible?.has('qual_highest_qualification') ? '' : (jobForm.qual_highest_qualification ?? ''));
@@ -830,6 +854,20 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
     (!isRequired('qual_highest_qualification_doc_url', true) || Boolean(String(highestDocUrl).trim())) &&
     (!isRequired('qual_education_certificate_url', true) || Boolean(String(eduUrl).trim()))
   );
+
+  const getPendingRequirements = () => {
+    const pending = [];
+    if (isRequired('qual_highest_qualification', true) && !String(highest).trim()) {
+      pending.push('Highest qualification');
+    }
+    if (isRequired('qual_highest_qualification_doc_url', true) && !String(highestDocUrl).trim()) {
+      pending.push('Highest qualification document upload');
+    }
+    if (isRequired('qual_education_certificate_url', true) && !String(eduUrl).trim()) {
+      pending.push('Education certificate upload');
+    }
+    return pending;
+  };
 
   const uploadIfValid = async (file, kind) => {
     if (!isAllowedQualificationFile(file)) {
@@ -955,9 +993,17 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
   };
 
   const handleNext = async () => {
-    if (!canNext || saving) return;
+    if (saving) return;
+    const pending = getPendingRequirements();
+    if (pending.length > 0) {
+      setError('');
+      setPendingRequirements(pending);
+      return;
+    }
+    if (!canNext) return;
     setSaving(true);
     setError('');
+    setPendingRequirements([]);
     try {
       const { form } = await api.patchJobAppForm({
         mobile,
@@ -970,6 +1016,7 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
       });
       onSaveSuccess?.(form);
     } catch (err) {
+      setPendingRequirements([]);
       setError(err.message || 'Could not save. Try again.');
     } finally {
       setSaving(false);
@@ -1072,13 +1119,13 @@ function QualificationForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucc
         </div>}
       </div>
 
-      {error && <p className="text-sm text-rose-600">{error}</p>}
+      <FormPendingAlert pending={pendingRequirements} message={error} />
 
       <div className={NAV_ROW}>
         <button type="button" onClick={onPrevious} className={NAV_BTN_PREV}>
           <span aria-hidden>‹</span> Previous
         </button>
-        <button type="button" disabled={!canNext || saving} onClick={handleNext} className={NAV_BTN_NEXT}>
+        <button type="button" disabled={saving} onClick={handleNext} className={NAV_BTN_NEXT}>
           {saving ? 'Saving…' : 'Next'} <span aria-hidden>›</span>
         </button>
       </div>
@@ -1245,6 +1292,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [pendingRequirements, setPendingRequirements] = useState([]);
 
   useEffect(() => {
     const visible = correction?.active ? correction.visibleFields : null;
@@ -1614,18 +1662,52 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
     (!shouldShow('kyc_bank_passbook_url') || !passErr);
   const canNext = docsOk && panOk && bankOk && bankBranchOk && kycHintsOk && kycFieldErrorsOk;
 
-  const handleNext = async () => {
-    if (!canNext || saving) return;
-    if (kycHintIsBlocking(frontHint) || kycHintIsBlocking(backHint) || kycHintIsBlocking(panCardHint)) {
-      setError('Please upload valid Aadhaar and PAN images and resolve all warnings before continuing.');
-      return;
+  const getPendingRequirements = () => {
+    const pending = [];
+    if (isRequired('kyc_aadhar_front_url', true) && !String(frontUrl).trim()) {
+      pending.push('Aadhaar front upload');
+    } else if (shouldShow('kyc_aadhar_front_url') && (frontErr || kycHintIsBlocking(frontHint))) {
+      pending.push('Valid Aadhaar front image (resolve warnings)');
+    }
+    if (isRequired('kyc_aadhar_back_url', true) && !String(backUrl).trim()) {
+      pending.push('Aadhaar back upload');
+    } else if (shouldShow('kyc_aadhar_back_url') && (backErr || kycHintIsBlocking(backHint))) {
+      pending.push('Valid Aadhaar back image (resolve warnings)');
+    }
+    if (isRequired('kyc_pan_card_url', true) && !String(panCardUrl).trim()) {
+      pending.push('PAN card upload');
+    } else if (shouldShow('kyc_pan_card_url') && (panCardErr || kycHintIsBlocking(panCardHint))) {
+      pending.push('Valid PAN card image (resolve warnings)');
+    }
+    if (isRequired('kyc_pan_number', true) && !(panVerified && PAN_NUMBER_REGEX.test(panNumber.trim()))) {
+      pending.push(panNumber.trim() ? 'PAN number verification' : 'PAN number and verification');
+    }
+    if (bankRequired && !bankVerified) {
+      pending.push('Bank account verification');
     }
     if (!bankBranchOk) {
-      setError('Please confirm the bank branch details to continue.');
+      pending.push('Confirm bank branch details');
+    }
+    if (isRequired('kyc_bank_passbook_url', true) && !String(passbookUrl).trim()) {
+      pending.push('Bank passbook / cancelled cheque upload');
+    } else if (shouldShow('kyc_bank_passbook_url') && passErr) {
+      pending.push('Valid bank passbook upload');
+    }
+    return pending;
+  };
+
+  const handleNext = async () => {
+    if (saving) return;
+    const pending = getPendingRequirements();
+    if (pending.length > 0) {
+      setError('');
+      setPendingRequirements(pending);
       return;
     }
+    if (!canNext) return;
     setSaving(true);
     setError('');
+    setPendingRequirements([]);
     try {
       const { form } = await api.patchJobAppForm({
         mobile,
@@ -1645,6 +1727,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       });
       onSaveSuccess?.(form);
     } catch (err) {
+      setPendingRequirements([]);
       setError(err.message || 'Could not save. Try again.');
     } finally {
       setSaving(false);
@@ -1948,18 +2031,13 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       </section>
       )}
 
-      {error && <p className="text-sm text-rose-600">{error}</p>}
-      {!error && (!kycHintsOk || !kycFieldErrorsOk || !bankBranchOk) && (
-        <p className="text-sm text-rose-600">
-          Please resolve all warnings and upload valid documents before continuing.
-        </p>
-      )}
+      <FormPendingAlert pending={pendingRequirements} message={error} />
 
       <div className={NAV_ROW}>
         <button type="button" onClick={onPrevious} className={NAV_BTN_PREV}>
           <span aria-hidden>‹</span> Previous
         </button>
-        <button type="button" disabled={!canNext || saving} onClick={handleNext} className={NAV_BTN_NEXT}>
+        <button type="button" disabled={saving} onClick={handleNext} className={NAV_BTN_NEXT}>
           {saving ? 'Saving…' : 'Next'} <span aria-hidden>›</span>
         </button>
       </div>
@@ -2018,6 +2096,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
   const [policeErr, setPoliceErr] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [pendingRequirements, setPendingRequirements] = useState([]);
   const [correctionsConfirmed, setCorrectionsConfirmed] = useState(false);
   const [submitted, setSubmitted] = useState(
     () => String(jobForm?.submission_status ?? '').trim() === 'Submitted'
@@ -2253,29 +2332,50 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
     }
   };
 
-  const handleSubmit = async () => {
-    if (!canSubmit || saving || hasPfUanChoiceError || pfUanError || pfUanScreenshotError || kycHintIsBlocking(pfUanScreenshotHint)) return;
-    if (correction?.active && !correctionsConfirmed) {
-      setError('Please confirm that all rejected fields have been corrected before submitting.');
-      return;
+  const getPendingRequirements = () => {
+    const pending = [];
+    if (isRequired('bp_passport_photo_url', true) && !String(photoUrl).trim()) {
+      pending.push('Passport size photo upload');
+    }
+    if (hasPfUanChoiceError) pending.push(hasPfUanChoiceError);
+    if (pfUanError) pending.push(pfUanError);
+    if (pfUanScreenshotError) pending.push(pfUanScreenshotError);
+    if (kycHintIsBlocking(pfUanScreenshotHint)) {
+      pending.push('Valid PF UAN face auth screenshot (resolve warnings)');
     }
     const nomineeNameTrim = String(nomineeName).trim();
     const nomineeRelationTrim = String(nomineeRelation).trim();
     const nomineeMobileNorm = normalizeMobile(nomineeMobile);
     if (isRequired('bp_nominee_name', true) && nomineeNameTrim.length < 2) {
-      setError('Nominee name is required.');
-      return;
+      pending.push('Nominee name');
     }
     if (isRequired('bp_nominee_relation', true) && nomineeRelationTrim.length < 2) {
-      setError('Nominee relation is required.');
-      return;
+      pending.push('Nominee relation');
     }
     if (isRequired('bp_nominee_mobile', true) && !TEN_DIGIT_REGEX.test(nomineeMobileNorm)) {
-      setError('Nominee mobile number must be 10 digits.');
+      pending.push('Nominee mobile number (10 digits)');
+    }
+    if (correction?.active && !correctionsConfirmed) {
+      pending.push('Confirm that rejected fields have been corrected');
+    }
+    return pending;
+  };
+
+  const handleSubmit = async () => {
+    if (saving) return;
+    const pending = getPendingRequirements();
+    if (pending.length > 0) {
+      setError('');
+      setPendingRequirements(pending);
       return;
     }
+    if (!canSubmit) return;
+    const nomineeNameTrim = String(nomineeName).trim();
+    const nomineeRelationTrim = String(nomineeRelation).trim();
+    const nomineeMobileNorm = normalizeMobile(nomineeMobile);
     setSaving(true);
     setError('');
+    setPendingRequirements([]);
     try {
       const { form } = await api.patchJobAppForm({
         mobile,
@@ -2294,6 +2394,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
       setSubmitted(true);
       onSubmitted?.(form);
     } catch (err) {
+      setPendingRequirements([]);
       setError(err.message || 'Could not submit. Try again.');
     } finally {
       setSaving(false);
@@ -2622,25 +2723,13 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         </div>
       )}
 
-      {error && <p className="text-sm text-rose-600">{error}</p>}
+      <FormPendingAlert pending={pendingRequirements} message={error} />
 
       <div className={NAV_ROW}>
         <button type="button" onClick={onPrevious} className={NAV_BTN_PREV}>
           <span aria-hidden>‹</span> Previous
         </button>
-        <button
-          type="button"
-          disabled={
-            !canSubmit ||
-            saving ||
-            Boolean(hasPfUanChoiceError) ||
-            Boolean(pfUanError) ||
-            Boolean(pfUanScreenshotError) ||
-            kycHintIsBlocking(pfUanScreenshotHint)
-          }
-          onClick={handleSubmit}
-          className={NAV_BTN_SUBMIT}
-        >
+        <button type="button" disabled={saving} onClick={handleSubmit} className={NAV_BTN_SUBMIT}>
           {saving ? 'Submitting…' : 'Submit'}
         </button>
       </div>
@@ -2658,6 +2747,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   const [licenseError, setLicenseError] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [pendingRequirements, setPendingRequirements] = useState([]);
   const [emailVerified, setEmailVerified] = useState(
     () => jobForm.email_verified === true && EMAIL_REGEX.test(normalizeEmail(jobForm.email))
   );
@@ -2783,6 +2873,71 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
     (!isRequired('pd_driving_license', true) || Boolean(dl)) &&
     (!isRequired('pd_driving_license_url', true) || licenseImageOk);
 
+  const getPendingRequirements = () => {
+    const pending = [];
+    const email = normalizeEmail(draft.email);
+    if (isRequired('email', true)) {
+      if (!EMAIL_REGEX.test(email)) {
+        pending.push('Valid email address');
+      } else if (!emailVerified) {
+        pending.push(
+          emailOtpSent
+            ? 'Email OTP verification (enter the OTP and verify)'
+            : 'Email OTP verification (send OTP and verify)'
+        );
+      }
+    }
+    const secondaryMobile = normalizeMobile(draft.pd_secondary_mobile);
+    if (secondaryMobile || isRequired('pd_secondary_mobile', false)) {
+      if (!TEN_DIGIT_REGEX.test(secondaryMobile)) {
+        pending.push('Alternate mobile number (10 digits)');
+      }
+    }
+    if (isRequired('pd_father_name', true) && fatherName.length < 2) {
+      pending.push("Father's name");
+    }
+    if (isRequired('pd_mother_name', true) && motherName.length < 2) {
+      pending.push("Mother's name");
+    }
+    if (isRequired('pd_marital_status', true) && !String(draft.pd_marital_status).trim()) {
+      pending.push('Marital status');
+    }
+    if (isRequired('pd_spouse_name', true) && isMarried && spouseName.length < 2) {
+      pending.push(spouseLabel);
+    }
+    if (isRequired('pd_current_address_same_as_aadhaar', true) && !sameAsAadhaarSelected) {
+      pending.push('Whether current address is same as Aadhaar');
+    }
+    if (isRequired('pd_current_address', true) && !currentAddressOk) {
+      pending.push('Current address');
+    }
+    if (isRequired('pd_current_state', true) && !currentStateOk) {
+      pending.push('Current state');
+    }
+    if (isRequired('pd_current_city', true) && !currentCityOk) {
+      pending.push('Current city');
+    }
+    if (isRequired('pd_current_pincode', true) && !currentPincodeOk) {
+      pending.push('Current pincode (6 digits)');
+    }
+    if (isRequired('pd_emergency_contact_name', true) && !String(draft.pd_emergency_contact_name).trim()) {
+      pending.push('Emergency contact name');
+    }
+    if (isRequired('pd_alternate_number', true) && !TEN_DIGIT_REGEX.test(String(draft.pd_alternate_number))) {
+      pending.push('Emergency contact number (10 digits)');
+    }
+    if (isRequired('pd_emergency_contact_relation', true) && !String(draft.pd_emergency_contact_relation).trim()) {
+      pending.push('Emergency contact relation');
+    }
+    if (isRequired('pd_driving_license', true) && !dl) {
+      pending.push('Driving license (Yes/No)');
+    }
+    if (isRequired('pd_driving_license_url', true) && !licenseImageOk) {
+      pending.push('Driving license upload');
+    }
+    return pending;
+  };
+
   const handleSendEmailOtp = async () => {
     const email = normalizeEmail(draft.email);
     if (!EMAIL_REGEX.test(email) || emailSending) return;
@@ -2816,6 +2971,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       setEmailVerified(true);
       setEmailOtpSent(false);
       setEmailOtp('');
+      setPendingRequirements([]);
     } catch (err) {
       setEmailVerifyError(err.message || 'Could not verify email OTP.');
     } finally {
@@ -2869,107 +3025,53 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
   };
 
   const handleSave = async () => {
-    if (!requiredOk || saving) return;
+    if (saving) return;
+    const pending = getPendingRequirements();
+    if (pending.length > 0) {
+      setError('');
+      setPendingRequirements(pending);
+      return;
+    }
+    if (!requiredOk) return;
+
+    const alt = String(draft.pd_alternate_number).replace(/\D/g, '');
+    const secondaryMobile = normalizeMobile(draft.pd_secondary_mobile);
+    const email = normalizeEmail(draft.email);
+
+    if (secondaryMobile) {
+      if (secondaryMobile === normalizeMobile(mobile)) {
+        setPendingRequirements([]);
+        setError('Alternate mobile must be different from your primary mobile number.');
+        return;
+      }
+      if (secondaryMobile === alt) {
+        setPendingRequirements([]);
+        setError('Alternate mobile must be different from emergency contact number.');
+        return;
+      }
+    }
+
+    const currentAddressPayload =
+      sameAsAadhaarChoice === 'yes'
+        ? String(jobForm?.aad_address ?? '').trim()
+        : currentAddressValue;
+    const currentStatePayload =
+      sameAsAadhaarChoice === 'yes'
+        ? aadCurrentState
+        : currentStateValue;
+    const currentCityPayload =
+      sameAsAadhaarChoice === 'yes'
+        ? aadCurrentCity === '—' ? '' : aadCurrentCity
+        : currentCityValue;
+    const currentPincodePayload =
+      sameAsAadhaarChoice === 'yes'
+        ? aadCurrentPincode
+        : currentPincodeValue;
+
     setSaving(true);
     setError('');
+    setPendingRequirements([]);
     try {
-      const alt = String(draft.pd_alternate_number).replace(/\D/g, '');
-      const secondaryMobile = normalizeMobile(draft.pd_secondary_mobile);
-      const email = normalizeEmail(draft.email);
-      if (isRequired('email', true)) {
-        if (!EMAIL_REGEX.test(email)) {
-          setError('Please enter a valid email address.');
-          setSaving(false);
-          return;
-        }
-        if (!emailVerified) {
-          setError('Please verify your email address before continuing.');
-          setSaving(false);
-          return;
-        }
-      }
-      if (secondaryMobile) {
-        if (!TEN_DIGIT_REGEX.test(secondaryMobile)) {
-          setError('Alternate mobile number must be 10 digits.');
-          setSaving(false);
-          return;
-        }
-        if (secondaryMobile === normalizeMobile(mobile)) {
-          setError('Alternate mobile must be different from your primary mobile number.');
-          setSaving(false);
-          return;
-        }
-        if (secondaryMobile === alt) {
-          setError('Alternate mobile must be different from emergency contact number.');
-          setSaving(false);
-          return;
-        }
-      } else if (isRequired('pd_secondary_mobile', false)) {
-        setError('Alternate mobile number must be 10 digits.');
-        setSaving(false);
-        return;
-      }
-      if (alt.length !== 10) {
-        setError('Emergency contact number must be 10 digits.');
-        setSaving(false);
-        return;
-      }
-      if (fatherName.length < 2) {
-        setError("Father's name is required.");
-        setSaving(false);
-        return;
-      }
-      if (motherName.length < 2) {
-        setError("Mother's name is required.");
-        setSaving(false);
-        return;
-      }
-      if (isMarried && spouseName.length < 2) {
-        setError(`${spouseLabel} is required for married candidates.`);
-        setSaving(false);
-        return;
-      }
-      if (!sameAsAadhaarSelected) {
-        setError('Please choose whether current address is same as Aadhaar address.');
-        setSaving(false);
-        return;
-      }
-      if (sameAsAadhaarChoice === 'no' && !currentAddressValue) {
-        setError('Please add your current address.');
-        setSaving(false);
-        return;
-      }
-      const currentAddressPayload =
-        sameAsAadhaarChoice === 'yes'
-          ? String(jobForm?.aad_address ?? '').trim()
-          : currentAddressValue;
-      const currentStatePayload =
-        sameAsAadhaarChoice === 'yes'
-          ? aadCurrentState
-          : currentStateValue;
-      const currentCityPayload =
-        sameAsAadhaarChoice === 'yes'
-          ? aadCurrentCity === '—' ? '' : aadCurrentCity
-          : currentCityValue;
-      const currentPincodePayload =
-        sameAsAadhaarChoice === 'yes'
-          ? aadCurrentPincode
-          : currentPincodeValue;
-      if (!currentStatePayload) {
-        setError('Please add your current state.');
-        setSaving(false);
-        return;
-      }
-      if (!currentCityPayload) {
-        setError('Please add your current city.');
-        setSaving(false);
-        return;
-      }
-      if (!PINCODE_REGEX.test(currentPincodePayload)) {
-        setError('Current pincode must be exactly 6 digits.');
-        setSaving(false);
-        return;
-      }
       const { form } = await api.patchJobAppForm({
         mobile,
         employee_id: employeeId || null,
@@ -2993,6 +3095,7 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
       });
       onSaveSuccess?.(form);
     } catch (err) {
+      setPendingRequirements([]);
       setError(err.message || 'Could not save. Try again.');
     } finally {
       setSaving(false);
@@ -3322,10 +3425,10 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             </div>
           )}
         </div>
-        {error && <p className="text-sm text-rose-600">{error}</p>}
+        <FormPendingAlert pending={pendingRequirements} message={error} />
         <button
           type="button"
-          disabled={!requiredOk || saving}
+          disabled={saving}
           onClick={handleSave}
           className="mt-2 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -3723,11 +3826,11 @@ function PersonalDetailsForm({ jobForm, mobile, employeeId, onSaveSuccess, corre
             </div>
           </div>
 
-        {error && <p className="text-sm text-rose-600">{error}</p>}
+        <FormPendingAlert pending={pendingRequirements} message={error} />
 
         <button
           type="button"
-          disabled={!requiredOk || saving}
+          disabled={saving}
           onClick={handleSave}
           className="mt-2 w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -4150,7 +4253,11 @@ export default function OnboardingForm() {
   };
 
   const handleVerifyOtp = async () => {
-    if (!hasValidOtp || otpVerifying || !aadhaarResumeFlow) return;
+    if (otpVerifying || !aadhaarResumeFlow) return;
+    if (!hasValidOtp) {
+      setAadhaarError('Enter the 6-digit OTP sent to your mobile before verifying.');
+      return;
+    }
     setOtpVerifying(true);
     setAadhaarError('');
     try {
@@ -4486,7 +4593,7 @@ export default function OnboardingForm() {
                             <button
                               type="button"
                               onClick={handleVerifyOtp}
-                              disabled={!hasValidOtp || otpVerifying}
+                              disabled={otpVerifying}
                               className="w-full min-h-[48px] rounded-xl bg-indigo-600 py-3.5 text-base font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {otpVerifying ? 'Verifying...' : 'Verify OTP'}
