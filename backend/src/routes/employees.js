@@ -872,58 +872,46 @@ async function tryReuseOnboardingTestIdentity({ payload, clientId }) {
   if (!isOnboardingTestIdentity(existing.mobile, existing.email)) return null;
 
   const name = String(payload.name ?? '').trim();
-  const updates = {};
-  if (name && name !== String(existing.name ?? '').trim()) {
-    updates.name = name;
-  }
   const movingClient =
     String(existing.client_id ?? '') !== String(clientId ?? '') && Boolean(clientId);
-  if (movingClient) {
-    updates.client_id = clientId;
-    updates.onboarding_initiated = false;
-    updates.onboarding_status = 'AVAILABLE';
-    updates.aadhaar_number = null;
-  }
 
-  let employee = existing;
-  if (Object.keys(updates).length) {
-    const { data, error } = await supabaseAdmin
-      .from('employees')
-      .update(updates)
-      .eq('id', existing.id)
-      .select()
-      .maybeSingle();
-    if (error) throw error;
-    employee = data ?? { ...existing, ...updates };
-  } else {
-    const { data, error } = await supabaseAdmin
-      .from('employees')
-      .select()
-      .eq('id', existing.id)
-      .maybeSingle();
-    if (error) throw error;
-    employee = data ?? existing;
-  }
+  // Park tester in AVAILABLE with job fields cleared — required by
+  // employees_stage_job_fields_consistency (previous bug left role fields set).
+  const updates = {
+    ...buildEngagementClearFields(),
+    client_id: clientId || existing.client_id,
+    onboarding_status: 'AVAILABLE',
+    aadhaar_number: null,
+  };
+  if (name) updates.name = name;
 
-  if (movingClient) {
-    const now = new Date().toISOString();
-    const { error: formMoveErr } = await supabaseAdmin
-      .from('job_app_form')
-      .update({
-        ...buildReinitiateFormResetPayload(now),
-        client_id: clientId,
-        name: employee.name,
-        mobile: employee.mobile,
-        email: employee.email ?? null,
-      })
-      .eq('employee_id', employee.id);
-    if (formMoveErr) throw formMoveErr;
-    console.log(
-      `[employees] Moved onboarding test identity employee ${employee.id} → client ${clientId}`
-    );
-  } else {
-    console.log(`[employees] Reused onboarding test identity employee ${employee.id}`);
-  }
+  const { data, error } = await supabaseAdmin
+    .from('employees')
+    .update(updates)
+    .eq('id', existing.id)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  const employee = data ?? { ...existing, ...updates };
+
+  const now = new Date().toISOString();
+  const { error: formResetErr } = await supabaseAdmin
+    .from('job_app_form')
+    .update({
+      ...buildReinitiateFormResetPayload(now),
+      client_id: employee.client_id,
+      name: employee.name,
+      mobile: employee.mobile,
+      email: employee.email ?? null,
+    })
+    .eq('employee_id', employee.id);
+  if (formResetErr) throw formResetErr;
+
+  console.log(
+    movingClient
+      ? `[employees] Moved + reset onboarding test identity employee ${employee.id} → client ${clientId}`
+      : `[employees] Reused + reset onboarding test identity employee ${employee.id}`
+  );
   return { employee };
 }
 

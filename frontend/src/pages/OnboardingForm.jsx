@@ -1689,9 +1689,9 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
       pending.push('Confirm bank branch details');
     }
     if (isRequired('kyc_bank_passbook_url', true) && !String(passbookUrl).trim()) {
-      pending.push('Bank passbook / cancelled cheque upload');
+      pending.push('Cheque / passbook / statement upload');
     } else if (shouldShow('kyc_bank_passbook_url') && passErr) {
-      pending.push('Valid bank passbook upload');
+      pending.push('Valid cheque / passbook / statement upload');
     }
     return pending;
   };
@@ -2007,7 +2007,7 @@ function KycDocumentsForm({ jobForm, mobile, employeeId, onPrevious, onSaveSucce
           )}
         {shouldShow('kyc_bank_passbook_url') && (
           <DocUploadField
-            label="Bank Passbook / Statement"
+            label="Cheque / Passbook / Statement"
             required={isRequired('kyc_bank_passbook_url', true)}
             inputId="kyc-passbook"
             accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -2407,7 +2407,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
         <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 ring-8 ring-emerald-50">
           <IconCheckCircle className="h-11 w-11 text-emerald-500" aria-hidden />
         </div>
-        <h2 className="mt-6 text-2xl font-bold text-slate-900">Application Submitted Successfully!</h2>
+        <h2 className="mt-6 text-2xl font-bold text-slate-900">Onboarding Form Submitted Successfully!</h2>
         <p className="mt-3 text-sm leading-relaxed text-slate-600 sm:text-base">
           Thanks for applying. Our HR team will review your application and contact you in 3-5 days.
         </p>
@@ -2436,7 +2436,7 @@ function BankPhotoForm({ jobForm, mobile, employeeId, onPrevious, onSubmitted, o
       <div>
         <div className="flex items-center gap-2 text-slate-900">
           <IconCamera className="h-7 w-7 text-indigo-600" />
-          <h2 className="text-xl font-bold sm:text-2xl">Bank &amp; Photo / Final Compliance</h2>
+          <h2 className="text-xl font-bold sm:text-2xl">Photo / Final Compliance</h2>
         </div>
       </div>
 
@@ -4357,7 +4357,7 @@ export default function OnboardingForm() {
     <div className="min-h-screen max-w-[100vw] overflow-x-hidden bg-[#F5F6FA]">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-3xl min-w-0 items-center justify-between gap-3 px-4 py-3.5 sm:py-4">
-          <h1 className="min-w-0 truncate text-lg font-bold text-slate-900 sm:text-xl">Job Application Form</h1>
+          <h1 className="min-w-0 truncate text-lg font-bold text-slate-900 sm:text-xl">Onboarding Form</h1>
           <button
             type="button"
             className="inline-flex shrink-0 min-h-[40px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"

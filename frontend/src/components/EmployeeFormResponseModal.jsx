@@ -179,7 +179,7 @@ const DOCUMENT_TAB_DEFINITIONS = [
   { key: 'qual_highest_qualification_doc_url', label: 'Highest Qualification' },
   { key: 'qual_education_certificate_url', label: 'Education' },
   { key: 'qual_additional_certificates_url', label: 'Additional Cert' },
-  { key: 'kyc_bank_passbook_url', label: 'Bank Passbook' },
+  { key: 'kyc_bank_passbook_url', label: 'Cheque / Passbook / Statement' },
   { key: 'kyc_pan_card_url', label: 'PAN Card' },
   { key: 'pd_driving_license_url', label: 'Driving Lic' },
   { key: 'bp_passport_photo_url', label: 'Photo' },

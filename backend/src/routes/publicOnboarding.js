@@ -3479,7 +3479,7 @@ router.patch('/job-app-form', async (req, res, next) => {
         return res.status(400).json({ error: 'Enter a valid IFSC code.' });
       }
       if (!passUrl) {
-        return res.status(400).json({ error: 'Bank passbook upload is required.' });
+        return res.status(400).json({ error: 'Cheque / passbook / statement upload is required.' });
       }
 
       const bankFieldsInScope =
