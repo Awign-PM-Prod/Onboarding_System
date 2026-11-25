@@ -30,7 +30,7 @@ function emailHtml({ name, link }: { name: string; link: string }) {
         <div style="font-size:22px;font-weight:700;color:#111827;margin-bottom:18px;">Awign</div>
         <p style="font-size:15px;line-height:1.6;margin:0 0 14px;">${greeting}</p>
         <p style="font-size:15px;line-height:1.6;margin:0 0 18px;">
-          You have been onboarded with Awign. To get started, please complete your onboarding form using the link below.
+          You have been selected for the Job opportunity with Awign. To get started, please complete your onboarding form using the link below.
         </p>
         <p style="margin:0 0 18px;">
           <a
@@ -39,10 +39,13 @@ function emailHtml({ name, link }: { name: string; link: string }) {
           >Start onboarding</a>
         </p>
         <p style="font-size:13px;line-height:1.5;color:#4b5563;margin:0 0 16px;">
-          If the button does not work, open this link in your browser:<br />
+          If the button does not work, open the link in your browser:<br />
           <a href="${safeLink}" style="color:#2563eb;word-break:break-all;">${safeLink}</a>
         </p>
-        <p style="font-size:14px;line-height:1.6;margin:0 0 16px;">- Team Awign</p>
+        <p style="font-size:15px;line-height:1.6;margin:0 0 16px;">
+          Please keep your Aadhaar, PAN, Bank details, Photo, UAN and Highest qualification document ready to upload.
+        </p>
+        <p style="font-size:14px;line-height:1.6;margin:0 0 16px;">Thank You.</p>
         <p style="font-size:12px;line-height:1.5;color:#6b7280;margin:0;">
           This is a system-generated email. Please do not reply.
         </p>
@@ -56,11 +59,16 @@ function emailText({ name, link }: { name: string; link: string }) {
   return [
     greeting,
     "",
-    "You have been onboarded with Awign. To get started, please complete your onboarding form using the link below.",
+    "You have been selected for the Job opportunity with Awign. To get started, please complete your onboarding form using the link below.",
     "",
     link,
     "",
-    "- Team Awign",
+    "If the button does not work, open the link in your browser:",
+    link,
+    "",
+    "Please keep your Aadhaar, PAN, Bank details, Photo, UAN and Highest qualification document ready to upload.",
+    "",
+    "Thank You.",
     "",
     "This is a system-generated email. Please do not reply.",
   ].join("\n");

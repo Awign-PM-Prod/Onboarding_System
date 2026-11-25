@@ -2443,7 +2443,7 @@ router.post('/initiate-onboarding', async (req, res, next) => {
 });
 
 /**
- * Resend onboarding email + WhatsApp for initiated employees who have not submitted yet.
+ * Resend onboarding email + WhatsApp for initiated employees (including already submitted).
  * Does not reset form data or change status (except live onboarding test identity).
  */
 router.post('/resend-onboarding', async (req, res, next) => {
@@ -2475,33 +2475,14 @@ router.post('/resend-onboarding', async (req, res, next) => {
       return status !== 'EXITED' && isOnboardingTestIdentity(row.mobile, row.email);
     });
 
-    const initiatedCandidates = (candidates ?? []).filter(
-      (row) =>
-        !isOnboardingTestIdentity(row.mobile, row.email) &&
-        (Boolean(row.onboarding_initiated) ||
-          String(row.onboarding_status ?? '').trim().toUpperCase() === 'FORM_SENT')
-    );
-
-    const candidateIds = initiatedCandidates.map((row) => row.id);
-    let forms = [];
-    if (candidateIds.length) {
-      const { data: formRows, error: formsErr } = await supabaseAdmin
-        .from('job_app_form')
-        .select('employee_id, submission_status, review_status')
-        .in('employee_id', candidateIds);
-      if (formsErr) throw formsErr;
-      forms = formRows ?? [];
-    }
-
-    const formByEmployeeId = new Map(
-      forms.map((row) => [String(row.employee_id), row])
-    );
-    const normalEligibleRows = initiatedCandidates.filter((row) => {
-      const form = formByEmployeeId.get(String(row.id));
-      if (!form) return true;
-      const submitted = String(form.submission_status ?? '').trim() === 'Submitted';
-      const reviewStatus = String(form.review_status ?? '').trim().toUpperCase();
-      return !submitted && !reviewStatus;
+    const normalEligibleRows = (candidates ?? []).filter((row) => {
+      const status = String(row.onboarding_status ?? '').trim().toUpperCase();
+      if (status === 'EXITED') return false;
+      if (isOnboardingTestIdentity(row.mobile, row.email)) return false;
+      return (
+        Boolean(row.onboarding_initiated) ||
+        status === 'FORM_SENT'
+      );
     });
 
     if (testIdentityRows.length) {
@@ -2516,7 +2497,7 @@ router.post('/resend-onboarding', async (req, res, next) => {
 
     if (eligibleRows.length === 0) {
       return res.status(400).json({
-        error: 'No initiated, not-yet-submitted employees selected.'
+        error: 'No initiated employees selected.'
       });
     }
 

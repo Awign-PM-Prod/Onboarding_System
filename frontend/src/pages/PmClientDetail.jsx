@@ -338,13 +338,19 @@ export default function PmClientDetail() {
   );
   const roleAssigned = useMemo(() => employees.filter((e) => e.onboarding_status === 'ROLE_ASSIGNED'), [employees]);
   const reviewStatus = (row) => String(row.form_review_status ?? '').toUpperCase();
-  const isResendOnboardingEligible = (row) =>
-    (row.onboarding_initiated || String(row.onboarding_status ?? '').toUpperCase() === 'FORM_SENT') &&
+  const isOnboardingInitiatedForResend = (row) => {
+    const status = String(row.onboarding_status ?? '').toUpperCase();
+    if (status === 'EXITED') return false;
+    return Boolean(row.onboarding_initiated) || status === 'FORM_SENT';
+  };
+  const isResendOnboardingEligible = (row) => isOnboardingInitiatedForResend(row);
+  const isFormSentTabRow = (row) =>
+    isOnboardingInitiatedForResend(row) &&
     String(row.form_submission_status ?? '') !== 'Submitted' &&
     !String(row.form_review_status ?? '').trim();
 
   const formSentRows = useMemo(
-    () => employees.filter((e) => isResendOnboardingEligible(e)),
+    () => employees.filter((e) => isFormSentTabRow(e)),
     [employees]
   );
   const responsesRows = useMemo(
@@ -1752,7 +1758,7 @@ export default function PmClientDetail() {
         {activeTab === 'in_progress' && inProgressSubtab === 'form_sent' && (
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
             <p className="text-sm text-indigo-900">
-              Resend the onboarding form link by email and WhatsApp to employees who have not submitted yet.
+              Resend the onboarding form link by email and WhatsApp to initiated employees.
             </p>
             <button
               type="button"
@@ -2362,18 +2368,30 @@ export default function PmClientDetail() {
         {activeTab === 'in_progress' && inProgressSubtab === 'responses' && (
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
             <p className="text-sm text-indigo-900">
-              Select submitted responses and download one CSV with all answers and document links (links download files when opened).
+              Select submitted responses to download CSV answers, or resend the onboarding form link by email and WhatsApp.
             </p>
-            <button
-              type="button"
-              onClick={handleExportResponsesCsv}
-              disabled={selectedIds.size === 0 || responsesExportLoading}
-              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {responsesExportLoading
-                ? 'Preparing...'
-                : `Download Response${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleBulkResendOnboarding}
+                disabled={selectedIds.size === 0 || ctaLoading || Boolean(resendingEmployeeId)}
+                className="rounded-md border border-indigo-300 bg-white px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {ctaLoading
+                  ? 'Resending...'
+                  : `Resend onboarding link${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
+              </button>
+              <button
+                type="button"
+                onClick={handleExportResponsesCsv}
+                disabled={selectedIds.size === 0 || responsesExportLoading}
+                className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {responsesExportLoading
+                  ? 'Preparing...'
+                  : `Download Response${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
+              </button>
+            </div>
           </div>
         )}
 
@@ -2463,22 +2481,25 @@ export default function PmClientDetail() {
               ? 'Set Details'
               : activeTab === 'employee_directory'
                 ? 'Transfer'
-                : (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
+                : (activeTab === 'in_progress' &&
+                      (inProgressSubtab === 'form_sent' || inProgressSubtab === 'responses')) ||
                     (activeTab === 'testing' && testingSubtab === 'employees')
                   ? 'Resend'
                   : null
           }
           actionLabelForRow={
-            (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
+            (activeTab === 'in_progress' &&
+              (inProgressSubtab === 'form_sent' || inProgressSubtab === 'responses')) ||
             (activeTab === 'testing' && testingSubtab === 'employees')
               ? (row) => {
-                  if (activeTab === 'testing' && !isResendOnboardingEligible(row)) return null;
+                  if (!isResendOnboardingEligible(row)) return null;
                   return resendingEmployeeId === row.id ? 'Sending…' : 'Resend';
                 }
               : null
           }
           rowActionDisabledForRow={
-            (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
+            (activeTab === 'in_progress' &&
+              (inProgressSubtab === 'form_sent' || inProgressSubtab === 'responses')) ||
             (activeTab === 'testing' && testingSubtab === 'employees')
               ? () => ctaLoading || Boolean(resendingEmployeeId)
               : null
@@ -2488,7 +2509,8 @@ export default function PmClientDetail() {
               ? (row) => setRowRoleModalEmployee(row)
               : activeTab === 'employee_directory'
                 ? openTransferModal
-                : (activeTab === 'in_progress' && inProgressSubtab === 'form_sent') ||
+                : (activeTab === 'in_progress' &&
+                      (inProgressSubtab === 'form_sent' || inProgressSubtab === 'responses')) ||
                     (activeTab === 'testing' && testingSubtab === 'employees')
                   ? (row) => handleResendOnboarding([row.id])
                   : null
