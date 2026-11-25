@@ -2,6 +2,10 @@
  * Live onboarding test identity — both mobile and email must match.
  * Defaults: 9944621246 + dinesh.kumar@awign.com
  * Override with ONBOARDING_TEST_MOBILE / ONBOARDING_TEST_EMAIL.
+ *
+ * This pair is unrestricted for repeated Digilocker / form / OTP testing:
+ * reuse on create, hard-reset on initiate/resend, no submission-attempt cap,
+ * and form stays editable even after submit/approve/reject.
  */
 
 export function normalizeTestMobile(raw) {
@@ -33,4 +37,10 @@ export function isOnboardingTestIdentity(mobile, email) {
     normalizeTestMobile(mobile) === configured.mobile &&
     normalizeTestEmail(email) === configured.email
   );
+}
+
+/** True when an employees row (or similar) is the configured live test pair. */
+export function isOnboardingTestEmployee(row) {
+  if (!row) return false;
+  return isOnboardingTestIdentity(row.mobile, row.email);
 }

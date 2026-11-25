@@ -871,17 +871,18 @@ async function tryReuseOnboardingTestIdentity({ payload, clientId }) {
   if (!existing) return null;
   if (!isOnboardingTestIdentity(existing.mobile, existing.email)) return null;
 
-  if (String(existing.client_id ?? '') !== String(clientId ?? '')) {
-    return {
-      conflict:
-        'Onboarding test identity already exists on another project. Use that project or exit/rehire first.',
-    };
-  }
-
   const name = String(payload.name ?? '').trim();
   const updates = {};
   if (name && name !== String(existing.name ?? '').trim()) {
     updates.name = name;
+  }
+  const movingClient =
+    String(existing.client_id ?? '') !== String(clientId ?? '') && Boolean(clientId);
+  if (movingClient) {
+    updates.client_id = clientId;
+    updates.onboarding_initiated = false;
+    updates.onboarding_status = 'AVAILABLE';
+    updates.aadhaar_number = null;
   }
 
   let employee = existing;
@@ -904,7 +905,25 @@ async function tryReuseOnboardingTestIdentity({ payload, clientId }) {
     employee = data ?? existing;
   }
 
-  console.log(`[employees] Reused onboarding test identity employee ${employee.id}`);
+  if (movingClient) {
+    const now = new Date().toISOString();
+    const { error: formMoveErr } = await supabaseAdmin
+      .from('job_app_form')
+      .update({
+        ...buildReinitiateFormResetPayload(now),
+        client_id: clientId,
+        name: employee.name,
+        mobile: employee.mobile,
+        email: employee.email ?? null,
+      })
+      .eq('employee_id', employee.id);
+    if (formMoveErr) throw formMoveErr;
+    console.log(
+      `[employees] Moved onboarding test identity employee ${employee.id} → client ${clientId}`
+    );
+  } else {
+    console.log(`[employees] Reused onboarding test identity employee ${employee.id}`);
+  }
   return { employee };
 }
 
@@ -4941,7 +4960,7 @@ router.put('/:id/mobile', async (req, res, next) => {
 
     const { data: row, error: rowErr } = await supabaseAdmin
       .from('employees')
-      .select('id, client_id, name, mobile, onboarding_initiated')
+      .select('id, client_id, name, mobile, email, onboarding_initiated')
       .eq('id', employeeId)
       .maybeSingle();
     if (rowErr) throw rowErr;
@@ -4963,7 +4982,8 @@ router.put('/:id/mobile', async (req, res, next) => {
       .eq('employee_id', employeeId)
       .maybeSingle();
     if (formErr) throw formErr;
-    if (String(form?.submission_status ?? '') === 'Submitted') {
+    const isTestEmployee = isOnboardingTestIdentity(row.mobile, row.email);
+    if (!isTestEmployee && String(form?.submission_status ?? '') === 'Submitted') {
       return res.status(409).json({
         error: 'The employee has already submitted the onboarding form; the mobile number can no longer be changed.'
       });

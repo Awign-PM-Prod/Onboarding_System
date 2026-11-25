@@ -9,6 +9,7 @@ import {
   isNonComplianceClient
 } from '../utils/clientType.js';
 import { invokeResendEmail } from '../utils/sendEmail.js';
+import { isOnboardingTestEmployee } from '../utils/onboardingTestIdentity.js';
 
 const router = Router();
 
@@ -624,6 +625,22 @@ async function invokeSendEmailOtpEdge({ email, otp, name }) {
   return body ?? {};
 }
 
+/** null = editable; otherwise user-facing lock reason. Tester pair is never locked. */
+function getFormEditLockError(emp, formCurrent) {
+  if (isOnboardingTestEmployee(emp)) return null;
+  if (formCurrent?.review_status === 'REJECTED') {
+    return 'Application is rejected and cannot be edited.';
+  }
+  if (formCurrent?.review_status === 'APPROVED') {
+    return 'Application is approved and cannot be edited.';
+  }
+  const correctionMode = formCurrent?.review_status === 'CORRECTION_REQUESTED';
+  if (formCurrent?.submission_status === 'Submitted' && !correctionMode) {
+    return 'Application is already submitted and under review.';
+  }
+  return null;
+}
+
 async function assertOnboardingFormEditable(emp, mobile) {
   const { data: formCurrent, error: formCurrentErr } = await supabaseAdmin
     .from('job_app_form')
@@ -637,19 +654,9 @@ async function assertOnboardingFormEditable(emp, mobile) {
     err.statusCode = 404;
     throw err;
   }
-  if (formCurrent.review_status === 'REJECTED') {
-    const err = new Error('Application is rejected and cannot be edited.');
-    err.statusCode = 400;
-    throw err;
-  }
-  if (formCurrent.review_status === 'APPROVED') {
-    const err = new Error('Application is approved and cannot be edited.');
-    err.statusCode = 400;
-    throw err;
-  }
-  const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
-  if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
-    const err = new Error('Application is already submitted and under review.');
+  const lockError = getFormEditLockError(emp, formCurrent);
+  if (lockError) {
+    const err = new Error(lockError);
     err.statusCode = 400;
     throw err;
   }
@@ -2546,17 +2553,12 @@ router.post('/driving-license-upload', (req, res, next) => {
     if (!clientOnboardingFlags.require_license_upload) {
       return res.status(400).json({ error: 'Driving license upload is not required for this client.' });
     }
-    if (formCurrent.review_status === 'REJECTED') {
-      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
-    }
-    if (formCurrent.review_status === 'APPROVED') {
-      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    {
+      const lockError = getFormEditLockError(emp, formCurrent);
+      if (lockError) return res.status(400).json({ error: lockError });
     }
     const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
     const editableFields = editableFieldsFromFormRow(formCurrent);
-    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
-      return res.status(400).json({ error: 'Application is already submitted and under review.' });
-    }
     const ensureCorrectionEditScope = (candidateUpdate) => {
       if (!correctionMode) return null;
       const attemptedNonEditable = [];
@@ -2647,16 +2649,11 @@ router.post('/qualification-certificate-upload', (req, res, next) => {
     if (!formCurrent) {
       return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
     }
-    if (formCurrent.review_status === 'REJECTED') {
-      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
-    }
-    if (formCurrent.review_status === 'APPROVED') {
-      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    {
+      const lockError = getFormEditLockError(emp, formCurrent);
+      if (lockError) return res.status(400).json({ error: lockError });
     }
     const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
-    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
-      return res.status(400).json({ error: 'Application is already submitted and under review.' });
-    }
     const clientOnboardingFlags = await fetchClientOnboardingFlags(formCurrent.client_id);
     if (kind === 'iti_diploma_doc' && !clientOnboardingFlags.require_qualification_certificate_upload) {
       return res.status(400).json({ error: 'ITI/Diploma certificate upload is not required for this client.' });
@@ -2871,16 +2868,11 @@ router.post('/kyc-document-upload', (req, res, next) => {
     if (!formCurrent) {
       return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
     }
-    if (formCurrent.review_status === 'REJECTED') {
-      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
-    }
-    if (formCurrent.review_status === 'APPROVED') {
-      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    {
+      const lockError = getFormEditLockError(emp, formCurrent);
+      if (lockError) return res.status(400).json({ error: lockError });
     }
     const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
-    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
-      return res.status(400).json({ error: 'Application is already submitted and under review.' });
-    }
     if (kind === 'pan_card') {
       const normalizedPan = String(formCurrent?.kyc_pan_number ?? '').replace(/\s/g, '').toUpperCase();
       if (!PAN_NUMBER_REGEX.test(normalizedPan)) {
@@ -2998,16 +2990,11 @@ router.post('/bp-document-upload', (req, res, next) => {
     if (!formCurrent) {
       return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
     }
-    if (formCurrent.review_status === 'REJECTED') {
-      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
-    }
-    if (formCurrent.review_status === 'APPROVED') {
-      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    {
+      const lockError = getFormEditLockError(emp, formCurrent);
+      if (lockError) return res.status(400).json({ error: lockError });
     }
     const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
-    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
-      return res.status(400).json({ error: 'Application is already submitted and under review.' });
-    }
 
     const kind = String(req.query?.kind || '').trim();
     const ext =
@@ -3112,16 +3099,11 @@ router.post('/delete-document', async (req, res, next) => {
     if (!formCurrent) {
       return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
     }
-    if (formCurrent.review_status === 'REJECTED') {
-      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
-    }
-    if (formCurrent.review_status === 'APPROVED') {
-      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    {
+      const lockError = getFormEditLockError(emp, formCurrent);
+      if (lockError) return res.status(400).json({ error: lockError });
     }
     const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
-    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
-      return res.status(400).json({ error: 'Application is already submitted and under review.' });
-    }
 
     let updatePayload = {};
 
@@ -3272,19 +3254,15 @@ router.patch('/job-app-form', async (req, res, next) => {
     if (!formCurrent) {
       return res.status(404).json({ error: 'Application form not found or mobile mismatch.' });
     }
-    if (formCurrent.review_status === 'REJECTED') {
-      return res.status(400).json({ error: 'Application is rejected and cannot be edited.' });
-    }
-    if (formCurrent.review_status === 'APPROVED') {
-      return res.status(400).json({ error: 'Application is approved and cannot be edited.' });
+    {
+      const lockError = getFormEditLockError(emp, formCurrent);
+      if (lockError) return res.status(400).json({ error: lockError });
     }
     const clientOnboardingFlags = await fetchClientOnboardingFlags(formCurrent.client_id);
 
     const correctionMode = formCurrent.review_status === 'CORRECTION_REQUESTED';
     const editableFields = editableFieldsFromFormRow(formCurrent);
-    if (formCurrent.submission_status === 'Submitted' && !correctionMode) {
-      return res.status(400).json({ error: 'Application is already submitted and under review.' });
-    }
+    const testIdentityUnlocked = isOnboardingTestEmployee(emp);
     const ensureCorrectionEditScope = (candidateUpdate) => {
       if (!correctionMode) return null;
       const attemptedNonEditable = [];
@@ -3407,7 +3385,7 @@ router.patch('/job-app-form', async (req, res, next) => {
             error: 'Please confirm that all rejected fields have been corrected before submitting.',
           });
         }
-        if (nextAttemptCount >= MAX_SUBMISSION_ATTEMPTS) {
+        if (!testIdentityUnlocked && nextAttemptCount >= MAX_SUBMISSION_ATTEMPTS) {
           return res.status(400).json({
             error: `Maximum ${MAX_SUBMISSION_ATTEMPTS} submission attempts reached.`
           });

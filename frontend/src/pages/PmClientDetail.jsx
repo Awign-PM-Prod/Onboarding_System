@@ -257,21 +257,42 @@ export default function PmClientDetail() {
     }
   };
 
-  /** Background refresh without loading spinner — picks up employee submit / status changes. */
-  const softRefresh = async () => {
+  const softRefreshInFlight = useRef(false);
+
+  /**
+   * Background refresh without loading spinner — picks up employee submit / status changes.
+   * Employees are refreshed independently of listPmClients: the clients list endpoint is heavy
+   * and used to time out / fail the whole Promise.all, which made the 10s poll look broken.
+   */
+  const softRefresh = async ({ force = false } = {}) => {
     if (!id) return;
+    if (!force && softRefreshInFlight.current) return;
+    softRefreshInFlight.current = true;
     try {
-      const [clients, emps] = await Promise.all([
-        api.listPmClients(),
-        api.listEmployees(id),
-      ]);
-      const found = clients.find((c) => c.id === id);
-      if (!found) return;
-      setPmClients(clients);
-      setClient(found);
-      setEmployees(emps);
-    } catch {
-      // Keep current UI on background refresh failure.
+      const employeesP = api
+        .listEmployees(id)
+        .then((emps) => {
+          setEmployees(emps);
+        })
+        .catch(() => {
+          // Keep current employee rows on background failure.
+        });
+
+      const clientsP = api
+        .listPmClients()
+        .then((clients) => {
+          const found = clients.find((c) => c.id === id);
+          if (!found) return;
+          setPmClients(clients);
+          setClient(found);
+        })
+        .catch(() => {
+          // Keep current client/sidebar data if the heavy list call fails.
+        });
+
+      await Promise.all([employeesP, clientsP]);
+    } finally {
+      softRefreshInFlight.current = false;
     }
   };
 
@@ -280,6 +301,7 @@ export default function PmClientDetail() {
   // Slow poll so PM sees Form Submitted / status changes without a manual refresh.
   useEffect(() => {
     if (!id) return undefined;
+    softRefreshInFlight.current = false;
     const POLL_MS = 10000;
     const tick = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -287,7 +309,7 @@ export default function PmClientDetail() {
     };
     const intervalId = setInterval(tick, POLL_MS);
     const onVisible = () => {
-      if (document.visibilityState === 'visible') softRefresh();
+      if (document.visibilityState === 'visible') softRefresh({ force: true });
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
@@ -689,7 +711,7 @@ export default function PmClientDetail() {
       const res = await api.resendOnboarding(ids);
       setToast(buildOnboardingInitiateToast('Onboarding link resent', res));
       if (clearSelection) setSelectedIds(new Set());
-      await softRefresh();
+      await softRefresh({ force: true });
       setTimeout(() => setToast(null), 3500);
     } catch (err) {
       setError(err.message || 'Could not resend onboarding link.');
@@ -1128,7 +1150,7 @@ export default function PmClientDetail() {
       setToast(message);
       if (updated > 0) {
         resetTestingBulkJoiningModal();
-        await softRefresh();
+        await softRefresh({ force: true });
       }
     } catch (err) {
       setError(err.message || 'Could not send Extend DOJ requests.');
@@ -1328,7 +1350,7 @@ export default function PmClientDetail() {
       setToast(`Extend DOJ request sent for ${extendDojModalEmployee.name}. Waiting for Super Admin.`);
       setExtendDojModalEmployee(null);
       setExtendDojReason('');
-      await softRefresh();
+      await softRefresh({ force: true });
     } catch (err) {
       setToast(err.message || 'Could not send Extend DOJ request.');
     } finally {
@@ -1350,7 +1372,7 @@ export default function PmClientDetail() {
       );
       setStatusChangeModalEmployee(null);
       setStatusChangeReason('');
-      await softRefresh();
+      await softRefresh({ force: true });
     } catch (err) {
       setToast(err.message || 'Could not send joining status change request.');
     } finally {
@@ -1378,7 +1400,7 @@ export default function PmClientDetail() {
         delete next[row.id];
         return next;
       });
-      await softRefresh();
+      await softRefresh({ force: true });
     } catch (err) {
       setToast(err.message || 'Could not save Extended DOJ.');
     } finally {
@@ -2493,7 +2515,7 @@ export default function PmClientDetail() {
               setMobileModalEmployee(null);
               setToast(message);
               setTimeout(() => setToast(null), 5000);
-              await softRefresh();
+              await softRefresh({ force: true });
             }}
           />
         )}
